@@ -143,9 +143,9 @@ class FermionPat(Operator):
             flip, new_exponents = exponents.drop_zeros()
         if not isinstance(new_exponents, PatExps):
             return S.Zero
-        left = bool(Integer(args[1])) ^ flip
         if new_exponents.args == ():
             return S.One
+        left = bool(Integer(args[1])) ^ flip
         if new_exponents.args == (1,):
             return FermionOp(args[0], left)
         pd = new_exponents.parity_diff()
