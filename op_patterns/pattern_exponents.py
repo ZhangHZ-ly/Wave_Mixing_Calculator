@@ -3,8 +3,7 @@ from sympy.core.sympify import sympify
 from sympy.core.singleton import S
 from collections.abc import Sequence
 
-def is_nat_n(*xs):
-    return all(x.is_integer and x.is_nonnegative for x in xs)
+is_nat_n = lambda *xs: all(x.is_integer and x.is_nonnegative for x in xs)
 
 def diff_neighbor(x, y):
     d = y - x 
@@ -15,7 +14,7 @@ def diff_neighbor(x, y):
             " positive integer power")
     if x == 0 or (d >= 0) == True:
         return 'g'
-    if (d <= 0) == True:
+    if (d <= 0) == True or y == 0:
         return 'l'
     return None
 
@@ -81,8 +80,9 @@ class PatExps(Expr):
         """
         flip, zd = self.drop_zeros()
         new = []
+        zero_end = False
         if f:
-            equal_end = zero_end = False
+            equal_end = False
             for exponent in zd.args:
                 if (exponent < 0) == True or exponent.is_integer == False:
                     raise ValueError("Fermionic operators can only be raised to a"
@@ -91,9 +91,9 @@ class PatExps(Expr):
                     return 0, None
                 if zero_end:
                     if exponent == 0:
-                        zd.pop()
+                        new.pop()
                     elif is_nat_n(new[-2], exponent):
-                        zd.pop()
+                        new.pop()
                         new[-1] += exponent
                         if (new[-1] > 1) == True:
                             return 0, None
@@ -117,23 +117,28 @@ class PatExps(Expr):
                     else:
                         equal_end = False
         else:
-            zero_end = False
             for exponent in zd.args:
                 if not isinstance(exponent, Expr):
-                    raise TypeError('Expect Expr as exponents, got %s' %type(exponent))
+                    raise TypeError('Expect Expr as exponents, got %s' % type(exponent))
+                if exponent == 0:
+                    zero_end = True
+                    continue
                 if zero_end:
                     new[-1] += exponent
                     zero_end = False
                 elif exponent == 0:
                     zero_end = True
                 else:
-                    new.append(exponent)         
+                    new.append(exponent)
         return flip, PatExps(*new)
     
     def f_simp(self, **hints):
         cond = (lambda _: True) if hints.get('force', False) else is_nat_n
-        flip, exponents = self.drop_zeros()
-        new_exponents, zero_at, diff_mark = [], [-2], {}
+        if hints.get('deep', True):
+            flip, exponents = self.doit(**hints).drop_zeros()
+        else:
+            flip, exponents = self.drop_zeros()
+        new_exponents, zero_at, diff_mark = [], [-2], dict()
         for exponent in exponents.args:
             if (exponent < 0) == True or exponent.is_integer == False:
                 raise ValueError("Fermionic operators can only be raised to a"
@@ -155,15 +160,16 @@ class PatExps(Expr):
                 else:
                     new_exponents.append(exponent)
                     continue
-            d = None
             end_diff = diff_mark.get(len(new_exponents)-1, None)
+            if end_diff is None:
+                d = diff_neighbor(new_exponents[-1], exponent) if new_exponents else None
             while end_diff is not None:
                 d = diff_neighbor(new_exponents[-1], exponent)
-                if d.is_integer == False:
+                if isinstance(d, Expr) and d.is_integer == False:
                     raise ValueError("Fermionic operators can only be raised to a"
                         " positive integer power")
                 c2 = c1 and cond(new_exponents[-1])
-                if d.is_integer and (abs(d) > 1) == True:
+                if isinstance(d, Expr) and d.is_integer and (abs(d) > 1) == True:
                     return 0, None
                 c3 = c2 and cond(new_exponents[-2])
                 if end_diff == 0:
