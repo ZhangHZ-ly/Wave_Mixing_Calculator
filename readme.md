@@ -55,4 +55,11 @@ Note that by inputing directly multiplications of operators, the output won't co
 
 `BP(a; 2, 2)`
 
-The function `pf` (see `pattern_form.pattern_form`) reorders the 
+## Reordering and expanding the quantum expression — `perturb_eval`
+The function `pf` (see `pattern_form.pattern_form`) reorders the quantum expression into the so-called "pattern form", which is unique for equal expressions. This hence allows to establish commutative equations in the noncommutative algebra of quantum operators.
+
+In the reordering process, the expression is saved in a `dict` structure to seperate the pure `BosonPat`/`FermionPat` factors and the `BosonNum` (in keys) and commutative factors (in values). The "res" parameter provides an option to calculate the generated commutators along the reordering procedure if the quantum modes are not independent with each other.
+
+The class `PF` (see `sortcontext.PFTableProcessor`) includes methods for basic algebraic operations such as addition, multiplication and integer power. Sometimes it is more efficient to use this class instead of `sympy.Expr`.
+
+`PE` class (see `pertrub_expander.PerturbExpander`) can expand the expression up to the wanted order. This can turn a difference equation into differential equation, so as to solve the analytical solution for the quantum process.
