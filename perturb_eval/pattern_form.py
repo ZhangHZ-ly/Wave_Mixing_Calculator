@@ -275,7 +275,7 @@ class PFTreeNode:
         """
         if isinstance(self.expr, (Function, Derivative, Subs)):
             if all(check_num(c.expr, self._cn_cache) for c in self.recur()):
-                return PFTableProcessor({((), ()): self.ls_apply()})
+                return PFTableProcessor({((), ()): self.ls_apply()}), S.Zero
             return PFTableProcessor(npf=self.ls_apply()), S.Zero
         if isinstance(self.expr, Add):
             pfs, rds = [], []
@@ -302,10 +302,10 @@ class PFTreeNode:
             pf, res = PFTableProcessor({((), ()): S.One}), S.Zero
             for r in self.recur():
                 new, rd = r.result_res()
-                pf, new_res = pf.mul_res(new)
-                res = Mul(res, Add(new.expr(), new_res)) + new_res
                 if rd is not S.Zero:
-                    res += Mul(pf.expr(), rd)
+                    new_res = Mul(pf.expr(), rd)
+                pf, mr = pf.mul_res(new)
+                res = Add(Mul(res, Add(new.expr(), mr)), mr, new_res)
         else:
             pf, res = next(self.recur()).result_res()
         if hasattr(self, 'limits'):
@@ -340,9 +340,9 @@ class PFLeaf:
             return PFTableProcessor(dict()), (Mul(*bp, bt) + br) * fr
         table = {(bp, fp): bt * ft}
         residue = Add(Mul(*bp, bt, fr), Mul(*fp, ft, br), Mul(br, fr))
-        return PFTableProcessor(table, cache=self.bsc._res_cache), residue
+        return PFTableProcessor(table, cache=getattr(self.bsc, '_res_cache', None)), residue
 
-def pattern_form(expr, as_dict=None, res=False, ignore=(), _s=True):
+def pattern_form(expr, as_dict=False, res=False, ignore=(), _s=True):
     """
     Returns the pattern-form result of the expr.
     

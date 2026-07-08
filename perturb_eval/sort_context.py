@@ -224,7 +224,7 @@ class BosonSortContext():
                 if j_prev != j:
                     c = Commutator(Mul(*L[i:], evaluate=False),
                                     Mul(*R[j_prev:j], evaluate=False))
-                    res.append(Mul(*new, c, *R[j:], *tail))
+                    res.append(Mul(*new[:j_prev-j], c, *R[j:], *tail))
                     j_prev =j
                 new.append(L[i])
                 i += 1
@@ -243,7 +243,7 @@ class BosonSortContext():
         if j_prev != j:
             c = Commutator(Mul(*L[i:], evaluate=False),
                             Mul(*R[j_prev:j], evaluate=False))
-            res.append(Mul(*new, c, *R[j:], *tail))
+            res.append(Mul(*new[:j_prev-j], c, *R[j:], *tail))
         return (*new, *L[i:], *R[j:]), Mul(*reversed(tail)), Add(*res)
     def sort_res_pat(self):
         if not hasattr(self, 'residue_pat'):
@@ -276,6 +276,8 @@ class BosonSortContext():
             self.result = tuple(new)
             self.tail = Mul(*tail, tp)
             self.residue = Mul(Add(*res), tp) + rp
+        elif not hasattr(self, 'result'):
+            return *self.result_ind(), self.residue
         return self.result, self.tail, self.residue
 
 class FermionSortContext:
@@ -384,7 +386,7 @@ class FermionSortContext:
         def record():
             c = UidCommutator(Mul(*L[i:], evaluate=False),
                             Mul(*R[j_prev:j], evaluate=False))
-            res.append(Mul(*tail, *new, c,
+            res.append(Mul(*tail, *new[:j_prev-j], c,
                         *R[j:]))
             if isinstance(c, AntiCommutator):
                 tail.append(S.NegativeOne)
@@ -457,12 +459,15 @@ class PFTableProcessor:
         else:
             self._res_cache = cache
 
+    def __repr__(self):
+        return f"PatternForm({self.table}, {self.npf})"
+
     def expr(self, with_npf=True) -> Expr:
         if with_npf:
             return Add(*(Mul(*a[0], n, *a[1]) for a, n in self.table.items()), self.npf)
         else:
             return Add(*(Mul(*a[0], n, *a[1]) for a, n in self.table.items()))
-        
+
     def result_ind(self):
         return self
     def result_res(self):

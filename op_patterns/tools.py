@@ -158,65 +158,11 @@ def mul_pattern(e1, e2):
         return BosonPat(e1, e2.exps, eval_exp=False,
                           merge_ends=(e1.right_base==e2.left_base)),
 
-    elif isinstance(e2, BosonPat) and in_boson_num(e1, e2.name):
+    elif isinstance(e2, BosonPat) and in_boson_num(e1, e2.name)[1]:
         return e2, NumShift(e1, 1, e2).doit()
 
     return None
 
-def preorder_prunable(expr, stop_pred):
-    stack = [expr]
-    while stack:
-        node = stack.pop()
-        yield node
-        if stop_pred(node):
-            continue
-        for arg in reversed(getattr(node, 'args', ())):
-            stack.append(arg)
-def _redo_mul_node(node: Mul, prune_zero, num_repr):
-    new_args = []
-    a = node.args[-1]
-    rep = False
-    def mp(arg):
-        nonlocal a, rep
-        match mul_pattern(arg, a):
-            case None:
-                new_args.append(a)
-                a = arg
-            case(x,):
-                rep = True
-                a = x
-            case (x, y):
-                rep = True
-                new_args.append(y)
-                a = x
-    if num_repr:
-        def update(arg):
-            mp(arg)
-            nonlocal a, rep
-            if isinstance(a, BosonPat):
-                match a.num_repr():
-                    case (_, S.One):
-                        pass
-                    case (S.One, x):
-                        rep = True
-                        a = x
-                    case (x, y):
-                        rep = True
-                        new_args.append(y)
-                        a = x
-    else:
-        update = mp
-    for arg in reversed(node.args[:-1]):
-        update(arg)
-
-        if prune_zero and a == 0:
-            return S.Zero
-    new_args.append(a)
-    if rep:
-        new_args.reverse()
-        return Mul(*new_args)
-    else:
-        return node
 def redo_mul(expr, prune_zero=True, num_repr=False):
     """
     Redo the multimplcation in the expression to apply self-defined __mul__ rules
@@ -225,26 +171,53 @@ def redo_mul(expr, prune_zero=True, num_repr=False):
     :param combine_numop: If set True, the algorithm will rewrite a† a as N_(a),
     or a a† as 1±N_(a) for any quantum operator a
     """
-    replacements = {}
+    def _redo_mul_node(node: Mul):
+        new_args = []
+        a = node.args[-1]
+        rep = False
+        def mp(arg):
+            nonlocal a, rep
+            match mul_pattern(arg, a):
+                case None:
+                    new_args.append(a)
+                    a = arg
+                case(x,):
+                    rep = True
+                    a = x
+                case (x, y):
+                    rep = True
+                    new_args.append(y)
+                    a = x
+        if num_repr:
+            def update(arg):
+                mp(arg)
+                nonlocal a, rep
+                if isinstance(a, BosonPat):
+                    match a.num_repr():
+                        case (_, S.One):
+                            pass
+                        case (S.One, x):
+                            rep = True
+                            a = x
+                        case (x, y):
+                            rep = True
+                            new_args.append(y)
+                            a = x
+        else:
+            update = mp
+        for arg in reversed(node.args[:-1]):
+            update(arg)
 
-    def cache_redo(node: Mul):
-        if node not in replacements:
-            replacements[node] = _redo_mul_node(node, prune_zero, num_repr)
-        return replacements[node]
-    
-    def prune_pred(node):
-        return isinstance(node, Mul) and cache_redo(node) == 0
+            if prune_zero and a == 0:
+                return S.Zero
+        new_args.append(a)
+        if rep:
+            new_args.reverse()
+            return Mul(*new_args)
+        else:
+            return node
 
-    if prune_zero:
-        traversal = preorder_prunable(expr, prune_pred)
-    else:
-        from sympy.core.traversal import preorder_traversal
-        traversal = preorder_traversal(expr)
+    from sympy.core.traversal import bottom_up
 
-    for node in traversal:
-        if isinstance(node, Mul):
-            new = cache_redo(node)
-            if new is node:
-                del replacements[node]
-
-    return expr.xreplace(replacements) if replacements else expr
+    return bottom_up(expr, lambda node: _redo_mul_node(node)
+                        if isinstance(node, Mul) else node)

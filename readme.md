@@ -60,6 +60,28 @@ The function `pf` (see `pattern_form.pattern_form`) reorders the quantum express
 
 In the reordering process, the expression is saved in a `dict` structure to seperate the pure `BosonPat`/`FermionPat` factors and the `BosonNum` (in keys) and commutative factors (in values). The "res" parameter provides an option to calculate the generated commutators along the reordering procedure if the quantum modes are not independent with each other.
 
+`>>> from perturb_eval import pf`
+
+`>>> from sympy.core.symbol import symbols`
+
+`>>> from sympy.physics.quantum.boson import BosonOp`
+
+`>>> from sympy.physics.quantum.dagger import Dagger`
+
+`>>> from sympy.functions.elementary.trigonometric import cos, sin`
+
+`>>> a, b = symbols('a b', cls=BosonOp)`
+
+`>>> pf(a**2*(cos(Dagger(a)*a) + Dagger(b)*sin(b*Dagger(b)))*Dagger(a)*b**2)`
+
+`a*b*(1 + N_(a))*(1 + N_(b))*sin(-1 + N_(b)) + a*BP(b; 2)*(1 + N_(a))*cos(1 + N_(a))`
+
+`>>> pf(Dagger(b)*sin(b*Dagger(b))*Dagger(a), res=True)`
+
+`(Dagger(a)*Dagger(b)*sin(1 + N_(b)), -Dagger(b)*[Dagger(a),sin(1 + N_(b))] - [Dagger(a),Dagger(b)]*sin(1 + N_(b)))`
+
 The class `PF` (see `sortcontext.PFTableProcessor`) includes methods for basic algebraic operations such as addition, multiplication and integer power. Sometimes it is more efficient to use this class instead of `sympy.Expr`.
+
+
 
 `PE` class (see `pertrub_expander.PerturbExpander`) can expand the expression up to the wanted order. This can turn a difference equation into differential equation, so as to solve the analytical solution for the quantum process.

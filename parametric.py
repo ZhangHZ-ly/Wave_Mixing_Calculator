@@ -1,4 +1,3 @@
-from sympy import arg
 from sympy.core.singleton import S
 from sympy.core.numbers import I
 from sympy.core.sympify import sympify
@@ -7,7 +6,7 @@ from sympy.core.numbers import Integer
 from sympy.core.symbol import Dummy, Symbol, symbols
 from sympy.core.add import Add
 from sympy.core.mul import Mul
-from sympy.core.function import _mexpand, expand_mul
+from sympy.core.function import _mexpand
 from sympy.functions.elementary.exponential import exp
 from sympy.concrete.summations import Sum
 from sympy.physics.quantum.operator import Operator, HermitianOperator
@@ -16,7 +15,7 @@ from op_patterns.boson_pattern import BosonNum
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.dagger import Dagger
 from perturb_eval import PF, PE
-from perturb_eval.dsolve_pm import group_terms, dsd1, dsd2, _ps
+from dsolve_pm import group_terms, dsd1, dsd2, _ps
 from collections import defaultdict
 from itertools import product
 from functools import cached_property, cache, lru_cache
