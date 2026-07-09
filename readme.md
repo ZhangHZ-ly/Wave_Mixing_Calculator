@@ -122,7 +122,7 @@ The in the second entrance of `PF` indicates the part that cannot be represented
 
 `>>> from sympy import symbols, sin`
 
-`>>> x, y = Symbol('x y')`
+`>>> x, y = symbols('x y')`
 
 `>>> pe = PE({x: 1})`
 
