@@ -217,7 +217,7 @@ class PerturbExpander:
         self._lo_cache = dict()
         self._subs_cache = dict()
 
-    def register(self, t:type, category='s', cancel=False, id='name', fh=lambda p: 1):
+    def register(self, t:type, category='s', cancel=False, id='name', fh=lambda _: 1):
         """
         Include the new type of expression in one of the cases
         where the order of the expression should be directly given.

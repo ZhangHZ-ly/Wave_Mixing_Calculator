@@ -62,13 +62,11 @@ In the reordering process, the expression is saved in a `dict` structure to sepe
 
 `>>> from perturb_eval import pf`
 
-`>>> from sympy.core.symbol import symbols`
+`>>> from sympy import symbols, cos, sin`
 
 `>>> from sympy.physics.quantum.boson import BosonOp`
 
 `>>> from sympy.physics.quantum.dagger import Dagger`
-
-`>>> from sympy.functions.elementary.trigonometric import cos, sin`
 
 `>>> a, b = symbols('a b', cls=BosonOp)`
 
@@ -80,8 +78,54 @@ In the reordering process, the expression is saved in a `dict` structure to sepe
 
 `(Dagger(a)*Dagger(b)*sin(1 + N_(b)), -Dagger(b)*[Dagger(a),sin(1 + N_(b))] - [Dagger(a),Dagger(b)]*sin(1 + N_(b)))`
 
-The class `PF` (see `sortcontext.PFTableProcessor`) includes methods for basic algebraic operations such as addition, multiplication and integer power. Sometimes it is more efficient to use this class instead of `sympy.Expr`.
+The class `PF` (see `sortcontext.PFTableProcessor`) includes methods for basic algebraic operations such as addition, multiplication and integer power. It is usually more efficient to use this class instead of `sympy.Expr` if the calculation mainly treats pattern-formed expressions. To create `PF` objects, use `as_dict=None` option in `pf` function, or input directly the `dict` to the class. But the direct creation of `PF` object also accepts illegal inputs.
 
+`>>> from perturb_eval import pf, PF`
 
+`>>> from op_patterns import BonsonNum`
 
-`PE` class (see `pertrub_expander.PerturbExpander`) can expand the expression up to the wanted order. This can turn a difference equation into differential equation, so as to solve the analytical solution for the quantum process.
+`>>> from sympy import symbols, cos, sin`
+
+`>>> from sympy.physics.quantum.boson import BosonOp`
+
+`>>> from sympy.physics.quantum.dagger import Dagger`
+
+`>>> a, b = symbols('a b', cls=BosonOp)`
+
+`>>> pf(a**2*(cos(Dagger(a)*a) + Dagger(b)*sin(b*Dagger(b)))*Dagger(a)*b**2, as_dict=None)`
+
+`PatternForm({((a, b), ()): (-1 + N_(b))*(1 + N_(a))*sin(-1 + N_(b)), ((a, BP(b; 2)), ()): (1 + N_(a))*cos(1 + N_(a))}, 0)`
+
+`>>> pf1 = PF({((a**2,), ()): cos(BosonNum('a'))})`
+
+`>>> pf2 = PF({((Dagger(a),), ()): sin(BosonNum('a'))})`
+
+`>>> pf1.mul_ind(pf2)`
+
+`PatternForm({((a,), ()): (1 + N_(a))*cos(1 + N_(a))*sin(N_(a))}, 0)`
+
+The in the second entrance of `PF` indicates the part that cannot be represented into pattern form.
+
+`>>> from perturb_eval import pf`
+
+`>>> from sympy.physics.quantum.boson import BosonOp`
+
+`>>> from sympy.functions.elementary.triganometric import sin`
+
+`>>> pf(sin(BosonOp('a')), as_dict=None)`
+
+`PatternForm({}, sin(a))`
+
+`PE` class (see `pertrub_expander.PerturbExpander`) can expand the expression up to the desired order, which can turn a difference equation into differential equation, so as to solve the analytical solution for the quantum process.
+
+`>>> from perturb_eval import PE`
+
+`>>> from sympy import symbols, sin`
+
+`>>> x, y = Symbol('x y')`
+
+`>>> pe = PE({x: 1})`
+
+`>>> tuple(pe.expand_expr(sin(x + y), 2))`
+
+`((sin(y), 0), (x*cos(y), 1), (-x**2*sin(y)/2, 2))`
