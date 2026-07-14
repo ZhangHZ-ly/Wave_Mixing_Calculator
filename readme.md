@@ -129,3 +129,16 @@ The in the second entrance of `PF` indicates the part that cannot be represented
 `>>> tuple(pe.expand_expr(sin(x + y), 2))`
 
 `((sin(y), 0), (x*cos(y), 1), (-x**2*sin(y)/2, 2))`
+
+## Application of the framework — quantum three-wave mixing (and four-wave mixing)
+The example in `parametric.py` illustrates the usage of the relavant classes and functions in concrete situation. It defines the multimode operators (`MultimodeCOP` for coulpled operators, `MultimodeNum` for number operators, and `MultimodeNum2` for summed number operators in each signal-idler pair) for presenting the time evolution of multimode three-wave mixing (TWM), assuming equal nonlinear coefficients and phase mismatch among all the frequency modes.
+
+The Heisenberg evoluiton of TWM diven by a single strong field is calculated by the class `TWMSolver`. Note that the framework itself does not provide the algorithm directly, and the time differential equations (including initial conditions `fdf0`, second order ODE for weak fields `_d2ts` and first order ODE for the drive `_d1ts`) for iteration is derived separately. The solution is saved in `sol` property and can be called by `sol_expr` method.
+
+`>>> from parametric import TWMSolver`
+
+`>>> TWMSolver().sol_expr(0, 1)`
+
+`a_0*(1 + Σ(1 + N_(a_1) + N_(a_2))*N_(a_0)**(-1)/4 - Σ(1 + N_(a_1) + N_(a_2))*N_(a_0)**(-1)*cosh(2*_t*χ*sqrt(N_(a_0)))/4) + Σ(D(a_1)*D(a_2))*BP(a_0; 2)*(-_t*I*χ*N_(a_0)**(-1)/2 + I*N_(a_0)**(-3/2)*sinh(2*_t*χ*sqrt(N_(a_0)))/4) + Σ(a_1*a_2)*(-_t*I*χ/2 - I*N_(a_0)**(-1/2)*sinh(2*_t*χ*sqrt(N_(a_0)))/4)`
+
+Similar algorithms also applies to four-wave mixing (FWM) driven by a monochromatic strong pump, but due to the complexity of FWM, the multimode operators classes defined in `parametric.py` is *insufficient* for high-order solutions (but it is still possible to derive the full solution for FWM in principle). `example_fwm.py` shows an example that solves the FWM process up to the first estimation of pump depletion (`fwm_1_0`).

@@ -695,6 +695,14 @@ class TWMSolver:
         return self.sol[i]
 
     def sol_expr(self, mode: int, order: int):
+        """
+        Get the expression of the solution for the given mode and order.
+
+        The order is consistent with the order of the perturbative expansion,
+        so the classical solution with zero input is considered as order -1,
+        and the parametirc amplifier/oscillator solution with undepleted drive
+        is considered as order 0.
+        """
         s0 = self.sol[0]
         if len(s0[mode]) == 1:
             p = S.One
