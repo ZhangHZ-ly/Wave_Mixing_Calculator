@@ -556,6 +556,10 @@ class TWMSolver:
         return result
 
     def bdswap(self, a: BosonOp, d, to_left=True):
+        """
+        Swaps the order of the operator a and the dict d
+        The direction of the swap (for a) is determined by the to_left parameter.
+        """
         def _od(b: BosonOp):
             n1, n2, p = self.a[0].args[:3]
             if b.name == n1:
