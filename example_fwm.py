@@ -4,7 +4,7 @@ from perturb_eval import PE, PF
 from parametric import TWMSolver
 from sympy.core.singleton import S
 from sympy.core.function import expand_mul
-from parametric import (I, Dagger, exp, t_, nlc, a_i, a_p, a_s, pm, _g,
+from parametric import (I, Dagger, exp, t_, nlc, a_i, a_p, a_s, pm, _g, d_apply,
                         MultimodeNum as MMN, MultimodeNum2 as MMN2, MultimodeCOP as MMC)
 from dsolve_pm import dsd1, dsd2
 
@@ -32,12 +32,19 @@ d0 = solver_pm.d_adjoint(fwm0[0])
 for b, e in fwm0[1].items():
     for a, d in solver_pm.bdswap(b, d0, False).items():
         solver_pm.d_mul(prod_10[a], e, d)
+xpm_c = {(None,): PF({((a_p,), ()): S.Half*MMN2(a_s.name, a_i.name)})}
+coeff = {(None,): PF({((a_p,), ()): S.Half})}
+xpm_t1 = solver_pm.e_mul(fwm0[1], solver_pm.d_adjoint(fwm0[1]))
+xpm_t2 = solver_pm.e_mul(solver_pm.d_adjoint(fwm0[2]), fwm0[2])
+xpm_t = solver_pm.d_add(xpm_t1, xpm_t2)
 dd2 = solver_pm.e_mul(prod_10, fwm0[2])
-fwm2p = dict()
-for k, v in dd2.items():
+fwm1p = dict()
+for k, v in solver_pm.d_add(dd2, xpm_c, solver_pm.e_mul(coeff, xpm_t)).items():
     rhs = pe.expand_pf(v.n_apply(lambda t: -2*I*nlc*t.subs({t_: _g/gc})/gc), 1)
     s0 = rhs.n_apply(lambda t: solver_pm.n_simp(dsd1(_g, solver_pm.p2s_group(t), subs=gc*t_)))
-    fwm2p[k] = PF.add(fwm0[0][(None,)], s0) if len(k) == 1 else s0
+    fwm1p[k] = PF.add(fwm0[0][(None,)], s0) if len(k) == 1 else s0
 
 # FWM pump output with depletion
-fwm_1_0 =solver_pm.to_expr(fwm2p)*exp(-I * nlc * n_p * t_)
+fwm_1_0 =solver_pm.to_expr(fwm1p)*exp(-I * nlc * n_p * t_)
+
+print(fwm_1_0)

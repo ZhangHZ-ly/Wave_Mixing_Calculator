@@ -354,6 +354,13 @@ def t_mul(t1, t2, mid=None):
         return (i1, *exps1[:-1], exps1[-1]+ exps2[0], *exps2[1:])
     return (i1, *exps1, *exps2)
 
+def d_apply(e, f):
+    if isinstance(e, dict):
+        return {k: d_apply(v, f) for k, v in e.items()}
+    if isinstance(e, PF):
+        return e.n_apply(f)
+    return f(e)
+
 # Dummy symbols for:
 # the MultimodeNum of the signal field
 # the MultimodeNum2 of the process
@@ -502,6 +509,16 @@ class TWMSolver:
                 new[Dagger(k)] = self.d_adjoint(e)
         return new
 
+    def d_add(self, *ds):
+        """
+        Adds multiple dicts together, collecting the same keys
+        """
+        result = defaultdict(list)
+        for d in ds:
+            for k, e in d.items():
+                result[k].append(e)
+        return {k: PF.add(*es) for k, es in result.items()}
+
     def d_mul(self, d0, d1, d2, mid=None):
         if isinstance(mid, MultimodeNum):
             for (k2, e2) in d2.items():
@@ -590,7 +607,6 @@ class TWMSolver:
                 else:
                     new_dict[b][_tdz(i, nes)] = bpswap(b, p, s, to_left)
         return new_dict
-                
     def n_simp(self, expr):
         n1, n2 = self.a[0].names
         def mmn_d(n, d):
@@ -615,6 +631,8 @@ class TWMSolver:
                                                            _n2: MultimodeNum2(n1, n2, not self.dc, d)})
                 else:
                     warnings.warn('Failed to combine the weak-field multimode number operators')
+                    print(d)
+                    print(c_n2)
             if expr.is_Mul:
                 n_part = []
                 other = []
