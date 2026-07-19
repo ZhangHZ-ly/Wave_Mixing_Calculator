@@ -623,8 +623,8 @@ class TWMSolver:
                                                               lambda *args: _n2+args[-1]*_nm)
                 c_m = r.subs({_n2: 0})
                 c = c_m.subs({_nm: 0})
-                c_n2 = ((r.subs({_nm: 0}) - c).expand() / _n2).doit()
-                d =(((c_m - c) / _nm).expand() / c_n2).doit()
+                c_n2 = (_mexpand(r.subs({_nm: 0}) - c) / _n2).doit()
+                d =(_mexpand((c_m - c) / _nm) / c_n2).doit()
                 # non-integer displacement is also legal here
                 if d.is_number:
                     expr = (c_n2 * _n2 + c).factor().subs({_n1: MultimodeNum(a_s.name),
