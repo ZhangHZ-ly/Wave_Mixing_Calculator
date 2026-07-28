@@ -356,9 +356,12 @@ def t_mul(t1, t2, mid=None):
 
 def d_apply(e, f):
     if isinstance(e, dict):
-        return {k: d_apply(v, f) for k, v in e.items()}
+            return {k: f(v) for k, v in e.items()}
     if isinstance(e, PF):
-        return e.n_apply(f)
+        try:
+            return e.n_apply(f)
+        except (TypeError, AttributeError):
+            pass
     return f(e)
 
 # Dummy symbols for:

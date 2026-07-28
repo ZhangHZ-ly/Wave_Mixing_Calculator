@@ -45,6 +45,6 @@ for k, v in solver_pm.d_add(dd2, xpm_c, solver_pm.e_mul(coeff, xpm_t)).items():
     fwm1p[k] = PF.add(fwm0[0][(None,)], s0) if len(k) == 1 else s0
 
 # FWM pump output with depletion
-fwm_1_0 =solver_pm.to_expr(fwm1p)*exp(-I * nlc * n_p * t_)
+fwm_1_0 = solver_pm.to_expr(fwm1p)*exp(-I * nlc * n_p * t_)
 
 print(fwm_1_0)
