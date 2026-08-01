@@ -634,8 +634,6 @@ class TWMSolver:
                                                            _n2: MultimodeNum2(n1, n2, not self.dc, d)})
                 else:
                     warnings.warn('Failed to combine the weak-field multimode number operators')
-                    print(d)
-                    print(c_n2)
             if expr.is_Mul:
                 n_part = []
                 other = []

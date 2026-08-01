@@ -9,7 +9,7 @@ from sympy.core.traversal import bottom_up
 from sympy.core.exprtools import gcd_terms
 from collections import defaultdict
 
-__all__ = ['dsolve_pm1', 'dsolve_pm2']
+__all__ = ['p2s', 'dsolve_pm1', 'dsolve_pm2']
 
 def TR8h_selective(rv, x, first=True):
     """
@@ -165,29 +165,59 @@ def group_terms(expr, x, h=True):
         grouped[(func, nk, deg)].append(const_part)
     return grouped
 
+def d_p2s(x, d, subs=None):
+    """
+    Product-to-sum expression for the grouped dict
+    """
+    terms = []
+    if subs is None:
+        for (func, nk, deg), coeff in d.items():
+            t = Add(*coeff)#.simplify()
+            if func is None:
+                terms.append(x**deg*t)
+            else:
+                terms.append(x**deg*func(nk*x) * t)
+    else:
+        for (func, nk, deg), coeff in d.items():
+            t = Add(*coeff)#.simplify()
+            if func is None:
+                terms.append(x**deg*subs)
+            else:
+                terms.append(subs**deg*func(nk*subs) * t)
+    return Add(*terms)
+
+def p2s(expr, x, h=True, subs=None):
+    """
+    Product-to-sum result of the given expr
+
+    Parameter 'h' controls whether to perform it to hyperbolic (True)
+    or triangular (False) functions including variable x
+    """
+    return d_p2s(x, group_terms(expr, x, h), subs)
+    
 def dsd1(x, d, f0=0, subs=None):
     """
-    Solve the first-order LDE from dict 
+    Solve the first-order LDE from the grouped dict 
     """
     terms = []
     f0s = []
     if subs is None:
         for (func, nk, deg), coeff in d.items():
-            t = Add(*coeff).simplify()
+            t = Add(*coeff)#.simplify()
             terms.append(pm_expr(x, func, nk, deg, True) * t)
             if func is not None and (func in (sinh, sin)) ^ (deg & 1):
                 f0s.append(-pm_coeffs1(func, nk, deg)[0] * t)
     else:
         for (func, nk, deg), coeff in d.items():
-            t = Add(*coeff).simplify()
+            t = Add(*coeff)#.simplify()
             terms.append(t * pm_expr(x, func, nk, deg, True).subs({x: subs}))
             if func is not None and (func in (sinh, sin)) ^ (deg & 1):
                 f0s.append(-pm_coeffs1(func, nk, deg)[0] * t)
-    return Add(Add(f0, *f0s).simplify(), *terms)
+    return Add(Add(f0, *f0s), *terms)
 
 def dsolve_pm1(rhs, x, h=True, f0=0, subs=None):
     """
-    integral of rhs with the initial value of f0 and the form of
+    Integral of rhs with the initial value of f0 and the form of
 
     Σ_(nk, deg) x^deg * func(nk * x)
 
@@ -200,14 +230,14 @@ def dsolve_pm1(rhs, x, h=True, f0=0, subs=None):
 
 def dsd2(x, d, h=True, f0=0, df0=0, subs=None):
     """
-    Solve the second-order LDE from dict 
+    Solve the second-order LDE from the grouped dict 
     """
     terms = []
     f0s = []
     df0s = []
     if subs is None:
         for (func, nk, deg), coeff in d.items():
-            t = Add(*coeff).simplify()
+            t = Add(*coeff)#.simplify()
             ff0, fdf0 = v02(func, nk, deg)
             terms.append(pm_expr(x, func, nk, deg) * t)
             if ff0 is not S.Zero:
@@ -216,7 +246,7 @@ def dsd2(x, d, h=True, f0=0, df0=0, subs=None):
                 df0s.append(-fdf0 * t)
     else:
         for (func, nk, deg), coeff in d.items():
-            t = Add(*coeff).simplify()
+            t = Add(*coeff)#.simplify()
             ff0, fdf0 = v02(func, nk, deg)
             terms.append(t * pm_expr(x, func, nk, deg).subs({x: subs}))
             if ff0 is not S.Zero:

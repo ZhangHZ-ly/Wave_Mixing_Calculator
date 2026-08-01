@@ -3,8 +3,7 @@ from op_patterns import BosonNum
 from perturb_eval import PE, PF
 from parametric import TWMSolver
 from sympy.core.singleton import S
-from sympy.core.function import expand_mul
-from parametric import (I, Dagger, exp, t_, nlc, a_i, a_p, a_s, pm, _g, d_apply,
+from parametric import (I, Dagger, exp, t_, nlc, a_i, a_p, a_s, pm, _g,
                         MultimodeNum as MMN, MultimodeNum2 as MMN2, MultimodeCOP as MMC)
 from dsolve_pm import dsd1, dsd2
 
@@ -46,5 +45,3 @@ for k, v in solver_pm.d_add(dd2, xpm_c, solver_pm.e_mul(coeff, xpm_t)).items():
 
 # FWM pump output with depletion
 fwm_1_0 = solver_pm.to_expr(fwm1p)*exp(-I * nlc * n_p * t_)
-
-print(fwm_1_0)
