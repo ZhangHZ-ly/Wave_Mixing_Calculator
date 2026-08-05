@@ -356,7 +356,7 @@ def t_mul(t1, t2, mid=None):
 
 def d_apply(e, f):
     if isinstance(e, dict):
-            return {k: f(v) for k, v in e.items()}
+            return {k: d_apply(v, f) for k, v in e.items()}
     if isinstance(e, PF):
         try:
             return e.n_apply(f)
@@ -369,7 +369,7 @@ def d_apply(e, f):
 # the MultimodeNum2 of the process
 # the BosonNum of the driving field
 # the total number of modes
-_n1, _n2, _nd, _nm = symbols('n1 n2 nd nm', Dummy=True, nonnegative=True)
+_n1, _n2, _nd, _nm = symbols('n_1 n_2 n_d n_m', Dummy=True, nonnegative=True)
 _g = Dummy('g', real=True)  # Dummy symbol for the parametric gain
 
 PF0 = PF()  # Singleton null PatternForm
