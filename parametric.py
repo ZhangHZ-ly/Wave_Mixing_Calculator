@@ -464,7 +464,7 @@ class TWMSolver:
                 return PF({((Dagger(a_i),),()): dsd2(self.gc*t_, dict(), False,
                                                         S.Zero, -I*nlc/self.gc)})
         self.fdf0 = _fdf0
-        
+    
     def to_expr(self, x, b_left=True):
         """
         Converts the class representation into expression.
@@ -516,11 +516,16 @@ class TWMSolver:
         """
         Adds multiple dicts together, collecting the same keys
         """
+        if not ds:
+            return dict()
         result = defaultdict(list)
         for d in ds:
-            for k, e in d.items():
-                result[k].append(e)
-        return {k: PF.add(*es) for k, es in result.items()}
+            for k, v in d.items():
+                result[k].append(v)
+        if isinstance(v, PF):
+            return {k: PF.add(*vs) for k, vs in result.items()}
+        if isinstance(v, dict):
+            return {k: self.d_add(*vs) for k, vs in result.items()} 
 
     def d_mul(self, d0, d1, d2, mid=None):
         if isinstance(mid, MultimodeNum):
@@ -543,7 +548,7 @@ class TWMSolver:
                         d0[k] = PF.add(d0[k], new.mul_ind(e2))
                     else:
                         d0[k] = new.mul_ind(e2)
-    
+
     def e_mul(self, p1: dict, p2: dict):
         """
         BosonOp is right-multiplied to p1 and left-multiplied to p2 by default
@@ -610,6 +615,7 @@ class TWMSolver:
                 else:
                     new_dict[b][_tdz(i, nes)] = bpswap(b, p, s, to_left)
         return new_dict
+
     def n_simp(self, expr):
         n1, n2 = self.a[0].names
         def mmn_d(n, d):

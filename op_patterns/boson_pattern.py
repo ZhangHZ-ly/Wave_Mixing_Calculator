@@ -77,9 +77,9 @@ class BosonPat(Operator):
             flip, new_exponents = exponents.in_new()
         else:
             flip, new_exponents = exponents.drop_zeros()
-        left = bool(Integer(args[1])) ^ flip
         if not new_exponents.args:
             return S.One
+        left = bool(Integer(args[1])) ^ flip
         if new_exponents.args == (1,):
             return BosonOp(args[0], left)
         if not left and new_exponents.args == (1, 1):
