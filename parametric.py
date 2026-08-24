@@ -86,7 +86,7 @@ class MultimodeCOP(Operator):
         """
         order = min(order, exp1, exp2)
         m, n = (exp2, exp1) if left_p else (exp1, exp2)
-        s = 1 if (self.annih1 & 1) else -1
+        s = 1 if self.annih1 else -1
         p =  1 if ((self.parity + left_p) & 1) else -1
         c0 = []
         c1 = []
@@ -97,8 +97,8 @@ class MultimodeCOP(Operator):
             m = m1
         result = [Mul(Dagger(self)**exp2, self**exp1)]
         factors = []
-        sub = {_mcc_indices[order & 1]: n}
         for o in range(1, order + 1):
+            sub = {_mcc_indices[o & 1]: n}
             e1, e2 = exp1 - o, exp2 - o
             for i, term in mm_comm_dummy(o).items():
                 factors.append(term.subs(sub))

@@ -94,7 +94,7 @@ class DerivFactorCache:
                 if pos in self.cache:
                     del self.cache[pos]
 
-def coherent_average_terms(f, Ns, Lmax, **kwargs):
+def coherent_average_terms(f, Ns, Lmax=0, **kwargs):
     """
     Yields terms of
         prod_i [R(l_i,k_i)/(l_i+k_i)! * N_i^k_i] * ∂^{l+k} f(N)
