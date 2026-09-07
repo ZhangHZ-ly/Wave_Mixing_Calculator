@@ -284,23 +284,23 @@ def mmn_shift(e, mmop: MultimodeCOP, pd):
     return e
 
 def bpswap(a: BosonOp, p: PF, s, to_left=True):
-    def mmn_shift(mmn):
-        if mmn.name == a.name:
+    def mmn_shift(*args):
+        if args[0] == a.name:
             if a.is_annihilation ^ to_left:
-                return mmn+1
-            return mmn-1
-        return mmn
-    def mmn2_shift(mmn2):
-        n1, n2 = mmn2.args[:2]
+                return MultimodeNum(*args)+1
+            return MultimodeNum(*args)-1
+        return MultimodeNum(*args)
+    def mmn2_shift(*args):
+        n1, n2 = args[:2]
         if a.name == n2:
             if a.is_annihilation ^ to_left:
-                return mmn2+1
-            return mmn2-1
+                return MultimodeNum2(*args)+1
+            return MultimodeNum2(*args)-1
         if a.name == n1:
-            if mmn2.parity ^ a.is_annihilation == to_left:
-                return mmn2-1
-            return mmn2+1
-        return mmn2
+            if args[2] ^ a.is_annihilation == to_left:
+                return MultimodeNum2(*args)-1
+            return MultimodeNum2(*args)+1
+        return MultimodeNum2(*args)
     return p.n_apply(lambda e: s*e.replace(MultimodeNum, mmn_shift)
                                   .replace(MultimodeNum2, mmn2_shift))
 
