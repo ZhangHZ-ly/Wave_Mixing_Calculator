@@ -495,7 +495,7 @@ class PFTableProcessor:
     def make_contexts(self):
         for (bs, fs), n in self.table.items():
             bsc = object.__new__(BosonSortContext)
-            bsc.result = bsc. pat_sorted = bs
+            bsc.result = bsc.pat_sorted = bs
             bsc.tail = bsc.tail_pat = n
             bsc.residue = bsc.residue_pat = S.Zero
             bsc._res_cache = self._res_cache
