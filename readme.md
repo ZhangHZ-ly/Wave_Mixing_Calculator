@@ -104,7 +104,7 @@ The class `PF` (see `sortcontext.PFTableProcessor`) includes methods for basic a
 
 `PatternForm({((a,), ()): (1 + N_(a))*cos(1 + N_(a))*sin(N_(a))}, 0)`
 
-The in the second entrance of `PF` indicates the part that cannot be represented into pattern form.
+The second entrance of `PF` indicates the part that cannot be represented into pattern form.
 
 `>>> from perturb_eval import pf`
 
