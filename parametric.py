@@ -173,6 +173,9 @@ class MultimodeNum(HermitianOperator):
     boson_num_only = True
 
     def __new__(cls, name, displacement=0):
+        displacement = sympify(displacement)
+        if displacement.is_real == False:
+            raise ValueError('The displacement must be a real number')
         return HermitianOperator.__new__(cls, name, displacement)
     
     @property
@@ -223,6 +226,9 @@ class MultimodeNum2(HermitianOperator):
     def __new__(cls, name1, name2, parity=0, displacement=0):
         name1 = sympify(name1)
         name2 = sympify(name2)
+        displacement = sympify(displacement)
+        if displacement.is_real == False:
+            raise ValueError('The displacement must be a real number')
         if name1 == name2:
             raise ValueError('The two operators must be in different modes')
         parity = bool(parity)
@@ -383,6 +389,17 @@ a_s = BosonOp('a_1')
 a_i = BosonOp('a_2')
 pm = Symbol('Δk', real=True)
 
+class f_dict(dict):
+    """
+    A dictionary subclass representing operator expressions.
+    Includes the 'b_left' attribute: indicates whether the single-mode
+    weak-field operator is left-multiplied (True) or right-multiplied (False)
+    in the expression.
+    """
+    def __init__(self, *args, b_left=True, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.b_left = b_left
+
 class TWMSolver:
     """
     Three-wave mixing quantum multimode parametric process perturbation solver
@@ -417,22 +434,21 @@ class TWMSolver:
         self.pm = pm if mismatch else S.Zero
         self.half_p_factor = exp(I * self.pm * t_ * S.Half)
         if dc:
-            # driving field number operator
             self.nd = BosonNum(a_p.name)
             self.a = (MultimodeCOP(a_s.name, a_i.name, annih1=0),
                       MultimodeCOP(a_s.name, a_i.name))
+            # Mark multiplication directions: a_s/a_i right-multiplied (False), a_s†/a_i† left-multiplied (True)
             self.sol = [({(None,): PF({((a_p,), ()): S.One})},
-                         {a_s: {(None,): PF0}, Dagger(a_i): {(None,): PF0}},
-                         {Dagger(a_s): {(None,): PF0}, a_i: {(None,): PF0}})]
-            # gc = g/t
+                         f_dict({a_s: {(None,): PF0}, Dagger(a_i): {(None,): PF0}}, b_left=False),
+                         f_dict({Dagger(a_s): {(None,): PF0}, a_i: {(None,): PF0}}))]
             self.gc = (nlc**2*self.nd-self.pm**2/4)**S.Half
             pe = PE({a_p.name: S.NegativeOne, nlc: S.One})
         else:
             self.nd = BosonNum(a_i.name)
             self.a = (MultimodeCOP(a_p.name, a_s.name, 1, 0),
                       MultimodeCOP(a_p.name, a_s.name, 1))
-            self.sol = [({a_p: {(None,): PF0}, a_s: {(None,): PF0}},
-                         {a_p: {(None,): PF0}, a_s: {(None,): PF0}},
+            self.sol = [(f_dict({a_p: {(None,): PF0}, a_s: {(None,): PF0}}),
+                         f_dict({a_p: {(None,): PF0}, a_s: {(None,): PF0}}),
                          {(None,): PF({((a_i,), ()): S.One})})]
             self.gc = (nlc**2*self.nd+self.pm**2/4)**S.Half
             pe = PE({a_i.name: S.NegativeOne, nlc: S.One})
@@ -464,11 +480,10 @@ class TWMSolver:
                 return PF({((Dagger(a_i),),()): dsd2(self.gc*t_, dict(), False,
                                                         S.Zero, -I*nlc/self.gc)})
         self.fdf0 = _fdf0
-    
-    def to_expr(self, x, b_left=True):
+    def to_expr(self, x):
         """
         Converts the class representation into expression.
-        
+
         The perturbative solutions to the quantum parametric processes
         are saved in dicts. The corresponding expression is the sum over
         the products key * value for each key of the dict.
@@ -490,6 +505,7 @@ class TWMSolver:
         if isinstance(x, PF):
             return x.expr(False)
         if isinstance(x, dict):
+            b_left = getattr(x, 'b_left', True)
             if b_left:
                 return Add(*(self.to_expr(b)*self.to_expr(e) for b, e in x.items()))
             return Add(*(self.to_expr(e)*self.to_expr(b) for b, e in x.items()))
@@ -497,9 +513,14 @@ class TWMSolver:
 
     def d_adjoint(self, d: dict):
         """
-        Takes adjoint for the dict representation of field solutions
+        Takes adjoint for the dict representation of field solutions.
+        The direction of the single-mode weak-field operator is reversed upon conjugation.
         """
-        new = dict()
+        if isinstance(d, f_dict):
+            new = f_dict(b_left=not d.b_left)
+        else:
+            new = dict()
+            
         for k, e in d.items():
             if isinstance(k, tuple):
                 i, *exps = k
@@ -512,20 +533,48 @@ class TWMSolver:
                 new[Dagger(k)] = self.d_adjoint(e)
         return new
 
+    def _od(self, b: BosonOp):
+        """
+        Returns the partner single-mode operator
+        according to the parity rule of self.a[0].
+
+        If the operator does not belong to the primary modes,
+        returns the operator itself.
+        """
+        n1, n2, p = self.a[0].args[:3]
+        if b.name == n1:
+            return BosonOp(n2, b.is_annihilation==p)
+        if b.name == n2:
+            return BosonOp(n1, b.is_annihilation==p)
+        return b
+
     def d_add(self, *ds):
         """
         Adds multiple dicts together, collecting the same keys
         """
         if not ds:
             return dict()
+        if len(ds) == 1:
+            return ds[0]
         result = defaultdict(list)
+        if all(isinstance(d, f_dict) for d in ds):
+            b_left = ds[0].b_left
+            for d in ds:
+                if d.b_left == b_left:
+                    for k, v in d.items():
+                        result[k].append(v)
+                if d.b_left != b_left:
+                    for k, v in d.items():
+                        for nk, nv in self.bdswap(k, v, to_left=b_left).items():
+                            result[nk].append(nv)
+            return f_dict({k: self.d_add(*vs) for k, vs in result.items()}, b_left=b_left)
+        if any(isinstance(d, f_dict) for d in ds):
+            raise ValueError("Cannot add expressions with and without"
+                " single-mode weak-field operators")
         for d in ds:
             for k, v in d.items():
                 result[k].append(v)
-        if isinstance(v, PF):
-            return {k: PF.add(*vs) for k, vs in result.items()}
-        if isinstance(v, dict):
-            return {k: self.d_add(*vs) for k, vs in result.items()} 
+        return {k: PF.add(*vs) for k, vs in result.items()}
 
     def d_mul(self, d0, d1, d2, mid=None):
         if isinstance(mid, MultimodeNum):
@@ -548,6 +597,76 @@ class TWMSolver:
                         d0[k] = PF.add(d0[k], new.mul_ind(e2))
                     else:
                         d0[k] = new.mul_ind(e2)
+
+    def e_mul(self, p1: dict, p2: dict):
+        """
+        Multiplies two dict representations of operators.
+        
+        if both dict contain BosonOps, this will generate an intermidiate dict
+        including MultimodeNums (to be further collected as MultimodeNum2)
+        
+        By default, single-mode weak-field operators are assumed to be
+        at the edges. If a multiplication causes a single-mode operator
+        to be trapped in the middle, bdswap is automatically invoked
+        to swap it to the correct boundary.
+        """
+        if not p1 or not p2:
+            return dict()
+        # Super clean isinstance check
+        is_f1 = isinstance(p1, f_dict)
+        is_f2 = isinstance(p2, f_dict)
+        if is_f1 and is_f2:
+            result = dict()
+            # Subspace Validation
+            if not all(b1 == b2.adjoint() or b1 == self._od(b2)
+                   for b1, b2 in product(p1.keys(), p2.keys())):
+                raise ValueError('Cannot use multimode operators to represent the product')
+            if p1.b_left:
+                new_p1 = f_dict(b_left=False)
+                for b, d in p1.items():
+                    for nb, nd in self.bdswap(b, d, to_left=False).items():
+                        if nd: new_p1[nb] = self.d_add(new_p1.get(nb, dict()), nd)
+                p1 = self.d_add(*(self.bdswap(b, d, to_left=False) for b, d in p1.items()))
+            if not p2.b_left:
+                new_p2 = f_dict(b_left=True)
+                for b, d in p2.items():
+                    for nb, nd in self.bdswap(b, d, to_left=True).items():
+                        if nd: new_p2[nb] = self.d_add(new_p2.get(nb, dict()), nd)
+                p2 = new_p2
+            for (b1, d1), (b2, d2) in product(p1.items(), p2.items()):
+                if b1 == Dagger(b2):
+                    mn = (MultimodeNum(b1.name, 1) if b1.is_annihilation else MultimodeNum(b1.name))
+                    self.d_mul(result, d1, d2, mn)
+                elif b1.compare(b2) == 1:
+                    self.d_mul(result, d1, d2, b2.is_annihilation)
+                else:
+                    self.d_mul(result, d1, d2, b1.is_annihilation)
+        elif is_f1:
+            if p1.b_left:
+                result = f_dict(b_left=True)
+                for b, d in p1.items():
+                    result[b] = dict()
+                    self.d_mul(result[b], d, p2)
+            else:
+                result = f_dict(b_left=False)
+                for b, d1 in p1.items():
+                    for nb, p2_prime in self.bdswap(b, p2, to_left=False).items():
+                        self.d_mul(result.setdefault(nb, dict()), d1, p2_prime)
+        elif is_f2:
+            if not p2.b_left:
+                result = f_dict(b_left=False)
+                for b, d in p2.items():
+                    result[b] = dict()
+                    self.d_mul(result[b], p1, d)
+            else:
+                result = f_dict(b_left=True)
+                for b, d2 in p2.items():
+                    for nb, p1_prime in self.bdswap(b, p1, to_left=True).items():
+                        self.d_mul(result.setdefault(nb, dict()), p1_prime, d2)
+        else:
+            self.d_mul(result, p1, p2)
+
+        return result
 
     def e_mul(self, p1: dict, p2: dict):
         """
@@ -585,27 +704,21 @@ class TWMSolver:
         Swaps the order of the operator a and the dict d
         The direction of the swap (for a) is determined by the to_left parameter.
         """
-        def _od(b: BosonOp):
-            n1, n2, p = self.a[0].args[:3]
-            if b.name == n1:
-                return BosonOp(n2, b.is_annihilation==p)
-            if b.name == n2:
-                return BosonOp(n1, b.is_annihilation==p)
-            return b
+
         def btswap(a: BosonOp, i, exps):
             yield S.One, a, exps
             if to_left:
                 for j, e in enumerate(exps):
                     if i ^ (j & 1) ^ (not self.dc and a.name==a_s.name) != a.is_annihilation:
-                        for s, b, nes in btswap(_od(a), i, exps[:j]):
+                        for s, b, nes in btswap(self._od(a), i, exps[:j]):
                             yield S.NegativeOne**int(a.is_annihilation)*s*e, b, (*nes, e-1, *exps[j+1:])
             else:
                 for j, e in enumerate(exps):
                     ic = i ^ (j & 1)
                     if ic ^ (not self.dc and a.name==a_s.name) != a.is_annihilation:
-                        for s, b, nes in btswap(_od(a), not ic, exps[j+1:]):
+                        for s, b, nes in btswap(self._od(a), not ic, exps[j+1:]):
                             yield S.NegativeOne**int(not a.is_annihilation)*s*e, b, (*exps[:j], e-1, *nes)
-        new_dict = {a: dict(), _od(a): dict()}
+        new_dict = f_dict({a: dict(), self._od(a): dict()}, b_left=to_left)
         for t, p in d.items():
             i, *exps = t
             for s, b, nes in btswap(a, i, exps):
@@ -653,7 +766,7 @@ class TWMSolver:
             expr = _ps(expr)
             return expr
         return bottom_up(expr, combine_n)
-                            
+
     def get_sol(self, order: int):
         if order < -1:
             raise ValueError('The order should be at least -1')
@@ -681,8 +794,8 @@ class TWMSolver:
                     self.sol[i][mode][b][k] = PF.add(s0, self.fdf0(n0, mode)) if len(k) == 1 else s0
             if dc:
                 self.sol.append((last_sol[0],
-                                 {a_s: dict(), Dagger(a_i): dict()},
-                                 {Dagger(a_s): dict(), a_i: dict()}))
+                                 f_dict({a_s: dict(), Dagger(a_i): dict()}, b_left=False),
+                                 f_dict({Dagger(a_s): dict(), a_i: dict()})))
                 pd = self.d_adjoint(last_sol[0])
                 term1 = self.e_mul(self.e_mul(last_sol[0], pd), last_sol[1])
                 term2 = self.e_mul(self.dd_last, self.d_adjoint(last_sol[2]))
@@ -693,8 +806,8 @@ class TWMSolver:
                 _d2ts(2, False, Dagger(a_s))
                 _d2ts(2, True, a_i)
             else:
-                self.sol.append(({a_p: dict(), a_s: dict()},
-                                 {a_p: dict(), a_s: dict()},
+                self.sol.append((f_dict({a_p: dict(), a_s: dict()}),
+                                 f_dict({a_p: dict(), a_s: dict()}),
                                  last_sol[2]))
                 id = self.d_adjoint(last_sol[2])
                 term1 = self.e_mul(last_sol[0], self.e_mul(id, last_sol[2]))
@@ -741,7 +854,7 @@ class TWMSolver:
             p = self.half_p_factor
         if len(s0[mode]) == 1 or mode != 1 or len(s0[0]) == 2:  # driving field
             return p*self.to_expr(self.get_sol(order)[mode])
-        return p*self.to_expr(self.get_sol(order)[mode], False)
+        return p*self.to_expr(self.get_sol(order)[mode])
 
     def p2s_group(self, expr):
         """
