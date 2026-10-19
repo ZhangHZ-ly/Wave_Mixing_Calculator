@@ -353,11 +353,9 @@ class BosonNum(HermitianOperator, BosonPat):
         if s == 'a':
             return r'\hat{N}' 
         if s == 'a_':
-            return r'\hat{N\_{}}'
-        if s and s[0] == 'a':
-            if len(s) > 2 and s[1] == '_':
-                return r'\hat{N}_{%s}' % ' '.join(s[2:].split('_'))
-            return r'\hat{N}_{%s}' % ' '.join(s[1:].split('_'))
+            return r'\hat{N}_{}'
+        if s.startswith('a_'):
+            return r'\hat{N}_{%s}' % ' '.join(s[2:].split('_'))
         return r'\hat{N}_{%s}' % s
     def _print_contents_pretty(self, printer, *args):
         return printer._print(self.__repr__())

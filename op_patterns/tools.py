@@ -135,7 +135,7 @@ def in_boson_num(expr: Expr, mode, prune=False):
 def mul_pattern(e1, e2):
     if isinstance(e1, FermionPat) and isinstance(e2, FermionPat) and e1.name == e2.name:
         if fp_separable(e1, e2):
-            if (e1.commutation_symmetry is not None
+            if (e1.comm_symm in (S.One, S.NegativeOne)
                 or all(n.is_integer and n.is_positive for n in e1.exps)):
                 if e1.is_hermitian or not (len(e1.exps) & 1):
                     return e2,

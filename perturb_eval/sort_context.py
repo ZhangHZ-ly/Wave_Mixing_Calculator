@@ -343,8 +343,8 @@ class FermionSortContext:
             nonlocal l_arg
             l_arg -= m1_base(L[i].comm_symm)
             if j_prev != j:
-                tail_args.append(l_arg * Add(m1_base(p.comm_symm)
-                                             for p in R[j_prev:j]))
+                tail_args.append(l_arg * Add(*(m1_base(p.comm_symm)
+                                             for p in R[j_prev:j])))
         while i < l and j < r:
             if key(L[i]) < key(R[j]):
                 update()
@@ -364,9 +364,10 @@ class FermionSortContext:
                 i += 1
                 j_prev = j
         if j_prev != j:
-            l_arg -= m1_base(L[i].comm_symm)
-            tail_args.append(l_arg * Add(m1_base(p.comm_symm)
-                                         for p in R[j_prev:j]))
+            if i < l:
+                l_arg -= m1_base(L[i].comm_symm)
+            tail_args.append(l_arg * Add(*(m1_base(p.comm_symm)
+                                         for p in R[j_prev:j])))
         return (*new, *L[i:], *R[j:]), Pow(S.NegativeOne, Add(*tail_args))
 
     def merge_res(self, R):
@@ -538,11 +539,11 @@ class PFTableProcessor:
                                 self._res_cache), Add(*res)
 
     def power_ind(self, exp: Integer):
-        if exp is S.One:
+        if exp == 1:
             return self
         if exp < 0:
             raise ValueError('Exponent must be nonnegative')
-        if exp is S.Zero:
+        if exp == 0:
             return PFTableProcessor({((), ()): S.One})
         sf_k = self.power_ind(exp >> 1)
         sf_2k = sf_k.mul_ind(sf_k)
@@ -551,11 +552,11 @@ class PFTableProcessor:
         return self.mul_ind(sf_2k)
 
     def power_res(self, exp: Integer, base_rd):
-        if exp is S.One:
+        if exp == 1:
             return self, base_rd
         if exp < 0:
             raise ValueError('Exponent must be nonnegative')
-        if exp is S.Zero:
+        if exp == 0:
             return PFTableProcessor({((), ()): S.One}), S.Zero
         sf_k, rd_k = self.power_res(exp >> 1, base_rd)
         sf_2k, r_sf2k = sf_k.mul_res(sf_k, True)

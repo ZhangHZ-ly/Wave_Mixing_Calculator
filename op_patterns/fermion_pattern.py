@@ -176,7 +176,11 @@ class FermionPat(Operator):
         return Pow(S.NegativeOne, uid_exp(*self.exps, sym_count=True))
 
     def doit(self, **hints):
+        if len(self.args) < 3:
+            return self
         flip, new_exponents = self.args[2].f_simp(**hints)
+        if new_exponents is None:
+            return S.Zero
         return FermionPat(self.name,
                           self.left_base.is_annihilation ^ flip,
                           new_exponents, eval_exp=False)
@@ -189,7 +193,8 @@ class FermionPat(Operator):
         # not taking adjoint for the exponents
         # since any legal exponent must be a nonnegative integer
         new_left_base = self.right_base._eval_adjoint()
-        new_exponents = list[self.exps].reverse()
+        new_exponents = list(self.exps)
+        new_exponents.reverse()
         return FermionPat(*new_left_base.args, new_exponents, eval_exp=False)
     
     def _eval_power(self, exp):

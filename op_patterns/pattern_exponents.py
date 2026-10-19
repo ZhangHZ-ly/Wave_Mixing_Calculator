@@ -62,7 +62,7 @@ class PatExps(Expr):
         zero_count2 = sum(1 for _ in takewhile(lambda x: x == 0, reversed(self.args)))
             
         if zero_count1 + zero_count2 > 0:
-            return flip, PatExps(*self.args[(zero_count1):-zero_count2])
+            return flip, PatExps(*self.args[zero_count1:(len(self.args)-zero_count2)])
         return (flip, self)
     
     def in_new(self, f=False):
