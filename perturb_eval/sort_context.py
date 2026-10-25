@@ -38,14 +38,14 @@ def _res_cache_update(cache, new):
         if b in cache:
             if b in _res_to_del:
                 for n in _res_to_del[b]:
-                    del cache[b][n]
+                    cache[b].pop(n, None)
                 del _res_to_del[b]
             cache[b].update(new[b])
         else:
-            cache[b] = new
+            cache[b] = dict(new[b]) if isinstance(new[b], dict) else new[b]
     for b in _res_to_del:
         for n in _res_to_del[b]:
-            del cache[b][n]
+            cache[b].pop(n, None)
     _res_to_del.clear()
 
 class BosonSortContext():

@@ -361,8 +361,10 @@ def t_mul(t1, t2, mid=None):
     return (i1, *exps1, *exps2)
 
 def d_apply(e, f):
+    if isinstance(e, f_dict):
+        return f_dict({k: d_apply(v, f) for k, v in e.items()}, b_left=e.b_left)
     if isinstance(e, dict):
-            return {k: d_apply(v, f) for k, v in e.items()}
+        return {k: d_apply(v, f) for k, v in e.items()}
     if isinstance(e, PF):
         try:
             return e.n_apply(f)
@@ -615,10 +617,10 @@ class TWMSolver:
         # Super clean isinstance check
         is_f1 = isinstance(p1, f_dict)
         is_f2 = isinstance(p2, f_dict)
+        result = dict()
         if is_f1 and is_f2:
-            result = dict()
             # Subspace Validation
-            if not all(b1 == b2.adjoint() or b1 == self._od(b2)
+            if not all(b1 == b2.adjoint() or b1 == self._od(b2).adjoint()
                    for b1, b2 in product(p1.keys(), p2.keys())):
                 raise ValueError('Cannot use multimode operators to represent the product')
             if p1.b_left:
@@ -626,7 +628,7 @@ class TWMSolver:
                 for b, d in p1.items():
                     for nb, nd in self.bdswap(b, d, to_left=False).items():
                         if nd: new_p1[nb] = self.d_add(new_p1.get(nb, dict()), nd)
-                p1 = self.d_add(*(self.bdswap(b, d, to_left=False) for b, d in p1.items()))
+                p1 = new_p1
             if not p2.b_left:
                 new_p2 = f_dict(b_left=True)
                 for b, d in p2.items():
@@ -666,37 +668,6 @@ class TWMSolver:
         else:
             self.d_mul(result, p1, p2)
 
-        return result
-
-    def e_mul(self, p1: dict, p2: dict):
-        """
-        BosonOp is right-multiplied to p1 and left-multiplied to p2 by default
-        
-        if both dict contain BosonOps, this will generate an intermidiate dict
-        including MultimodeNums (to be further collected as MultimodeNum2)
-        """
-        result = dict()
-        if isinstance(next(iter(p1)), BosonOp):
-            if isinstance(next(iter(p2)), BosonOp):
-                for (b1, d1), (b2, d2) in product(p1.items(), p2.items()):
-                    if b1 == Dagger(b2):
-                        mn = (MultimodeNum(b1.name, 1) if b1.is_annihilation
-                              else MultimodeNum(b1.name))
-                        self.d_mul(result, d1, d2, mn)
-                    elif b1.compare(b2) == 1:
-                        self.d_mul(result, d1, d2, b2.is_annihilation)
-                    else:
-                        self.d_mul(result, d1, d2, b1.is_annihilation)
-            else:
-                for b, d in p1.items():
-                    result[b] = dict()
-                    self.d_mul(result[b], d, p2)
-        elif isinstance(next(iter(p2)), BosonOp):
-            for b, d in p2.items():
-                result[b] = dict()
-                self.d_mul(result[b], p1, d)
-        else:
-            self.d_mul(result, p1, p2)
         return result
 
     def bdswap(self, a: BosonOp, d, to_left=True):

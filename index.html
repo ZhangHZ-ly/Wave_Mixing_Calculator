@@ -1,0 +1,2173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quantum Operator Algebra Calculator</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<style>
+  :root {
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --primary-light: #eff6ff;
+    --accent: #7c3aed;
+    --accent-hover: #6d28d9;
+    --success: #16a34a;
+    --danger: #dc2626;
+    --bg-main: #f8fafc;
+    --card-bg: #ffffff;
+    --border-color: #e2e8f0;
+    --text-primary: #1e293b;
+    --text-secondary: #64748b;
+    --radius: 8px;
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background-color: var(--bg-main);
+    color: var(--text-primary);
+    line-height: 1.5;
+    padding: 1.5rem 1rem;
+    min-height: 100vh;
+  }
+
+  .container {
+    max-width: 1060px;
+    margin: 0 auto;
+  }
+
+  header.app-header {
+    margin-bottom: 1.25rem;
+  }
+  header.app-header h1 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #0f172a;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  header.app-header p {
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+    margin-top: 0.25rem;
+  }
+
+  /* Browser-style Tab Bar */
+  .tab-bar {
+    display: flex;
+    gap: 0.25rem;
+    border-bottom: 2px solid var(--border-color);
+    margin-bottom: 1.5rem;
+    background: #e2e8f0;
+    padding: 0.35rem 0.35rem 0 0.35rem;
+    border-radius: 10px 10px 0 0;
+  }
+  .tab-btn {
+    padding: 0.65rem 1.25rem;
+    background: transparent;
+    border: 1px solid transparent;
+    border-bottom: none;
+    border-radius: 8px 8px 0 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #475569;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .tab-btn:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.6);
+  }
+  .tab-btn.active {
+    background: var(--card-bg);
+    color: var(--primary);
+    border-color: var(--border-color);
+    border-top: 3px solid var(--primary);
+    box-shadow: 0 -2px 5px rgba(0,0,0,0.03);
+    margin-bottom: -2px;
+    padding-bottom: calc(0.65rem + 2px);
+  }
+
+  /* Panels */
+  .panel {
+    display: none;
+  }
+  .panel.active {
+    display: block;
+    animation: fadeIn 0.2s ease-in-out;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    box-shadow: var(--shadow-sm);
+    margin-bottom: 1.5rem;
+  }
+  .card-title {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: #0f172a;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  /* Form Elements */
+  .form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+  }
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .form-group label {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #334155;
+  }
+  .form-control, select, input[type="text"], input[type="number"], textarea {
+    padding: 0.55rem 0.75rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    color: var(--text-primary);
+    background: #fff;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    width: 100%;
+  }
+  .form-control:focus, select:focus, input[type="text"]:focus, input[type="number"]:focus, textarea:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+  }
+  .form-tip {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+  }
+
+  /* Buttons */
+  .btn-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    align-items: center;
+  }
+  .btn {
+    padding: 0.55rem 1.1rem;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+  }
+  .btn-primary {
+    background: var(--primary);
+    color: #fff;
+  }
+  .btn-primary:hover {
+    background: var(--primary-hover);
+  }
+  .btn-accent {
+    background: var(--accent);
+    color: #fff;
+  }
+  .btn-accent:hover {
+    background: var(--accent-hover);
+  }
+  .btn-secondary {
+    background: #f1f5f9;
+    color: #334155;
+    border-color: #cbd5e1;
+  }
+  .btn-secondary:hover {
+    background: #e2e8f0;
+  }
+  .btn-success {
+    background: var(--success);
+    color: #fff;
+  }
+  .btn-success:hover {
+    background: #15803d;
+  }
+  .btn-sm {
+    padding: 0.3rem 0.65rem;
+    font-size: 0.85rem;
+  }
+
+  /* Output Box */
+  .output-box {
+    margin-top: 1.25rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    background: #ffffff;
+    overflow: hidden;
+  }
+  .output-header {
+    background: #f8fafc;
+    border-bottom: 1px solid var(--border-color);
+    padding: 0.5rem 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+  .output-content {
+    min-height: 4.5rem;
+    padding: 1.25rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+    font-size: 1.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+  }
+  .output-content.error {
+    color: var(--danger);
+    font-size: 0.95rem;
+    justify-content: flex-start;
+  }
+  .output-content .katex-display,
+  .residue-content .katex-display,
+  .modal-preview .katex-display {
+    margin: 0;
+    text-align: left;
+    width: auto;
+  }
+  .output-content .katex-display > .katex,
+  .residue-content .katex-display > .katex,
+  .modal-preview .katex-display > .katex {
+    text-align: left;
+  }
+  .output-footer {
+    border-top: 1px solid var(--border-color);
+    padding: 0.65rem 1rem;
+    background: #f8fafc;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  /* Residue Box */
+  .residue-box {
+    margin-top: 1rem;
+    border: 1px dashed #cbd5e1;
+    border-radius: 6px;
+    background: #fffbeb;
+    padding: 1rem;
+  }
+  .residue-header {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #b45309;
+    margin-bottom: 0.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .residue-content {
+    font-size: 1.15rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0.5rem 0;
+  }
+
+  /* Badges */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.65rem;
+    border-radius: 9999px;
+    font-size: 0.825rem;
+    font-weight: 600;
+  }
+  .badge-success { background: #dcfce7; color: #166534; }
+  .badge-warning { background: #fef3c7; color: #92400e; }
+  .badge-info { background: #e0f2fe; color: #0369a1; }
+  .badge-gray { background: #f1f5f9; color: #475569; }
+
+  /* Table */
+  .table-responsive {
+    overflow-x: auto;
+    overflow-y: auto;
+    max-height: 360px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    margin-top: 0.75rem;
+  }
+  .custom-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 0.9rem;
+    text-align: left;
+  }
+  .custom-table th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #f8fafc;
+    color: #475569;
+    font-weight: 600;
+    padding: 0.65rem 0.85rem;
+    border-bottom: 1px solid var(--border-color);
+    white-space: nowrap;
+  }
+  .custom-table td {
+    padding: 0.65rem 0.85rem;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-primary);
+  }
+  .custom-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+  .custom-table tbody tr {
+    cursor: context-menu;
+    transition: background 0.1s;
+  }
+  .custom-table tbody tr:hover {
+    background: #f1f5f9;
+  }
+
+  /* Dropdown Button */
+  .dropdown {
+    position: relative;
+    display: inline-block;
+  }
+  .dropdown-content {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: 100%;
+    margin-top: 0.25rem;
+    background-color: #fff;
+    min-width: 220px;
+    box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    z-index: 100;
+    overflow: hidden;
+  }
+  .dropdown-content a, .dropdown-content button {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    text-align: left;
+    padding: 0.65rem 1rem;
+    background: none;
+    border: none;
+    font-size: 0.875rem;
+    color: #334155;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background 0.1s;
+  }
+  .dropdown-content button:hover {
+    background: #f1f5f9;
+    color: var(--primary);
+  }
+  .dropdown.open .dropdown-content {
+    display: block;
+  }
+
+  /* Context Menu */
+  .context-menu {
+    position: fixed;
+    display: none;
+    background: #fff;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: 0 10px 20px rgba(0,0,0,0.15);
+    z-index: 1000;
+    min-width: 200px;
+    overflow: hidden;
+    padding: 0.3rem 0;
+  }
+  .context-menu button {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.55rem 0.95rem;
+    background: none;
+    border: none;
+    text-align: left;
+    font-size: 0.875rem;
+    color: #334155;
+    cursor: pointer;
+  }
+  .context-menu button:hover {
+    background: #f1f5f9;
+    color: var(--primary);
+  }
+  .context-menu button.danger {
+    color: var(--danger);
+  }
+  .context-menu button.danger:hover {
+    background: #fef2f2;
+  }
+  .context-menu-divider {
+    height: 1px;
+    background: var(--border-color);
+    margin: 0.25rem 0;
+  }
+
+  /* Modal */
+  .modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(15, 23, 42, 0.45);
+    backdrop-filter: blur(2px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+  }
+  .modal-overlay.active {
+    display: flex;
+  }
+  .modal {
+    background: #fff;
+    border-radius: 10px;
+    width: 90%;
+    max-width: 480px;
+    box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1);
+    overflow: hidden;
+    animation: modalIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes modalIn {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  .modal-header {
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--border-color);
+    font-weight: 600;
+    font-size: 1.1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .modal-body {
+    padding: 1.25rem;
+  }
+  .modal-footer {
+    padding: 0.85rem 1.25rem;
+    border-top: 1px solid var(--border-color);
+    background: #f8fafc;
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.6rem;
+  }
+
+  /* Checkboxes */
+  .checkbox-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.6rem;
+    margin-top: 0.5rem;
+  }
+  .checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.9rem;
+    color: #334155;
+    cursor: pointer;
+  }
+
+  /* Toast Notification */
+  .toast {
+    position: fixed;
+    bottom: 2rem;
+    right: 2rem;
+    background: #0f172a;
+    color: #fff;
+    padding: 0.65rem 1.25rem;
+    border-radius: 8px;
+    box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3);
+    font-size: 0.9rem;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(10px);
+    transition: all 0.2s ease;
+    z-index: 9999;
+  }
+  .toast.show {
+    opacity: 1;
+    transform: translateY(0);
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header class="app-header">
+    <h1>⚛️ Quantum Operator Algebra Calculator</h1>
+    <p>Heisenberg picture evolution & pattern algebra calculation platform</p>
+  </header>
+
+  <!-- Browser-style Tab Bar -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="switchTab('tab-single')">Single Mode</button>
+    <button class="tab-btn" onclick="switchTab('tab-pattern')">Quantum Expression</button>
+    <button class="tab-btn" onclick="switchTab('tab-combined')">TWM Calculation</button>
+  </div>
+
+  <!-- TAB 1: Single Mode Calculation -->
+  <div id="tab-single" class="panel active">
+    <div class="card">
+      <div class="card-title">
+        <span>Single-Mode Operator Setup (BosonPat / FermionPat)</span>
+      </div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label for="sm-type">Particle Type</label>
+          <select id="sm-type" onchange="onModeTypeChange()">
+            <option value="boson">Boson</option>
+            <option value="fermion">Fermion</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="sm-name">Operator Name</label>
+          <input type="text" id="sm-name" value="a" placeholder="e.g. a, c, b_1">
+          <span class="form-tip">Default 'a' for Boson, 'c' for Fermion</span>
+        </div>
+
+        <div class="form-group">
+          <label for="sm-first-op">First Operator</label>
+          <select id="sm-first-op">
+            <option value="annihilation">Annihilation (a / c)</option>
+            <option value="creation">Creation (a† / c†)</option>
+          </select>
+        </div>
+
+        <div class="form-group" style="grid-column: 1 / -1;">
+          <label for="sm-exponents">Exponent Sequence</label>
+          <input type="text" id="sm-exponents" value="1, 2, 1" placeholder="e.g. 1, 2, 1 or 1 2 1 (digits only, all other chars treated as separators)">
+          <span class="form-tip">Adjacent exponents alternately represent creation and annihilation operators</span>
+        </div>
+      </div>
+
+      <div class="btn-group">
+        <button class="btn btn-secondary" onclick="runSingleMode('original')">
+          Original Expression
+        </button>
+        <button id="sm-btn-patform" class="btn btn-primary" onclick="runSingleMode('patform')">
+          Rewrite to PatForm
+        </button>
+        <button class="btn btn-success" onclick="runSingleMode('normal_order')">
+          Normal Order
+        </button>
+        <button class="btn btn-accent" onclick="openSaveSinglePFModal()">
+          Import to Tab 2 as PF
+        </button>
+      </div>
+
+      <!-- Output Area -->
+      <div class="output-box">
+        <div class="output-header">
+          <span>Calculation Result</span>
+          <span id="sm-action-tag">Original Expression</span>
+        </div>
+        <div id="sm-output" class="output-content">
+          <span style="color: var(--text-secondary); font-size: 0.95rem;">Click an action button above to compute...</span>
+        </div>
+        <div class="output-footer">
+          <div>
+            <span style="font-size: 0.875rem; color: var(--text-secondary); margin-right: 0.5rem;">Is Hermitian:</span>
+            <span id="sm-hermitian-badge" class="badge badge-gray">Not computed</span>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="copyLatex(currentSingleModeLatex)">
+            Copy LaTeX
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 2: Quantum Expression Processing (sort_context & pattern_form) -->
+  <div id="tab-pattern" class="panel">
+    <!-- Defined Symbols and Operators Table -->
+    <div class="card">
+      <div class="card-title">
+        <span>Defined Symbols & Operators Table</span>
+        <div class="btn-group">
+          <button class="btn btn-secondary btn-sm" onclick="resetTableDefaults('tab2')">
+            Reset Defaults
+          </button>
+          <div class="dropdown" id="addDropdown">
+            <button class="btn btn-primary btn-sm" onclick="toggleDropdown('addDropdown')">
+              Add / Create ▼
+            </button>
+            <div class="dropdown-content">
+              <button onclick="openSymbolModal(null, 'tab2')">New Commutative Symbol</button>
+              <button onclick="openOperatorModal('boson', null, 'tab2')">New Boson Operator</button>
+              <button onclick="openOperatorModal('fermion', null, 'tab2')">New Fermion Operator</button>
+              <button onclick="openSaveAnswerModal('tab2')">Save Answer Area PF</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="custom-table" id="symbolTable">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Identifier (Code)</th>
+              <th>Display Text (LaTeX)</th>
+              <th>Attributes / Definition</th>
+              <th>Notes</th>
+              <th style="width: 150px;">Actions (Right-click)</th>
+            </tr>
+          </thead>
+          <tbody id="symbolTableBody">
+            <!-- Dynamically populated -->
+          </tbody>
+        </table>
+      </div>
+      <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.5rem;">
+        Tip: <b>Right-click</b> on any row to open the context menu (rename, modify display text, assumptions, notes, insert into input, delete).
+      </p>
+    </div>
+
+    <!-- Expression Input & Processing -->
+    <div class="card">
+      <div class="card-title">
+        <span>Quantum Expression Processing (PFTableProcessor: sort_context & pattern_form)</span>
+      </div>
+      <div class="form-group">
+        <label for="pf-input">Expression Input</label>
+        <textarea id="pf-input" rows="3" placeholder="e.g. (x*a + dag(a))**2 or (c + dag(c))**2 or saved PF variables like H" style="font-family: monospace; font-size: 1rem;">(x*a + dag(a))**2</textarea>
+        <span class="form-tip">Uses PFTableProcessor arithmetic (add, mul_ind / mul_res, power_ind / power_res). Shortcuts: dag(a) or ad denote a†, N_(a) denotes number operator.</span>
+      </div>
+
+      <div class="btn-group" style="margin-top: 1rem;">
+        <button class="btn btn-primary" onclick="runPatternForm(false)">
+          Calculate (_ind)
+        </button>
+        <button class="btn btn-accent" onclick="runPatternForm(true)">
+          Calculate Residue (_res)
+        </button>
+        <button class="btn btn-secondary" onclick="document.getElementById('pf-input').value = ''">
+          Clear
+        </button>
+      </div>
+
+      <!-- Output Area -->
+      <div class="output-box">
+        <div class="output-header">
+          <span>Pattern Form Result</span>
+          <span id="pf-mode-tag" class="badge badge-gray">_ind method</span>
+        </div>
+        <div id="pf-output" class="output-content">
+          <span style="color: var(--text-secondary); font-size: 0.95rem;">Click a calculation button above...</span>
+        </div>
+
+        <!-- Residue Section (Only displayed when residue mode is selected) -->
+        <div id="pf-residue-container" style="display: none; padding: 0 1.25rem 1.25rem 1.25rem;">
+          <div class="residue-box">
+            <div class="residue-header">
+              <span>Commutator Residue (Non-independent Mode Commutator Error):</span>
+              <button class="btn btn-secondary btn-sm" onclick="copyLatex(currentPatternFormResidueLatex)">
+                Copy Residue LaTeX
+              </button>
+            </div>
+            <div id="pf-residue-output" class="residue-content"></div>
+            <span style="font-size: 0.775rem; color: #92400e;">
+              Note: The commutator residue cannot be named or saved as a variable.
+            </span>
+          </div>
+        </div>
+
+        <div class="output-footer">
+          <div class="btn-group">
+            <button class="btn btn-secondary btn-sm" onclick="copyLatex(currentPatternFormLatex)">
+              Copy LaTeX
+            </button>
+            <button class="btn btn-success btn-sm" onclick="openSaveAnswerModal('tab2')">
+              Save to Table as PF
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 3: Post-Evolution Operator Combinations -->
+  <div id="tab-combined" class="panel">
+    <!-- Preset Configuration Card -->
+    <div class="card">
+      <div class="card-title">
+        <span>Process Presets (Configure Before Expression Evaluation)</span>
+      </div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label for="combo-dc">Mixing Process Type (dc)</label>
+          <select id="combo-dc" onchange="onComboPresetChange()">
+            <option value="true" selected>Down-conversion (dc = True)</option>
+            <option value="false">Frequency Conversion / State Transfer (dc = False)</option>
+          </select>
+          <span class="form-tip">Determines the mode structure of multimode operators A, N_t and driving mode</span>
+        </div>
+
+        <div class="form-group">
+          <label for="combo-order">Retained Order (get_sol input)</label>
+          <input id="combo-order" type="number" min="-1" max="10" value="1" onchange="onComboPresetChange()">
+          <span class="form-tip">Integer ≥ -1 (-1: classical, 0: undepleted drive, 1: 1st-order depletion, ...)</span>
+        </div>
+
+        <div class="form-group" style="justify-content: center;">
+          <label class="checkbox-label" style="font-weight: 600;">
+            <input type="checkbox" id="combo-gain" onchange="onComboGainChange()">
+            Display in terms of parametric gain
+          </label>
+          <span class="form-tip">Convert t to ĝ / (χ √N̂) and simplify commutative N expressions</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Defined Symbols, Operators & Expressions Table -->
+    <div class="card">
+      <div class="card-title">
+        <span>Defined Symbols, Operators & Expressions Table</span>
+        <div class="btn-group">
+          <button class="btn btn-secondary btn-sm" onclick="resetTableDefaults('tab3')">
+            Reset Defaults
+          </button>
+          <div class="dropdown" id="addComboDropdown">
+            <button class="btn btn-primary btn-sm" onclick="toggleDropdown('addComboDropdown')">
+              Add / Create ▼
+            </button>
+            <div class="dropdown-content">
+              <button onclick="openSymbolModal(null, 'tab3')">New Commutative Symbol</button>
+              <button onclick="openSaveAnswerModal('tab3')">Save Answer Area Expression</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="custom-table" id="comboTable">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Identifier (Code)</th>
+              <th>Display Text (LaTeX)</th>
+              <th>Attributes / Definition</th>
+              <th>Notes</th>
+              <th style="width: 150px;">Actions (Right-click)</th>
+            </tr>
+          </thead>
+          <tbody id="comboTableBody">
+            <!-- Dynamically populated -->
+          </tbody>
+        </table>
+      </div>
+      <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.5rem;">
+        Tip: <b>Right-click</b> on any row to open the context menu (rename, modify display text, assumptions, notes, insert into input, delete).
+      </p>
+    </div>
+
+    <!-- Combination Expression Input & Processing -->
+    <div class="card">
+      <div class="card-title">
+        <span>Post-Evolution Multimode Operator Combination Calculation</span>
+      </div>
+      <div class="form-group">
+        <label for="combo-input">Combination Expression Input</label>
+        <textarea id="combo-input" rows="3" placeholder="e.g. dag(a_p) * a_p - N_(a_p) or a_s * dag(a_s) + dag(a_i) * a_i or a_s * a_i" style="font-family: monospace; font-size: 1rem;">dag(a_p) * a_p - N_(a_p)</textarea>
+        <span class="form-tip">Defaults to independent-mode PF (_ind) and dispatches multiplication across PF, Multimode dict, and weak-field f_dict. Shortcuts: dag(op) or opd for adjoint, N_(a_p) for initial number operator, a_0, a_1, a_2 for initial (t=0) operators, t for time, g for parametric gain.</span>
+      </div>
+
+      <div class="btn-group" style="margin-top: 1rem;">
+        <button class="btn btn-primary" onclick="runCombination()">
+          Calculate Combination
+        </button>
+        <button class="btn btn-secondary" onclick="document.getElementById('combo-input').value = ''">
+          Clear
+        </button>
+      </div>
+
+      <!-- Output Area -->
+      <div class="output-box">
+        <div class="output-header">
+          <span>Combination Result</span>
+          <span id="combo-mode-tag" class="badge badge-gray">dc=True | order=1 | _ind</span>
+        </div>
+        <div id="combo-output" class="output-content">
+          <span style="color: var(--text-secondary); font-size: 0.95rem;">Click Calculate Combination above...</span>
+        </div>
+        <div class="output-footer">
+          <div class="btn-group">
+            <button class="btn btn-secondary btn-sm" onclick="copyLatex(currentComboLatex)">
+              Copy LaTeX
+            </button>
+            <button class="btn btn-success btn-sm" onclick="openSaveAnswerModal('tab3')">
+              Save to Table
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Right Click Context Menu -->
+<div id="contextMenu" class="context-menu"></div>
+
+<!-- Modal 1: Commutative Symbol Modal -->
+<div id="symbolModal" class="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <span id="symbolModalTitle">New Commutative Symbol</span>
+      <button style="border:none;background:none;font-size:1.2rem;cursor:pointer;" onclick="closeModal('symbolModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group" style="margin-bottom: 0.75rem;">
+        <label for="sym-name">Identifier Name (Valid Python variable name)</label>
+        <input type="text" id="sym-name" placeholder="e.g. x, omega, k_0">
+      </div>
+      <div class="form-group" style="margin-bottom: 0.75rem;">
+        <label for="sym-disp">Display Text / LaTeX (defaults to identifier name)</label>
+        <input type="text" id="sym-disp" placeholder="e.g. \omega_0 or x">
+      </div>
+      <div class="form-group" style="margin-bottom: 0.75rem;">
+        <label>Mathematical Assumptions</label>
+        <div class="checkbox-grid">
+          <label class="checkbox-label"><input type="checkbox" id="sym-real"> Is Real</label>
+          <label class="checkbox-label"><input type="checkbox" id="sym-integer"> Is Integer</label>
+          <label class="checkbox-label"><input type="checkbox" id="sym-nonnegative"> Is Non-negative (≥ 0)</label>
+          <label class="checkbox-label"><input type="checkbox" id="sym-positive"> Is Positive (> 0)</label>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="sym-notes">Notes / Description</label>
+        <input type="text" id="sym-notes" placeholder="Optional note to describe symbol meaning">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('symbolModal')">Cancel</button>
+      <button class="btn btn-primary btn-sm" onclick="saveSymbol()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal 2: Field / Evolved Operator Modal -->
+<div id="operatorModal" class="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <span id="operatorModalTitle">New Field Operator</span>
+      <button style="border:none;background:none;font-size:1.2rem;cursor:pointer;" onclick="closeModal('operatorModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group" id="op-kind-group" style="margin-bottom: 0.75rem;">
+        <label for="op-kind">Operator Type</label>
+        <select id="op-kind">
+          <option value="boson">Boson Operator</option>
+          <option value="fermion">Fermion Operator</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom: 0.75rem;">
+        <label for="op-var-name">Identifier Name (Valid Python variable name)</label>
+        <input type="text" id="op-var-name" placeholder="e.g. a, c, b_1">
+      </div>
+      <div class="form-group" style="margin-bottom: 0.75rem;">
+        <label for="op-disp">Display Text / LaTeX (defaults to identifier name)</label>
+        <input type="text" id="op-disp" placeholder="e.g. \alpha or a">
+      </div>
+      <div class="form-group">
+        <label for="op-notes">Notes / Description</label>
+        <input type="text" id="op-notes" placeholder="Optional note to describe operator meaning">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('operatorModal')">Cancel</button>
+      <button class="btn btn-primary btn-sm" onclick="saveOperator()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal 3: Save Answer Area Expression Modal -->
+<div id="saveAnswerModal" class="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <span id="saveAnswerModalTitle">Save Answer Area Expression as Variable</span>
+      <button style="border:none;background:none;font-size:1.2rem;cursor:pointer;" onclick="closeModal('saveAnswerModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group" style="margin-bottom: 0.75rem;">
+        <label for="ne-name">Variable Identifier (Valid Python name)</label>
+        <input type="text" id="ne-name" placeholder="e.g. H, dN_p, expr1">
+      </div>
+      <div class="form-group" style="margin-bottom: 0.75rem;">
+        <label for="ne-notes">Notes / Description</label>
+        <input type="text" id="ne-notes" placeholder="Optional note to describe expression meaning">
+      </div>
+      <div id="combo-save-both-group" class="form-group" style="margin-bottom: 0.75rem; display: none;">
+        <label class="checkbox-label" style="font-weight: 600;">
+          <input type="checkbox" id="combo-save-both" checked onchange="onComboSaveBothToggle()">
+          Save both time (t) and gain (g) representations simultaneously
+        </label>
+        <span class="form-tip">Will save two table entries with suffixes <code>_t</code> and <code>_g</code>.</span>
+      </div>
+      <div class="form-group">
+        <label>Evaluated Expression Source</label>
+        <textarea id="ne-expr-preview" rows="2" readonly style="background: #f8fafc; font-family: monospace;"></textarea>
+        <span class="form-tip">Saves the evaluated PF or dict-like operator representation for this variable.</span>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('saveAnswerModal')">Cancel</button>
+      <button class="btn btn-success btn-sm" onclick="saveAnswerExpression()">Save to Table</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal 4: Rename & Notes Modal -->
+<div id="renameModal" class="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <span id="renameModalTitle">Edit Identifier & Notes</span>
+      <button style="border:none;background:none;font-size:1.2rem;cursor:pointer;" onclick="closeModal('renameModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group" style="margin-bottom: 0.75rem;">
+        <label for="rename-input">Identifier Name (Valid Python variable name)</label>
+        <input type="text" id="rename-input" placeholder="Enter variable name">
+      </div>
+      <div class="form-group">
+        <label for="rename-notes">Notes / Description</label>
+        <input type="text" id="rename-notes" placeholder="Optional note to describe meaning">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('renameModal')">Cancel</button>
+      <button class="btn btn-primary btn-sm" onclick="applyRename()">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal 5: Import Single Mode Result as PF into Tab 2 -->
+<div id="saveSinglePFModal" class="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <span>Import Single-Mode Pattern Form (PF) into Tab 2</span>
+      <button style="border:none;background:none;font-size:1.2rem;cursor:pointer;" onclick="closeModal('saveSinglePFModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group" style="margin-bottom: 0.75rem;">
+        <label for="sm-pf-name">Variable Identifier (Valid Python name)</label>
+        <input type="text" id="sm-pf-name" placeholder="e.g. H, N_op, expr1">
+        <span class="form-tip">This name will be registered as a PF variable in the Tab 2 workspace.</span>
+      </div>
+      <div class="form-group" style="margin-bottom: 0.75rem;">
+        <label for="sm-pf-notes">Notes / Description</label>
+        <input type="text" id="sm-pf-notes" placeholder="Optional note to describe expression meaning">
+      </div>
+      <div class="form-group" style="margin-bottom: 0.75rem;">
+        <label>Pattern Form (PF) Expression Source</label>
+        <textarea id="sm-pf-expr-preview" rows="2" readonly style="background: #f8fafc; font-family: monospace; font-size: 0.9rem;"></textarea>
+        <span class="form-tip">Evaluated Pattern Form (PF) string to be saved for this variable.</span>
+      </div>
+      <div class="form-group">
+        <label>Pattern Form (PF) Preview</label>
+        <div id="sm-pf-preview" class="modal-preview" style="min-height: 2.5rem; padding: 0.65rem 1rem; border: 1px solid #e2e8f0; border-radius: 6px; background: #f8fafc; font-size: 1.1rem; display: flex; align-items: center; justify-content: flex-start; overflow-x: auto; overflow-y: hidden;"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('saveSinglePFModal')">Cancel</button>
+      <button class="btn btn-accent btn-sm" onclick="saveSinglePFExpression()">Save to Table</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast">LaTeX copied to clipboard!</div>
+
+<script>
+// Global State
+let currentSingleModeLatex = '';
+let currentSingleModeExprStr = '';
+let currentPatternFormLatex = '';
+let currentPatternFormExpr = '';
+let currentPatternFormResidueLatex = '';
+let currentComboLatex = '';
+let currentComboExpr = '';
+
+// Cached multi-representation results (time and parametric gain)
+let cachedComboResult = null;
+
+// Active workspace for shared modals ('tab2' or 'tab3')
+let activeWorkspace = 'tab2';
+let activeEditItem = null;
+let contextMenuItem = null;
+
+// Default interactive table entries for Tab 2
+const DEFAULT_TABLE_ITEMS = [
+  { id: '1', type: 'operator', kind: 'boson', name: 'a', displayName: 'a', notes: 'Default boson mode' },
+  { id: '2', type: 'operator', kind: 'fermion', name: 'c', displayName: 'c', notes: 'Default fermion mode' },
+  { id: '3', type: 'symbol', name: 'x', displayName: 'x', isReal: true, isInteger: false, isNonnegative: false, isPositive: false, notes: 'Default real parameter' }
+];
+
+// Default interactive table entries for Tab 3 (from parametric.py)
+const DEFAULT_COMBO_TABLE_ITEMS = [
+  { id: 'c1', type: 'symbol', builtinKey: 'nlc', name: 'nlc', displayName: '\\chi', isReal: true, isInteger: false, isNonnegative: true, isPositive: false, notes: 'Nonlinear coupling coefficient' },
+  { id: 'c2', type: 'symbol', builtinKey: 'pm', name: 'pm', displayName: '\\Delta k', isReal: true, isInteger: false, isNonnegative: false, isPositive: false, notes: 'Phase mismatch' },
+  { id: 'c3', type: 'evolved_op', modeIndex: 0, name: 'a_p', displayName: 'a_0', notes: 'Evolved pump operator at time t' },
+  { id: 'c4', type: 'evolved_op', modeIndex: 1, name: 'a_s', displayName: 'a_1', notes: 'Evolved signal operator at time t' },
+  { id: 'c5', type: 'evolved_op', modeIndex: 2, name: 'a_i', displayName: 'a_2', notes: 'Evolved idler operator at time t' },
+  { id: 'c6', type: 'mm_op', mmKind: 'COP', name: 'A', displayName: '', notes: 'Multimode canonical operator (MultimodeCOP)' },
+  { id: 'c7', type: 'mm_op', mmKind: 'Num2', name: 'N_t', displayName: '', notes: 'Multimode number operator (MultimodeNum2)' }
+];
+
+let tableItems = JSON.parse(localStorage.getItem('qc_table_items_en') || 'null');
+if (!tableItems || !tableItems.length) {
+  tableItems = JSON.parse(JSON.stringify(DEFAULT_TABLE_ITEMS));
+  saveTableItemsToStorage();
+}
+
+let comboTableItems = JSON.parse(localStorage.getItem('qc_combo_table_items_en') || 'null');
+if (!comboTableItems || !comboTableItems.length) {
+  comboTableItems = JSON.parse(JSON.stringify(DEFAULT_COMBO_TABLE_ITEMS));
+  saveComboTableItemsToStorage();
+}
+
+function getWorkspaceArray(ws) {
+  return (ws === 'tab3' || ws === 'tab4') ? comboTableItems : tableItems;
+}
+
+function saveWorkspaceToStorage(ws) {
+  if (ws === 'tab3' || ws === 'tab4') {
+    saveComboTableItemsToStorage();
+    renderComboTable();
+  } else {
+    saveTableItemsToStorage();
+    renderTable();
+  }
+}
+
+function resetTableDefaults(ws) {
+  if (ws === 'tab3' || ws === 'tab4') {
+    if (!confirm('Reset Tab 3 table to default parametric symbols and operators?')) return;
+    comboTableItems = JSON.parse(JSON.stringify(DEFAULT_COMBO_TABLE_ITEMS));
+    saveComboTableItemsToStorage();
+    renderComboTable();
+    showToast('Tab 3 table reset to defaults.');
+  } else {
+    if (!confirm('Reset Tab 2 table to default symbols and operators?')) return;
+    tableItems = JSON.parse(JSON.stringify(DEFAULT_TABLE_ITEMS));
+    saveTableItemsToStorage();
+    renderTable();
+    showToast('Tab 2 table reset to defaults.');
+  }
+}
+
+// Tab Switching
+function switchTab(tabId) {
+  document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(panel => panel.classList.remove('active'));
+  
+  const targetPanel = document.getElementById(tabId);
+  if (targetPanel) targetPanel.classList.add('active');
+  
+  const activeBtn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.getAttribute('onclick').includes(tabId));
+  if (activeBtn) activeBtn.classList.add('active');
+}
+
+// Toast helper
+function showToast(msg) {
+  const toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2200);
+}
+
+// Copy LaTeX
+function copyLatex(latexStr) {
+  if (!latexStr) {
+    showToast('No LaTeX code available to copy!');
+    return;
+  }
+  navigator.clipboard.writeText(latexStr).then(() => {
+    showToast('LaTeX code successfully copied to clipboard!');
+  }).catch(() => {
+    showToast('Copy failed, please select and copy manually.');
+  });
+}
+
+// Reserved constants and mathematical functions that variables cannot collide with
+const RESERVED_NAMES = new Set([
+  // Constants
+  'i', 'I', 'pi', 'PI', 'e', 'E',
+  // Elementary functions
+  'exp', 'sin', 'cos', 'tan', 'cot', 'sec', 'csc',
+  'sinh', 'cosh', 'tanh', 'coth',
+  'asin', 'acos', 'atan', 'asinh', 'acosh', 'atanh',
+  'sqrt', 'log', 'ln',
+  // Quantum macros / operators
+  'dag', 'Dagger', 'dagger', 'BosonNum', 'N_', 'BP', 'FP',
+  'BosonPat', 'FermionPat', 'BosonOp', 'FermionOp',
+  'MMN', 'MMN2', 'MMC',
+]);
+
+const PYTHON_KEYWORDS = new Set([
+  "False", "None", "True", "and", "as", "assert", "async", "await", "break",
+  "class", "continue", "def", "del", "elif", "else", "except", "finally",
+  "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal",
+  "not", "or", "pass", "raise", "return", "try", "while", "with", "yield"
+]);
+
+function validateVariableName(name) {
+  if (!name || typeof name !== 'string') {
+    return { valid: false, error: 'Identifier cannot be empty.' };
+  }
+  name = name.trim();
+  const pattern = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+  if (!pattern.test(name)) {
+    return { valid: false, error: `'${name}' is not a valid Python identifier (must start with a letter/underscore and contain only alphanumeric characters and underscores).` };
+  }
+  if (PYTHON_KEYWORDS.has(name)) {
+    return { valid: false, error: `'${name}' is a reserved Python keyword and cannot be used as an identifier.` };
+  }
+  if (RESERVED_NAMES.has(name)) {
+    return { valid: false, error: `'${name}' conflicts with a built-in constant or mathematical function (${name}).` };
+  }
+  return { valid: true, error: '' };
+}
+
+function isValidPythonIdentifier(name) {
+  return validateVariableName(name).valid;
+}
+
+// ----------------------------------------------------
+// TAB 1: Single Mode Calculation
+// ----------------------------------------------------
+function onModeTypeChange() {
+  const type = document.getElementById('sm-type').value;
+  const nameInput = document.getElementById('sm-name');
+  const patformBtn = document.getElementById('sm-btn-patform');
+  
+  if (type === 'boson') {
+    if (nameInput.value === 'c') nameInput.value = 'a';
+    patformBtn.innerHTML = 'Rewrite to PatForm';
+  } else {
+    if (nameInput.value === 'a') nameInput.value = 'c';
+    patformBtn.innerHTML = 'doit Simplification';
+  }
+}
+
+async function runSingleMode(action) {
+  const output = document.getElementById('sm-output');
+  const hermBadge = document.getElementById('sm-hermitian-badge');
+  const actionTag = document.getElementById('sm-action-tag');
+  output.classList.remove('error');
+  output.innerHTML = '<span style="color: var(--text-secondary);">Calculating...</span>';
+  
+  const type = document.getElementById('sm-type').value;
+  const name = document.getElementById('sm-name').value.trim();
+  const firstOp = document.getElementById('sm-first-op').value;
+  const exponents = document.getElementById('sm-exponents').value.trim();
+
+  const actionLabels = {
+    'original': 'Original Expression',
+    'patform': type === 'boson' ? 'PatForm Representation' : 'doit Simplification',
+    'normal_order': 'Normal Order'
+  };
+  actionTag.textContent = actionLabels[action] || action;
+
+  try {
+    const res = await fetch('/api/single_mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, name, first_op: firstOp, exponents, action })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Calculation error');
+    
+    currentSingleModeLatex = data.latex;
+    currentSingleModeExprStr = data.expr_str;
+    output.innerHTML = '';
+    katex.render(data.latex, output, { displayMode: true, throwOnError: false });
+
+    // Update Hermitian badge
+    if (data.is_hermitian === true) {
+      hermBadge.className = 'badge badge-success';
+      hermBadge.textContent = 'Yes (Hermitian)';
+    } else if (data.is_hermitian === false) {
+      hermBadge.className = 'badge badge-warning';
+      hermBadge.textContent = 'No (Non-Hermitian)';
+    } else {
+      hermBadge.className = 'badge badge-gray';
+      hermBadge.textContent = 'Unknown';
+    }
+  } catch (err) {
+    output.classList.add('error');
+    output.textContent = err.message;
+    currentSingleModeLatex = '';
+    currentSingleModeExprStr = '';
+    hermBadge.className = 'badge badge-gray';
+    hermBadge.textContent = 'Error';
+  }
+}
+
+// ----------------------------------------------------
+// Single Mode -> Tab 2 PF Import
+// ----------------------------------------------------
+async function openSaveSinglePFModal() {
+  const type = document.getElementById('sm-type').value;
+  const name = document.getElementById('sm-name').value.trim() || (type === 'boson' ? 'a' : 'c');
+  const firstOp = document.getElementById('sm-first-op').value;
+  const exponents = document.getElementById('sm-exponents').value.trim();
+
+  const opCheck = validateVariableName(name);
+  if (!opCheck.valid) {
+    alert(`Invalid operator identifier '${name}': ${opCheck.error}`);
+    return;
+  }
+
+  document.getElementById('sm-pf-name').value = '';
+  document.getElementById('sm-pf-notes').value = '';
+  const exprPreview = document.getElementById('sm-pf-expr-preview');
+  const preview = document.getElementById('sm-pf-preview');
+  exprPreview.value = 'Evaluating Pattern Form (PF)...';
+  preview.innerHTML = '<span style="color: var(--text-secondary); font-size: 0.95rem;">Evaluating Pattern Form (PF)...</span>';
+
+  document.getElementById('saveSinglePFModal').classList.add('active');
+
+  try {
+    const res = await fetch('/api/single_mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: type,
+        name: name,
+        first_op: firstOp,
+        exponents: exponents,
+        action: 'patform'
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Failed to evaluate Pattern Form');
+
+    exprPreview.value = data.expr_str;
+    preview.innerHTML = '';
+    try {
+      katex.render(data.latex, preview, { displayMode: false, throwOnError: false });
+    } catch (_) {
+      preview.textContent = data.latex;
+    }
+  } catch (err) {
+    exprPreview.value = '';
+    preview.innerHTML = `<span style="color: var(--danger);">${err.message}</span>`;
+  }
+}
+
+function saveSinglePFExpression() {
+  const name = document.getElementById('sm-pf-name').value.trim();
+  const notes = document.getElementById('sm-pf-notes').value.trim();
+  const exprStr = document.getElementById('sm-pf-expr-preview').value.trim();
+
+  const check = validateVariableName(name);
+  if (!check.valid) {
+    alert(check.error);
+    return;
+  }
+
+  if (!exprStr) {
+    alert('No expression to import. Please calculate a result first.');
+    return;
+  }
+
+  // Ensure the underlying field operator is also registered in Tab 2's table
+  const type = document.getElementById('sm-type').value;
+  const opName = document.getElementById('sm-name').value.trim() || (type === 'boson' ? 'a' : 'c');
+  if (!tableItems.some(x => x.name === opName)) {
+    tableItems.push({
+      id: String(Date.now() - 1),
+      type: 'operator',
+      kind: type,
+      name: opName,
+      displayName: opName,
+      notes: ''
+    });
+  }
+
+  const dupIndex = tableItems.findIndex(x => x.name === name);
+  if (dupIndex !== -1) {
+    const doOverwrite = confirm(`Identifier '${name}' already exists in the Tab 2 table. Do you want to overwrite its definition?`);
+    if (!doOverwrite) return;
+    tableItems[dupIndex] = {
+      id: tableItems[dupIndex].id,
+      type: 'named_expr',
+      name: name,
+      displayName: '',
+      exprStr: exprStr,
+      notes: notes
+    };
+    saveTableItemsToStorage();
+    renderTable();
+    closeModal('saveSinglePFModal');
+    showToast(`Expression '${name}' overwritten successfully in Tab 2!`);
+    return;
+  }
+
+  tableItems.push({
+    id: String(Date.now()),
+    type: 'named_expr',
+    name: name,
+    displayName: '',
+    exprStr: exprStr,
+    notes: notes
+  });
+
+  saveTableItemsToStorage();
+  renderTable();
+  closeModal('saveSinglePFModal');
+  showToast(`Expression successfully saved as variable '${name}' in Tab 2!`);
+}
+
+// ----------------------------------------------------
+// TAB 2 & TAB 4: Interactive Tables & Shared Modals
+// ----------------------------------------------------
+function saveTableItemsToStorage() {
+  localStorage.setItem('qc_table_items_en', JSON.stringify(tableItems));
+}
+
+function saveComboTableItemsToStorage() {
+  localStorage.setItem('qc_combo_table_items_en', JSON.stringify(comboTableItems));
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function renderTable() {
+  const tbody = document.getElementById('symbolTableBody');
+  tbody.innerHTML = '';
+
+  if (!tableItems.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary);">No defined symbols or operators. Click "Add / Create" in the top-right to create one.</td></tr>';
+    return;
+  }
+
+  tableItems.forEach(item => {
+    const tr = document.createElement('tr');
+    tr.dataset.id = item.id;
+
+    let typeBadge = '';
+    let attrStr = '-';
+    let dispCell = `<td>${escapeHtml(item.displayName || item.name)}</td>`;
+    const notesStr = item.notes ? escapeHtml(item.notes) : '<span style="color: var(--text-secondary);">&ndash;</span>';
+
+    if (item.type === 'symbol') {
+      typeBadge = '<span class="badge badge-info">Commutative Symbol</span>';
+      const attrs = [];
+      if (item.isReal) attrs.push('Real');
+      if (item.isInteger) attrs.push('Integer');
+      if (item.isNonnegative) attrs.push('Non-negative');
+      if (item.isPositive) attrs.push('Positive');
+      attrStr = attrs.length ? attrs.join(', ') : 'Complex';
+    } else if (item.type === 'operator') {
+      typeBadge = item.kind === 'boson' ? '<span class="badge badge-success">Boson Operator</span>' : '<span class="badge badge-warning">Fermion Operator</span>';
+      attrStr = item.kind === 'boson' ? 'Single Boson Mode' : 'Single Fermion Mode';
+    } else if (item.type === 'named_expr') {
+      typeBadge = '<span class="badge badge-gray">Named PF</span>';
+      attrStr = `<code style="font-size:0.85rem; color:#475569;">${escapeHtml(item.exprStr)}</code>`;
+      dispCell = `<td style="text-align: center; color: var(--text-secondary);">&ndash;</td>`;
+    }
+
+    tr.innerHTML = `
+      <td>${typeBadge}</td>
+      <td><strong>${escapeHtml(item.name)}</strong></td>
+      ${dispCell}
+      <td>${attrStr}</td>
+      <td>${notesStr}</td>
+      <td>
+        <div class="btn-group">
+          <button class="btn btn-secondary btn-sm" title="Insert identifier into expression input at cursor position" onclick="insertIntoInput('pf-input', '${escapeHtml(item.name)}')">Insert</button>
+          <button class="btn btn-secondary btn-sm" title="Edit identifier name, attributes, display text, or notes" onclick="editItem('${item.id}', 'tab2')">Edit</button>
+          <button class="btn btn-secondary btn-sm" style="color:var(--danger);" title="Delete this entry from the table" onclick="deleteItem('${item.id}', 'tab2')">Delete</button>
+        </div>
+      </td>
+    `;
+
+    tr.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showContextMenu(e, item, 'tab2');
+    });
+
+    tbody.appendChild(tr);
+  });
+}
+
+function renderComboTable() {
+  const tbody = document.getElementById('comboTableBody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  if (!comboTableItems.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary);">No defined entries. Click "Reset Defaults" or "Add / Create" in the top-right.</td></tr>';
+    return;
+  }
+
+  const isDc = document.getElementById('combo-dc') ? (document.getElementById('combo-dc').value === 'true') : true;
+  const orderVal = document.getElementById('combo-order') ? document.getElementById('combo-order').value : '1';
+
+  comboTableItems.forEach(item => {
+    const tr = document.createElement('tr');
+    tr.dataset.id = item.id;
+
+    let typeBadge = '';
+    let attrStr = '-';
+    let dispCell = `<td>${escapeHtml(item.displayName || item.name)}</td>`;
+    const notesStr = item.notes ? escapeHtml(item.notes) : '<span style="color: var(--text-secondary);">&ndash;</span>';
+
+    if (item.type === 'symbol') {
+      typeBadge = '<span class="badge badge-info">Commutative Symbol</span>';
+      const attrs = [];
+      if (item.isReal) attrs.push('Real');
+      if (item.isInteger) attrs.push('Integer');
+      if (item.isNonnegative) attrs.push('Non-negative');
+      if (item.isPositive) attrs.push('Positive');
+      attrStr = attrs.length ? attrs.join(', ') : 'Complex';
+    } else if (item.type === 'evolved_op') {
+      typeBadge = '<span class="badge badge-success">Evolved Operator</span>';
+      const modeLabels = ['Pump (mode 0)', 'Signal (mode 1)', 'Idler (mode 2)'];
+      attrStr = `${modeLabels[item.modeIndex] || 'Boson Mode'} at t (order ${orderVal})`;
+    } else if (item.type === 'mm_op') {
+      typeBadge = '<span class="badge badge-warning">Multimode Operator</span>';
+      dispCell = `<td style="text-align: center; color: var(--text-secondary);">&ndash;</td>`;
+      if (item.mmKind === 'COP') {
+        attrStr = isDc ? 'MultimodeCOP: &Sigma; a<sub>1</sub> a<sub>2</sub> (dc=True)' : 'MultimodeCOP: &Sigma; a<sub>0</sub> a<sub>1</sub><sup>&dagger;</sup> (dc=False)';
+      } else {
+        attrStr = isDc ? 'MultimodeNum2: &Sigma; (1 + N<sub>1</sub> + N<sub>2</sub>) (dc=True)' : 'MultimodeNum2: &Sigma; (N<sub>1</sub> &minus; N<sub>0</sub>) (dc=False)';
+      }
+    } else if (item.type === 'named_expr') {
+      typeBadge = '<span class="badge badge-gray">Saved Expression</span>';
+      attrStr = `<code style="font-size:0.85rem; color:#475569;">${escapeHtml(item.exprStr)}</code>`;
+      dispCell = `<td style="text-align: center; color: var(--text-secondary);">&ndash;</td>`;
+    }
+
+    tr.innerHTML = `
+      <td>${typeBadge}</td>
+      <td><strong>${escapeHtml(item.name)}</strong></td>
+      ${dispCell}
+      <td>${attrStr}</td>
+      <td>${notesStr}</td>
+      <td>
+        <div class="btn-group">
+          <button class="btn btn-secondary btn-sm" title="Insert identifier into expression input at cursor position" onclick="insertIntoInput('combo-input', '${escapeHtml(item.name)}')">Insert</button>
+          <button class="btn btn-secondary btn-sm" title="Edit identifier name, attributes, display text, or notes" onclick="editItem('${item.id}', 'tab3')">Edit</button>
+          <button class="btn btn-secondary btn-sm" style="color:var(--danger);" title="Delete this entry from the table" onclick="deleteItem('${item.id}', 'tab3')">Delete</button>
+        </div>
+      </td>
+    `;
+
+    tr.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showContextMenu(e, item, 'tab3');
+    });
+
+    tbody.appendChild(tr);
+  });
+}
+
+function onComboPresetChange() {
+  renderComboTable();
+  const isDc = document.getElementById('combo-dc').value === 'true';
+  const orderVal = document.getElementById('combo-order').value;
+  const useGain = document.getElementById('combo-gain').checked;
+  const tag = document.getElementById('combo-mode-tag');
+  if (tag) {
+    tag.textContent = `dc=${isDc ? 'True' : 'False'} | order=${orderVal} | ${useGain ? 'gain (g)' : 'time (t)'} | _ind`;
+  }
+}
+
+function insertIntoInput(inputId, str) {
+  const input = document.getElementById(inputId);
+  const pos = input.selectionStart || input.value.length;
+  input.value = input.value.substring(0, pos) + str + input.value.substring(pos);
+  input.focus();
+  input.selectionStart = input.selectionEnd = pos + str.length;
+}
+
+// Dropdown
+function toggleDropdown(id) {
+  const dd = document.getElementById(id);
+  dd.classList.toggle('open');
+}
+window.addEventListener('click', (e) => {
+  if (!e.target.closest('.dropdown')) {
+    document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
+  }
+});
+
+// Context Menu Handling
+function showContextMenu(e, item, ws) {
+  contextMenuItem = item;
+  activeWorkspace = ws || 'tab2';
+  const inputId = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4') ? 'combo-input' : 'pf-input';
+  const menu = document.getElementById('contextMenu');
+  menu.innerHTML = '';
+
+  if (item.type === 'symbol') {
+    menu.innerHTML = `
+      <button onclick="openSymbolModal('${item.id}', '${activeWorkspace}')">Edit Attributes, Display & Notes</button>
+      <button onclick="openRenameModal('${item.id}', '${activeWorkspace}')">Rename & Edit Notes</button>
+      <button onclick="insertIntoInput('${inputId}', '${item.name}')">Insert into Input</button>
+      <div class="context-menu-divider"></div>
+      <button class="danger" onclick="deleteItem('${item.id}', '${activeWorkspace}')">Delete Symbol</button>
+    `;
+  } else if (item.type === 'operator' || item.type === 'evolved_op') {
+    menu.innerHTML = `
+      <button onclick="openOperatorModal(null, '${item.id}', '${activeWorkspace}')">Edit Display Text & Notes</button>
+      <button onclick="openRenameModal('${item.id}', '${activeWorkspace}')">Rename & Edit Notes</button>
+      <button onclick="insertIntoInput('${inputId}', '${item.name}')">Insert into Input</button>
+      <div class="context-menu-divider"></div>
+      <button class="danger" onclick="deleteItem('${item.id}', '${activeWorkspace}')">Delete Operator</button>
+    `;
+  } else if (item.type === 'mm_op' || item.type === 'named_expr') {
+    menu.innerHTML = `
+      <button onclick="openRenameModal('${item.id}', '${activeWorkspace}')">Rename & Edit Notes</button>
+      <button onclick="insertIntoInput('${inputId}', '${item.name}')">Insert into Input</button>
+      <div class="context-menu-divider"></div>
+      <button class="danger" onclick="deleteItem('${item.id}', '${activeWorkspace}')">Delete Item</button>
+    `;
+  }
+
+  menu.style.display = 'block';
+  menu.style.left = `${Math.min(e.clientX, window.innerWidth - 210)}px`;
+  menu.style.top = `${Math.min(e.clientY, window.innerHeight - 190)}px`;
+}
+
+window.addEventListener('click', () => {
+  const menu = document.getElementById('contextMenu');
+  if (menu) menu.style.display = 'none';
+});
+
+// Modal Operations
+function closeModal(id) {
+  document.getElementById(id).classList.remove('active');
+  activeEditItem = null;
+}
+
+function openSymbolModal(itemId, ws) {
+  activeWorkspace = ws || 'tab2';
+  document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
+  const modal = document.getElementById('symbolModal');
+  const title = document.getElementById('symbolModalTitle');
+  const arr = getWorkspaceArray(activeWorkspace);
+  
+  if (itemId) {
+    const item = arr.find(x => x.id === itemId);
+    if (!item) return;
+    activeEditItem = item;
+    title.textContent = 'Edit Commutative Symbol: ' + item.name;
+    document.getElementById('sym-name').value = item.name;
+    document.getElementById('sym-disp').value = item.displayName || item.name;
+    document.getElementById('sym-real').checked = !!item.isReal;
+    document.getElementById('sym-integer').checked = !!item.isInteger;
+    document.getElementById('sym-nonnegative').checked = !!item.isNonnegative;
+    document.getElementById('sym-positive').checked = !!item.isPositive;
+    document.getElementById('sym-notes').value = item.notes || '';
+  } else {
+    activeEditItem = null;
+    title.textContent = 'New Commutative Symbol';
+    document.getElementById('sym-name').value = '';
+    document.getElementById('sym-disp').value = '';
+    document.getElementById('sym-real').checked = false;
+    document.getElementById('sym-integer').checked = false;
+    document.getElementById('sym-nonnegative').checked = false;
+    document.getElementById('sym-positive').checked = false;
+    document.getElementById('sym-notes').value = '';
+  }
+  modal.classList.add('active');
+}
+
+function saveSymbol() {
+  const name = document.getElementById('sym-name').value.trim();
+  const disp = document.getElementById('sym-disp').value.trim() || name;
+  const isReal = document.getElementById('sym-real').checked;
+  const isInteger = document.getElementById('sym-integer').checked;
+  const isNonnegative = document.getElementById('sym-nonnegative').checked;
+  const isPositive = document.getElementById('sym-positive').checked;
+  const notes = document.getElementById('sym-notes').value.trim();
+
+  const check = validateVariableName(name);
+  if (!check.valid) {
+    alert(check.error);
+    return;
+  }
+
+  const arr = getWorkspaceArray(activeWorkspace);
+  const dupIndex = arr.findIndex(x => x.name === name && (!activeEditItem || x.id !== activeEditItem.id));
+  if (dupIndex !== -1) {
+    const doOverwrite = confirm(`Identifier '${name}' already exists in the table. Do you want to overwrite its definition?`);
+    if (!doOverwrite) return;
+    arr[dupIndex] = {
+      id: arr[dupIndex].id,
+      type: 'symbol',
+      builtinKey: activeEditItem ? activeEditItem.builtinKey : arr[dupIndex].builtinKey,
+      name: name,
+      displayName: disp,
+      isReal: isReal,
+      isInteger: isInteger,
+      isNonnegative: isNonnegative,
+      isPositive: isPositive,
+      notes: notes
+    };
+    if (activeEditItem && activeEditItem.id !== arr[dupIndex].id) {
+      const idxToRemove = arr.findIndex(x => x.id === activeEditItem.id);
+      if (idxToRemove !== -1) arr.splice(idxToRemove, 1);
+    }
+    saveWorkspaceToStorage(activeWorkspace);
+    closeModal('symbolModal');
+    showToast(`Symbol '${name}' overwritten successfully!`);
+    return;
+  }
+
+  if (activeEditItem) {
+    activeEditItem.name = name;
+    activeEditItem.displayName = disp;
+    activeEditItem.isReal = isReal;
+    activeEditItem.isInteger = isInteger;
+    activeEditItem.isNonnegative = isNonnegative;
+    activeEditItem.isPositive = isPositive;
+    activeEditItem.notes = notes;
+  } else {
+    arr.push({
+      id: String(Date.now()),
+      type: 'symbol',
+      name: name,
+      displayName: disp,
+      isReal: isReal,
+      isInteger: isInteger,
+      isNonnegative: isNonnegative,
+      isPositive: isPositive,
+      notes: notes
+    });
+  }
+
+  saveWorkspaceToStorage(activeWorkspace);
+  closeModal('symbolModal');
+}
+
+function openOperatorModal(defaultKind, itemId, ws) {
+  activeWorkspace = ws || 'tab2';
+  document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
+  const modal = document.getElementById('operatorModal');
+  const title = document.getElementById('operatorModalTitle');
+  const kindGroup = document.getElementById('op-kind-group');
+  const arr = getWorkspaceArray(activeWorkspace);
+  
+  if (itemId) {
+    const item = arr.find(x => x.id === itemId);
+    if (!item) return;
+    activeEditItem = item;
+    if (item.type === 'evolved_op') {
+      title.textContent = 'Edit Evolved Operator: ' + item.name;
+      kindGroup.style.display = 'none';
+    } else {
+      title.textContent = 'Edit Field Operator: ' + item.name;
+      kindGroup.style.display = 'flex';
+      document.getElementById('op-kind').value = item.kind || 'boson';
+    }
+    document.getElementById('op-var-name').value = item.name;
+    document.getElementById('op-disp').value = item.displayName || item.name;
+    document.getElementById('op-notes').value = item.notes || '';
+  } else {
+    activeEditItem = null;
+    kindGroup.style.display = 'flex';
+    title.textContent = defaultKind === 'boson' ? 'New Boson Operator' : 'New Fermion Operator';
+    document.getElementById('op-kind').value = defaultKind || 'boson';
+    document.getElementById('op-var-name').value = defaultKind === 'boson' ? 'a' : 'c';
+    document.getElementById('op-disp').value = '';
+    document.getElementById('op-notes').value = '';
+  }
+  modal.classList.add('active');
+}
+
+function saveOperator() {
+  const kind = document.getElementById('op-kind').value;
+  const name = document.getElementById('op-var-name').value.trim();
+  const disp = document.getElementById('op-disp').value.trim() || name;
+  const notes = document.getElementById('op-notes').value.trim();
+
+  const check = validateVariableName(name);
+  if (!check.valid) {
+    alert(check.error);
+    return;
+  }
+
+  const arr = getWorkspaceArray(activeWorkspace);
+  const dupIndex = arr.findIndex(x => x.name === name && (!activeEditItem || x.id !== activeEditItem.id));
+  if (dupIndex !== -1) {
+    const doOverwrite = confirm(`Identifier '${name}' already exists in the table. Do you want to overwrite its definition?`);
+    if (!doOverwrite) return;
+    if (activeEditItem && activeEditItem.type === 'evolved_op') {
+      arr[dupIndex] = {
+        id: arr[dupIndex].id,
+        type: 'evolved_op',
+        modeIndex: activeEditItem.modeIndex,
+        name: name,
+        displayName: disp,
+        notes: notes
+      };
+    } else {
+      arr[dupIndex] = {
+        id: arr[dupIndex].id,
+        type: 'operator',
+        kind: kind,
+        name: name,
+        displayName: disp,
+        notes: notes
+      };
+    }
+    if (activeEditItem && activeEditItem.id !== arr[dupIndex].id) {
+      const idxToRemove = arr.findIndex(x => x.id === activeEditItem.id);
+      if (idxToRemove !== -1) arr.splice(idxToRemove, 1);
+    }
+    saveWorkspaceToStorage(activeWorkspace);
+    closeModal('operatorModal');
+    showToast(`Operator '${name}' overwritten successfully!`);
+    return;
+  }
+
+  if (activeEditItem) {
+    if (activeEditItem.type !== 'evolved_op') {
+      activeEditItem.kind = kind;
+    }
+    activeEditItem.name = name;
+    activeEditItem.displayName = disp;
+    activeEditItem.notes = notes;
+  } else {
+    arr.push({
+      id: String(Date.now()),
+      type: 'operator',
+      kind: kind,
+      name: name,
+      displayName: disp,
+      notes: notes
+    });
+  }
+
+  saveWorkspaceToStorage(activeWorkspace);
+  closeModal('operatorModal');
+}
+
+function openSaveAnswerModal(ws) {
+  activeWorkspace = ws || 'tab2';
+  document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
+  const title = document.getElementById('saveAnswerModalTitle');
+  const bothGroup = document.getElementById('combo-save-both-group');
+
+  if (activeWorkspace === 'tab3' || activeWorkspace === 'tab4') {
+    if (!currentComboLatex || !currentComboExpr) {
+      alert('Answer area has no evaluated combination result! Please enter an expression and compute it first.');
+      return;
+    }
+    title.textContent = 'Save Answer Area Expression (Tab 3)';
+    document.getElementById('ne-name').value = '';
+    document.getElementById('ne-notes').value = '';
+    if (bothGroup) bothGroup.style.display = 'block';
+    const bothCheck = document.getElementById('combo-save-both');
+    if (bothCheck) bothCheck.checked = true;
+    updateComboSaveAnswerPreview();
+    document.getElementById('saveAnswerModal').classList.add('active');
+  } else {
+    if (!currentPatternFormLatex || !currentPatternFormExpr) {
+      alert('Answer area has no evaluated Pattern Form! Please enter an expression and compute it first.');
+      return;
+    }
+    title.textContent = 'Save Answer Area PF as Variable (Tab 2)';
+    document.getElementById('ne-name').value = '';
+    document.getElementById('ne-notes').value = '';
+    if (bothGroup) bothGroup.style.display = 'none';
+    document.getElementById('ne-expr-preview').value = currentPatternFormExpr;
+    document.getElementById('saveAnswerModal').classList.add('active');
+  }
+}
+
+function updateComboSaveAnswerPreview() {
+  if (activeWorkspace !== 'tab3' && activeWorkspace !== 'tab4') return;
+  const bothCheck = document.getElementById('combo-save-both');
+  const preview = document.getElementById('ne-expr-preview');
+  if (bothCheck && bothCheck.checked && cachedComboResult) {
+    preview.value = `[Time Form (t)]:\n${cachedComboResult.expr_str_t}\n\n[Gain Form (g)]:\n${cachedComboResult.expr_str_g}`;
+  } else {
+    preview.value = currentComboExpr;
+  }
+}
+
+function onComboSaveBothToggle() {
+  updateComboSaveAnswerPreview();
+}
+
+function saveAnswerExpression() {
+  const name = document.getElementById('ne-name').value.trim();
+  const notes = document.getElementById('ne-notes').value.trim();
+
+  const check = validateVariableName(name);
+  if (!check.valid) {
+    alert(check.error);
+    return;
+  }
+
+  const arr = getWorkspaceArray(activeWorkspace);
+
+  if ((activeWorkspace === 'tab3' || activeWorkspace === 'tab4') && document.getElementById('combo-save-both') && document.getElementById('combo-save-both').checked && cachedComboResult) {
+    const nameT = `${name}_t`;
+    const nameG = `${name}_g`;
+    const checkT = validateVariableName(nameT);
+    const checkG = validateVariableName(nameG);
+    if (!checkT.valid || !checkG.valid) {
+      alert('Generated variable names with suffixes _t or _g are invalid Python identifiers.');
+      return;
+    }
+
+    function upsertComboItem(varName, exprVal, noteSuffix) {
+      const fullNotes = notes ? `${notes} (${noteSuffix})` : noteSuffix;
+      const dupIndex = arr.findIndex(x => x.name === varName);
+      if (dupIndex !== -1) {
+        arr[dupIndex] = {
+          id: arr[dupIndex].id,
+          type: 'named_expr',
+          name: varName,
+          displayName: '',
+          exprStr: exprVal,
+          notes: fullNotes
+        };
+      } else {
+        arr.push({
+          id: String(Date.now() + Math.random()),
+          type: 'named_expr',
+          name: varName,
+          displayName: '',
+          exprStr: exprVal,
+          notes: fullNotes
+        });
+      }
+    }
+
+    upsertComboItem(nameT, cachedComboResult.expr_str_t, 'time representation t');
+    upsertComboItem(nameG, cachedComboResult.expr_str_g, 'parametric gain representation g');
+
+    saveWorkspaceToStorage(activeWorkspace);
+    closeModal('saveAnswerModal');
+    showToast(`Saved both '${nameT}' and '${nameG}' to Tab 3 table!`);
+    return;
+  }
+
+  const exprStr = document.getElementById('ne-expr-preview').value.trim();
+  if (!exprStr) {
+    alert('No expression to save. Please calculate a result first.');
+    return;
+  }
+
+  const dupIndex = arr.findIndex(x => x.name === name);
+  if (dupIndex !== -1) {
+    const doOverwrite = confirm(`Identifier '${name}' already exists in the table. Do you want to overwrite its definition?`);
+    if (!doOverwrite) return;
+    arr[dupIndex] = {
+      id: arr[dupIndex].id,
+      type: 'named_expr',
+      name: name,
+      displayName: '',
+      exprStr: exprStr,
+      notes: notes
+    };
+    saveWorkspaceToStorage(activeWorkspace);
+    closeModal('saveAnswerModal');
+    showToast(`Expression '${name}' overwritten successfully!`);
+    return;
+  }
+
+  arr.push({
+    id: String(Date.now()),
+    type: 'named_expr',
+    name: name,
+    displayName: '',
+    exprStr: exprStr,
+    notes: notes
+  });
+
+  saveWorkspaceToStorage(activeWorkspace);
+  closeModal('saveAnswerModal');
+  showToast(`Expression successfully saved as variable '${name}'!`);
+}
+
+function openRenameModal(itemId, ws) {
+  activeWorkspace = ws || 'tab2';
+  const arr = getWorkspaceArray(activeWorkspace);
+  const item = arr.find(x => x.id === itemId);
+  if (!item) return;
+  activeEditItem = item;
+  document.getElementById('rename-input').value = item.name;
+  document.getElementById('rename-notes').value = item.notes || '';
+  document.getElementById('renameModal').classList.add('active');
+}
+
+function applyRename() {
+  if (!activeEditItem) return;
+  const newName = document.getElementById('rename-input').value.trim();
+  const newNotes = document.getElementById('rename-notes').value.trim();
+  const check = validateVariableName(newName);
+  if (!check.valid) {
+    alert(check.error);
+    return;
+  }
+  const arr = getWorkspaceArray(activeWorkspace);
+  const dupIndex = arr.findIndex(x => x.name === newName && x.id !== activeEditItem.id);
+  if (dupIndex !== -1) {
+    const doOverwrite = confirm(`Identifier '${newName}' already exists in the table. Do you want to overwrite it with this renamed item?`);
+    if (!doOverwrite) return;
+    arr.splice(dupIndex, 1);
+  }
+  activeEditItem.name = newName;
+  activeEditItem.notes = newNotes;
+  saveWorkspaceToStorage(activeWorkspace);
+  closeModal('renameModal');
+  showToast(`Updated '${newName}' successfully!`);
+}
+
+function editItem(id, ws) {
+  activeWorkspace = ws || 'tab2';
+  const arr = getWorkspaceArray(activeWorkspace);
+  const item = arr.find(x => x.id === id);
+  if (!item) return;
+  if (item.type === 'symbol') {
+    openSymbolModal(id, activeWorkspace);
+  } else if (item.type === 'operator' || item.type === 'evolved_op') {
+    openOperatorModal(null, id, activeWorkspace);
+  } else {
+    openRenameModal(id, activeWorkspace);
+  }
+}
+
+function deleteItem(id, ws) {
+  activeWorkspace = ws || 'tab2';
+  if (activeWorkspace === 'tab3' || activeWorkspace === 'tab4') {
+    comboTableItems = comboTableItems.filter(x => x.id !== id);
+  } else {
+    tableItems = tableItems.filter(x => x.id !== id);
+  }
+  saveWorkspaceToStorage(activeWorkspace);
+}
+
+// ----------------------------------------------------
+// TAB 2: Run Pattern Form
+// ----------------------------------------------------
+async function runPatternForm(useRes) {
+  const input = document.getElementById('pf-input').value.trim();
+  const output = document.getElementById('pf-output');
+  const modeTag = document.getElementById('pf-mode-tag');
+  const residueContainer = document.getElementById('pf-residue-container');
+  const residueOutput = document.getElementById('pf-residue-output');
+  
+  output.classList.remove('error');
+  if (!input) {
+    output.classList.add('error');
+    output.textContent = 'Please enter a quantum expression to calculate!';
+    return;
+  }
+
+  output.innerHTML = '<span style="color: var(--text-secondary);">Calculating Pattern Form...</span>';
+  modeTag.className = useRes ? 'badge badge-warning' : 'badge badge-gray';
+  modeTag.textContent = useRes ? '_res method (with residue)' : '_ind method';
+
+  const symbols = tableItems.filter(x => x.type === 'symbol').map(s => ({
+    name: s.name,
+    display_name: s.displayName || s.name,
+    is_real: !!s.isReal,
+    is_integer: !!s.isInteger,
+    is_nonnegative: !!s.isNonnegative,
+    is_positive: !!s.isPositive
+  }));
+
+  const operators = tableItems.filter(x => x.type === 'operator').map(op => ({
+    kind: op.kind,
+    name: op.name,
+    display_name: op.displayName || op.name
+  }));
+
+  const namedExprs = tableItems.filter(x => x.type === 'named_expr').map(ne => ({
+    name: ne.name,
+    expr_str: ne.exprStr
+  }));
+
+  try {
+    const res = await fetch('/api/pattern_form', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: input,
+        symbols: symbols,
+        operators: operators,
+        named_expressions: namedExprs,
+        use_res: useRes
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Calculation failed');
+
+    currentPatternFormLatex = data.latex;
+    currentPatternFormExpr = data.expr_str;
+    output.innerHTML = '';
+    katex.render(data.latex, output, { displayMode: true, throwOnError: false });
+
+    if (useRes && data.residue_latex !== null && data.residue_latex !== undefined) {
+      currentPatternFormResidueLatex = data.residue_latex;
+      residueContainer.style.display = 'block';
+      residueOutput.innerHTML = '';
+      katex.render(data.residue_latex, residueOutput, { displayMode: true, throwOnError: false });
+    } else {
+      residueContainer.style.display = 'none';
+      currentPatternFormResidueLatex = '';
+    }
+  } catch (err) {
+    output.classList.add('error');
+    output.textContent = err.message;
+    residueContainer.style.display = 'none';
+  }
+}
+
+// ----------------------------------------------------
+// TAB 3: Post-Evolution Operator Combination
+// ----------------------------------------------------
+function onComboGainChange() {
+  onComboPresetChange();
+  const isGain = document.getElementById('combo-gain').checked;
+  if (cachedComboResult) {
+    currentComboLatex = isGain ? (cachedComboResult.latex_g || cachedComboResult.latex) : (cachedComboResult.latex_t || cachedComboResult.latex);
+    currentComboExpr = isGain ? (cachedComboResult.expr_str_g || cachedComboResult.expr_str) : (cachedComboResult.expr_str_t || cachedComboResult.expr_str);
+    const output = document.getElementById('combo-output');
+    output.innerHTML = '';
+    output.classList.remove('error');
+    katex.render(currentComboLatex, output, { displayMode: true, throwOnError: false });
+  }
+}
+
+async function runCombination() {
+  const input = document.getElementById('combo-input').value.trim();
+  const output = document.getElementById('combo-output');
+  output.classList.remove('error');
+
+  if (!input) {
+    output.classList.add('error');
+    output.textContent = 'Please enter a combination expression to calculate!';
+    return;
+  }
+
+  const isDc = document.getElementById('combo-dc').value === 'true';
+  const orderVal = parseInt(document.getElementById('combo-order').value);
+  const useGain = document.getElementById('combo-gain').checked;
+
+  if (isNaN(orderVal) || orderVal < -1) {
+    output.classList.add('error');
+    output.textContent = 'Please enter a valid retained order (integer ≥ -1)!';
+    return;
+  }
+
+  onComboPresetChange();
+  output.innerHTML = '<span style="color: var(--text-secondary);">Calculating operator combination...</span>';
+
+  const symbols = comboTableItems.filter(x => x.type === 'symbol').map(s => ({
+    name: s.name,
+    display_name: s.displayName || s.name,
+    is_real: !!s.isReal,
+    is_integer: !!s.isInteger,
+    is_nonnegative: !!s.isNonnegative,
+    is_positive: !!s.isPositive,
+    builtin_key: s.builtinKey || null
+  }));
+
+  const operators = comboTableItems.filter(x => x.type === 'evolved_op').map(op => ({
+    kind: 'boson',
+    name: op.name,
+    display_name: op.displayName || op.name,
+    mode_index: op.modeIndex
+  }));
+
+  const mmOperators = comboTableItems.filter(x => x.type === 'mm_op').map(mm => ({
+    name: mm.name,
+    mm_kind: mm.mmKind
+  }));
+
+  const namedExprs = comboTableItems.filter(x => x.type === 'named_expr').map(ne => ({
+    name: ne.name,
+    expr_str: ne.exprStr
+  }));
+
+  try {
+    const res = await fetch('/api/combination', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: input,
+        dc: isDc,
+        order: orderVal,
+        use_gain: useGain,
+        symbols: symbols,
+        operators: operators,
+        mm_operators: mmOperators,
+        named_expressions: namedExprs
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Combination calculation failed');
+
+    cachedComboResult = data;
+    currentComboLatex = data.latex;
+    currentComboExpr = data.expr_str;
+    output.innerHTML = '';
+    katex.render(data.latex, output, { displayMode: true, throwOnError: false });
+  } catch (err) {
+    output.classList.add('error');
+    output.textContent = err.message;
+  }
+}
+
+// Initialization
+document.addEventListener('DOMContentLoaded', () => {
+  renderTable();
+  renderComboTable();
+  onModeTypeChange();
+  onComboPresetChange();
+});
+</script>
+
+</body>
+</html>
