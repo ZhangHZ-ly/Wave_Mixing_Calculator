@@ -12,6 +12,89 @@ from calculator import (
     eval_operator_combination,
 )
 
+
+def _patch_reloader_ignore_draft():
+    """
+    Patch uvicorn and watchfiles reloaders to ignore changes in draft.py and temporary files.
+    This prevents the development server from reloading whenever draft.py is modified.
+    """
+    # 1. In-memory monkey patch for uvicorn WatchFiles FileFilter
+    try:
+        from uvicorn.supervisors import watchfilesreload
+        _orig_file_filter = watchfilesreload.FileFilter.__call__
+
+        def _patched_file_filter(self, path: Path):
+            name = path.name.lower()
+            path_str = str(path).lower()
+            if "draft" in name or name.endswith(".ipynb") or "scratch" in path_str:
+                return False
+            return _orig_file_filter(self, path)
+
+        watchfilesreload.FileFilter.__call__ = _patched_file_filter
+    except Exception:
+        pass
+
+    # 2. In-memory monkey patch for watchfiles filters
+    try:
+        import watchfiles.filters
+        _orig_wf_filter = watchfiles.filters.BaseFilter.__call__
+
+        def _patched_wf_filter(self, change, path: str):
+            p = str(path).lower()
+            if "draft" in p or p.endswith(".ipynb") or "scratch" in p:
+                return False
+            return _orig_wf_filter(self, change, path)
+
+        watchfiles.filters.BaseFilter.__call__ = _patched_wf_filter
+    except Exception:
+        pass
+
+    # 3. Ensure persistent hook in virtualenv site-packages so uvicorn CLI also ignores draft
+    try:
+        import site
+        sp_dirs = site.getsitepackages() if hasattr(site, "getsitepackages") else []
+        for sp in sp_dirs:
+            sp_path = Path(sp)
+            if sp_path.exists() and (sp_path / "uvicorn").exists():
+                patch_py = sp_path / "_draft_reload_patch.py"
+                pth_file = sp_path / "_draft_reload_patch.pth"
+                if not patch_py.exists():
+                    patch_py.write_text(
+                        'from pathlib import Path\n'
+                        'try:\n'
+                        '    from uvicorn.supervisors import watchfilesreload\n'
+                        '    _orig = watchfilesreload.FileFilter.__call__\n'
+                        '    def _f(self, path: Path):\n'
+                        '        name = path.name.lower()\n'
+                        '        path_str = str(path).lower()\n'
+                        '        if "draft" in name or name.endswith(".ipynb") or "scratch" in path_str:\n'
+                        '            return False\n'
+                        '        return _orig(self, path)\n'
+                        '    watchfilesreload.FileFilter.__call__ = _f\n'
+                        'except Exception:\n'
+                        '    pass\n'
+                        'try:\n'
+                        '    import watchfiles.filters\n'
+                        '    _orig_wf = watchfiles.filters.BaseFilter.__call__\n'
+                        '    def _f_wf(self, change, path: str):\n'
+                        '        p = str(path).lower()\n'
+                        '        if "draft" in p or p.endswith(".ipynb") or "scratch" in p:\n'
+                        '            return False\n'
+                        '        return _orig_wf(self, change, path)\n'
+                        '    watchfiles.filters.BaseFilter.__call__ = _f_wf\n'
+                        'except Exception:\n'
+                        '    pass\n',
+                        encoding="utf-8"
+                    )
+                if not pth_file.exists():
+                    pth_file.write_text("import _draft_reload_patch\n", encoding="utf-8")
+                break
+    except Exception:
+        pass
+
+
+_patch_reloader_ignore_draft()
+
 app = FastAPI(title="Quantum Operator Calculator")
 
 
@@ -48,6 +131,10 @@ class MMOperatorDef(BaseModel):
 class NamedExprDef(BaseModel):
     name: str
     expr_str: str = ""
+    expr_str_t: Optional[str] = None
+    expr_str_g: Optional[str] = None
+    order: Optional[int] = None
+    lowest_order: Optional[int] = None
 
 
 class PatternFormRequest(BaseModel):
@@ -69,6 +156,7 @@ class SolveRequest(BaseModel):
 class CombinationRequest(BaseModel):
     text: str
     dc: bool = True
+    mismatch: bool = False
     order: int = 1
     use_gain: bool = False
     symbols: List[SymbolDef] = []
@@ -138,9 +226,10 @@ def solve(req: SolveRequest):
 @app.post("/api/combination")
 def api_combination(req: CombinationRequest):
     try:
-        latex_curr, expr_curr, latex_t, expr_t, latex_g, expr_g = eval_operator_combination(
+        latex_curr, expr_curr, latex_t, expr_t, latex_g, expr_g, lowest_order = eval_operator_combination(
             req.text,
             dc=req.dc,
+            mismatch=req.mismatch,
             order=req.order,
             use_gain=req.use_gain,
             symbols=[s.model_dump() for s in req.symbols],
@@ -154,9 +243,22 @@ def api_combination(req: CombinationRequest):
             "latex_t": latex_t,
             "expr_str_t": expr_t,
             "latex_g": latex_g,
-            "expr_str_g": expr_g
+            "expr_str_g": expr_g,
+            "lowest_order": lowest_order,
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "main:app",
+        host="127.0.0.1",
+        port=8000,
+        reload=True,
+        reload_excludes=["*draft*", "draft.py", "*.ipynb", "scratch/*"],
+    )
+
 
 

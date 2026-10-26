@@ -1,4 +1,5 @@
 from __future__ import annotations
+import ast
 import keyword
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -144,18 +145,22 @@ def expr_to_code_str(e: Expr, dc: bool = True) -> str:
     return str(_rec(sympify(e)))
 
 
-def t_to_g(obj, dc: bool = True):
-    """
-    Convert time variable t_ to parametric gain operator \\hat{g} / (\\chi \\sqrt{\\hat{N}_d})
+def t_to_g(obj, dc: bool = True, mismatch: bool = False):
+    r"""
+    Convert time variable t_ to parametric gain operator \hat{g} / gc
     and simplify commutative number-operator expressions.
-    Independent of TWMSolver; only requires dc to identify the driving mode.
+    Independent of TWMSolver; only requires dc and mismatch to identify the driving mode and effective coupling.
     """
     nd = BosonNum(a_p.name if dc else a_i.name)
+    if mismatch:
+        gc = (nlc**2 * nd - pm**2 / 4)**S.Half if dc else (nlc**2 * nd + pm**2 / 4)**S.Half
+    else:
+        gc = nlc * nd ** S.Half
 
     def _simp_n(expr):
         if not isinstance(expr, Expr):
             return expr
-        expr = expr.subs({t_: g_hat / (nlc * nd ** S.Half), _g: g_hat})
+        expr = expr.subs({t_: g_hat / gc, _g: g_hat})
 
         def _combine(e):
             if e.is_Mul:
@@ -178,18 +183,22 @@ def t_to_g(obj, dc: bool = True):
     return _simp_n(obj)
 
 
-def g_to_t(obj, dc: bool = True):
-    """
-    Inverse of t_to_g: convert parametric gain operator \\hat{g} back to \\chi \\sqrt{\\hat{N}_d} t_
+def g_to_t(obj, dc: bool = True, mismatch: bool = False):
+    r"""
+    Inverse of t_to_g: convert parametric gain operator \hat{g} back to gc * t_
     and simplify commutative number-operator expressions.
-    Independent of TWMSolver; only requires dc to identify the driving mode.
+    Independent of TWMSolver; only requires dc and mismatch to identify the driving mode and effective coupling.
     """
     nd = BosonNum(a_p.name if dc else a_i.name)
+    if mismatch:
+        gc = (nlc**2 * nd - pm**2 / 4)**S.Half if dc else (nlc**2 * nd + pm**2 / 4)**S.Half
+    else:
+        gc = nlc * nd ** S.Half
 
     def _simp_n(expr):
         if not isinstance(expr, Expr):
             return expr
-        expr = expr.subs({g_hat: nlc * nd ** S.Half * t_, _g: nlc * nd ** S.Half * t_})
+        expr = expr.subs({g_hat: gc * t_, _g: gc * t_})
 
         def _combine(e):
             if e.is_Mul:
@@ -582,7 +591,7 @@ def eval_twm_solve(
     Returns: (latex_curr, expr_curr, latex_t, expr_str_t, latex_g, expr_str_g)
     """
     s = SOLVERS[bool(dc)][bool(mismatch)]
-    sol_order = order - 1
+    sol_order = max(-1, order - 1)
     sol_d = s.get_sol(sol_order)[var_index]
 
     s0 = s.sol[0]
@@ -599,8 +608,8 @@ def eval_twm_solve(
     expr_str_t = expr_to_code_str(expr_t, dc=bool(dc))
 
     # Parametric gain representation (g)
-    sol_d_g = t_to_g(sol_d, dc=bool(dc))
-    p_g = t_to_g(p, dc=bool(dc))
+    sol_d_g = t_to_g(sol_d, dc=bool(dc), mismatch=bool(mismatch))
+    p_g = t_to_g(p, dc=bool(dc), mismatch=bool(mismatch))
     expr_g = p_g * s.to_expr(sol_d_g)
     latex_g = latex(expr_g)
     expr_str_g = expr_to_code_str(expr_g, dc=bool(dc))
@@ -762,7 +771,8 @@ class ComboWrapper:
 
     def diff(self, *symbols, **kwargs):
         s = self.solver
-        dc = s.dc
+        dc = getattr(s, 'dc', True)
+        mismatch = (getattr(s, 'pm', S.Zero) != S.Zero)
         if not symbols:
             raise ValueError("diff requires at least one variable.")
         var = symbols[0]
@@ -791,6 +801,10 @@ class ComboWrapper:
                 is_wrt_t = True
             elif var in ('g', '_g', r'\hat{g}'):
                 is_wrt_g = True
+            elif var in ('pm', 'Δk', r'\Delta k'):
+                var = pm
+            elif var == 'nlc':
+                var = nlc
             else:
                 var = Symbol(var)
         elif var == t_ or str(var) == '_t':
@@ -799,7 +813,7 @@ class ComboWrapper:
             is_wrt_g = True
 
         if is_wrt_g:
-            val_in_g = t_to_g(self.val, dc=dc)
+            val_in_g = t_to_g(self.val, dc=dc, mismatch=mismatch)
             def _d_g(leaf):
                 if isinstance(leaf, PF):
                     sf = {}
@@ -813,7 +827,7 @@ class ComboWrapper:
                     return PF(sf, npf)
                 return diff(leaf, g_hat, *rest_args, **kwargs)
             diff_in_g = d_apply(val_in_g, _d_g)
-            diff_in_t = g_to_t(diff_in_g, dc=dc)
+            diff_in_t = g_to_t(diff_in_g, dc=dc, mismatch=mismatch)
             return ComboWrapper(diff_in_t, s)
         elif is_wrt_t:
             var = t_
@@ -851,6 +865,110 @@ class ComboWrapper:
         return self.diff(*symbols, **kwargs)
 
 
+def compute_lowest_order(
+    expr_str: str,
+    dc: bool = True,
+    operators: Optional[List[Dict[str, Any]]] = None,
+    named_expressions: Optional[List[Dict[str, Any]]] = None,
+) -> int:
+    """
+    Computes the lowest perturbation order of an expression string.
+    Driving mode: order -1 (a_p in dc=True; a_i in dc=False).
+    Weak modes, symbols, multimode operators: order 0.
+    Multiplying factors sums their orders (e.g. a_p * a_p -> -2).
+    Adding terms takes the min across terms.
+    """
+    strong_mode_idx = 0 if dc else 2
+    strong_names = {'a_p', 'a_0'} if dc else {'a_i', 'a_2'}
+
+    if operators:
+        for op in operators:
+            name = (op.get('name') or '').strip()
+            mode_idx = int(op.get('mode_index', 0))
+            if mode_idx == strong_mode_idx and name:
+                strong_names.add(name)
+
+    all_strong = set()
+    for name in strong_names:
+        all_strong.add(name)
+        all_strong.add(f"{name}d")
+        all_strong.add(f"{name}_dag")
+        all_strong.add(f"dag_{name}")
+
+    named_lowest_orders: Dict[str, int] = {}
+    if named_expressions:
+        for ne in named_expressions:
+            ne_name = (ne.get('name') or '').strip()
+            if not ne_name:
+                continue
+            if 'lowest_order' in ne and ne['lowest_order'] is not None:
+                named_lowest_orders[ne_name] = int(ne['lowest_order'])
+            elif 'lowestOrder' in ne and ne['lowestOrder'] is not None:
+                named_lowest_orders[ne_name] = int(ne['lowestOrder'])
+
+    def get_order(node) -> int:
+        if isinstance(node, ast.Expression):
+            return get_order(node.body)
+        elif isinstance(node, ast.Constant):
+            return 0
+        elif isinstance(node, ast.Name):
+            name = node.id
+            if name in named_lowest_orders:
+                return named_lowest_orders[name]
+            if name in all_strong:
+                return -1
+            if name in ('nlc', 'chi', r'\chi', 'χ'):
+                return 1
+            return 0
+        elif isinstance(node, ast.UnaryOp):
+            return get_order(node.operand)
+        elif isinstance(node, ast.BinOp):
+            if isinstance(node.op, (ast.Add, ast.Sub)):
+                return min(get_order(node.left), get_order(node.right))
+            elif isinstance(node.op, ast.Mult):
+                return get_order(node.left) + get_order(node.right)
+            elif isinstance(node.op, ast.Div):
+                return get_order(node.left) - get_order(node.right)
+            elif isinstance(node.op, ast.Pow):
+                base_ord = get_order(node.left)
+                if isinstance(node.right, ast.Constant) and isinstance(node.right.value, int):
+                    return base_ord * node.right.value
+                elif isinstance(node.right, ast.UnaryOp) and isinstance(node.right.op, ast.USub) and isinstance(node.right.operand, ast.Constant):
+                    return base_ord * (-node.right.operand.value)
+                return base_ord
+            return 0
+        elif isinstance(node, ast.Call):
+            func_name = ''
+            if isinstance(node.func, ast.Name):
+                func_name = node.func.id
+            if func_name in ('dag', 'Dagger', 'dagger'):
+                if node.args:
+                    return get_order(node.args[0])
+                return 0
+            elif func_name in ('N_', 'BosonNum'):
+                if node.args:
+                    arg = node.args[0]
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                        arg_name = arg.value
+                        if arg_name in all_strong:
+                            return -2
+                        return 0
+                    return 2 * get_order(arg)
+                return 0
+            elif func_name in ('diff', 'Derivative'):
+                if node.args:
+                    return get_order(node.args[0])
+                return 0
+            return 0
+        return 0
+
+    try:
+        tree = ast.parse(expr_str, mode='eval')
+        return get_order(tree)
+    except Exception:
+        return 0
+
+
 def eval_operator_combination(
     text: str,
     dc: bool,
@@ -860,20 +978,20 @@ def eval_operator_combination(
     operators: List[Dict[str, Any]],
     mm_operators: List[Dict[str, Any]],
     named_expressions: List[Dict[str, Any]],
-) -> Tuple[str, str, str, str, str, str]:
+    mismatch: bool = False,
+) -> Tuple[str, str, str, str, str, str, int]:
     """
-    Evaluates post-evolution operator combinations in Tab 4.
-    Returns: (latex_str, expr_str)
+    Evaluates post-evolution operator combinations in Tab 3 (formerly Tab 4).
+    Returns: (latex_curr, expr_curr, latex_t, expr_str_t, latex_g, expr_str_g, lowest_order)
     """
     text = (text or '').strip()
     if not text:
         raise ValueError("Expression input cannot be empty.")
-    if order < -1:
-        raise ValueError("Order must be an integer >= -1.")
 
     dc = bool(dc)
-    s = SOLVERS[dc][False]
-    sol = s.get_sol(order)
+    mismatch = bool(mismatch)
+    s = SOLVERS[dc][mismatch]
+    sol = s.get_sol(max(-1, order))
 
     # Initial-time (t=0) mode wrappers (driving mode as PF, weak modes as f_dict)
     w_a0 = ComboWrapper.from_val(a_p if dc else f_dict({a_p: {(None,): PF({((), ()): S.One})}}), s)
@@ -931,7 +1049,7 @@ def eval_operator_combination(
         return _inner
 
     # Represent g in terms of t_ during algebraic evaluation so NumShift on N_d works accurately
-    w_g_internal = ComboWrapper(g_to_t(PF({((), ()): g_hat}), dc=dc), s)
+    w_g_internal = ComboWrapper(g_to_t(PF({((), ()): g_hat}), dc=dc, mismatch=mismatch), s)
     w_g_internal._is_g = True
 
     w_t = ComboWrapper.from_val(t_, s)
@@ -964,7 +1082,7 @@ def eval_operator_combination(
         'diff': lambda expr, *args, **kwargs: expr.diff(*args, **kwargs) if hasattr(expr, 'diff') else diff(expr, *args, **kwargs),
         'Derivative': lambda expr, *args, **kwargs: expr.diff(*args, **kwargs) if hasattr(expr, 'diff') else diff(expr, *args, **kwargs),
         'nlc': ComboWrapper.from_val(nlc, s),
-        'pm': ComboWrapper.from_val(pm, s),
+        'pm': ComboWrapper.from_val(s.pm, s),
         'a_0': w_a0,
         'a_1': w_a1,
         'a_2': w_a2,
@@ -992,9 +1110,12 @@ def eval_operator_combination(
                 disp_subs[nlc] = Symbol(d_name)
             continue
         if s_name == 'pm' or sym_def.get('builtin_key') == 'pm':
-            local_dict[s_name] = ComboWrapper.from_val(pm, s)
-            if d_name and d_name not in ('pm', 'Δk'):
-                disp_subs[pm] = Symbol(d_name)
+            if not mismatch:
+                local_dict[s_name] = ComboWrapper.from_val(S.Zero, s)
+            else:
+                local_dict[s_name] = ComboWrapper.from_val(pm, s)
+                if d_name and d_name not in ('pm', 'Δk'):
+                    disp_subs[pm] = Symbol(d_name)
             continue
 
         kwargs = {}
@@ -1045,7 +1166,7 @@ def eval_operator_combination(
     # 4. Register saved named expressions
     for ne in named_expressions:
         ne_name = (ne.get('name') or '').strip()
-        ne_str = (ne.get('expr_str') or ne.get('exprStr') or '').strip()
+        ne_str = (ne.get('expr_str_t') or ne.get('expr_str') or ne.get('exprStr') or '').strip()
         valid, err_msg = is_valid_variable_name(ne_name)
         if not valid:
             raise ValueError(f"Invalid expression identifier: {err_msg}")
@@ -1055,7 +1176,7 @@ def eval_operator_combination(
             parsed_ne = parse_expr(ne_str, local_dict=local_dict, transformations=TRANSFORMS)
             w_ne = ComboWrapper.from_val(parsed_ne, s)
             # Ensure internal representation is in terms of t_ for subsequent multiplications
-            w_ne = ComboWrapper(g_to_t(w_ne.val, dc=dc), s)
+            w_ne = ComboWrapper(g_to_t(w_ne.val, dc=dc, mismatch=mismatch), s)
             local_dict[ne_name] = w_ne
         except Exception as e:
             raise ValueError(f"Failed to evaluate named expression '{ne_name}': {e}")
@@ -1073,8 +1194,8 @@ def eval_operator_combination(
     def _postprocess_pf(p: PF) -> PF:
         if not p.table and p.npf == S.Zero:
             return p
+        p = s.expand(p, order)
         if order >= 0 or p.expr(False).has(t_):
-            p = s.expand(p, order)
             return p.n_apply(
                 lambda t: s.n_simp(d_p2s(_g, s.p2s_group(t)).subs({_g: s.gc * t_}))
             )
@@ -1083,7 +1204,7 @@ def eval_operator_combination(
     val = _apply_to_pfs(val, _postprocess_pf)
 
     # 7. Compute both time (t) and gain (g) representations
-    val_t = g_to_t(val, dc=dc)
+    val_t = g_to_t(val, dc=dc, mismatch=mismatch)
     expr_result_t = val_t.expr(False) if isinstance(val_t, PF) else s.to_expr(val_t)
     expr_str_t = expr_to_code_str(expr_result_t, dc=dc)
     expr_disp_t = expr_result_t
@@ -1094,7 +1215,7 @@ def eval_operator_combination(
             expr_disp_t = expr_result_t
     latex_t = latex(expr_disp_t)
 
-    val_g = t_to_g(val, dc=dc)
+    val_g = t_to_g(val, dc=dc, mismatch=mismatch)
     expr_result_g = val_g.expr(False) if isinstance(val_g, PF) else s.to_expr(val_g)
     expr_str_g = expr_to_code_str(expr_result_g, dc=dc)
     expr_disp_g = expr_result_g
@@ -1108,4 +1229,11 @@ def eval_operator_combination(
     latex_curr = latex_g if use_gain else latex_t
     expr_curr = expr_str_g if use_gain else expr_str_t
 
-    return latex_curr, expr_curr, latex_t, expr_str_t, latex_g, expr_str_g
+    lowest_order = compute_lowest_order(
+        text,
+        dc=dc,
+        operators=operators,
+        named_expressions=named_expressions,
+    )
+
+    return latex_curr, expr_curr, latex_t, expr_str_t, latex_g, expr_str_g, lowest_order

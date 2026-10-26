@@ -404,6 +404,7 @@ class FermionSortContext:
                 new.append(R[j])
                 j += 1
             else:
+                prod = mul_pattern(L[i], R[j])[0]
                 j += 1
                 c = UidCommutator(Mul(*L[i+1:], evaluate=False),
                                 Mul(*R[j_prev:j], evaluate=False))
@@ -412,7 +413,6 @@ class FermionSortContext:
                     tail.append(S.NegativeOne)
                 elif isinstance(c, UidCommutator):
                     tail.append(c.comm_sign)
-                prod = mul_pattern(L[i], R[j])[0]
                 if prod == 0:
                     return None, S.Zero, Add(*res)
                 new.append(prod)

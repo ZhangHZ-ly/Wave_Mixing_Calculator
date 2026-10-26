@@ -317,7 +317,7 @@
   .table-responsive {
     overflow-x: auto;
     overflow-y: auto;
-    max-height: 360px;
+    max-height: 320px;
     border: 1px solid var(--border-color);
     border-radius: 6px;
     margin-top: 0.75rem;
@@ -349,11 +349,54 @@
     border-bottom: none;
   }
   .custom-table tbody tr {
-    cursor: context-menu;
+    cursor: pointer;
     transition: background 0.1s;
   }
   .custom-table tbody tr:hover {
     background: #f1f5f9;
+  }
+  .custom-table tbody tr.row-warning {
+    background-color: #fffbeb !important;
+  }
+  .custom-table tbody tr.row-warning:hover {
+    background-color: #fef3c7 !important;
+  }
+
+  /* Row Floating Tooltip (Windows Native Tooltip Style) */
+  .custom-row-tooltip {
+    position: fixed;
+    z-index: 99999;
+    pointer-events: none;
+    background: #ffffe1;
+    color: #000000;
+    border: 1px solid #767676;
+    padding: 0.45rem 0.65rem;
+    border-radius: 3px;
+    font-size: 0.82rem;
+    line-height: 1.4;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+    max-width: 440px;
+    word-break: break-word;
+    white-space: pre-wrap;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.12s ease;
+  }
+  .custom-row-tooltip.show {
+    opacity: 1;
+    visibility: visible;
+  }
+  .custom-row-tooltip .tooltip-hint {
+    margin-top: 0.35rem;
+    padding-top: 0.35rem;
+    border-top: 1px solid rgba(0, 0, 0, 0.15);
+    color: #000000;
+    font-weight: 600;
+    font-size: 0.82rem;
+    text-align: left;
+  }
+  .custom-row-tooltip .tooltip-hint strong {
+    font-weight: 600;
   }
 
   /* Dropdown Button */
@@ -617,50 +660,6 @@
 
   <!-- TAB 2: Quantum Expression Processing (sort_context & pattern_form) -->
   <div id="tab-pattern" class="panel">
-    <!-- Defined Symbols and Operators Table -->
-    <div class="card">
-      <div class="card-title">
-        <span>Defined Symbols & Operators Table</span>
-        <div class="btn-group">
-          <button class="btn btn-secondary btn-sm" onclick="resetTableDefaults('tab2')">
-            Reset Defaults
-          </button>
-          <div class="dropdown" id="addDropdown">
-            <button class="btn btn-primary btn-sm" onclick="toggleDropdown('addDropdown')">
-              Add / Create ▼
-            </button>
-            <div class="dropdown-content">
-              <button onclick="openSymbolModal(null, 'tab2')">New Commutative Symbol</button>
-              <button onclick="openOperatorModal('boson', null, 'tab2')">New Boson Operator</button>
-              <button onclick="openOperatorModal('fermion', null, 'tab2')">New Fermion Operator</button>
-              <button onclick="openSaveAnswerModal('tab2')">Save Answer Area PF</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="table-responsive">
-        <table class="custom-table" id="symbolTable">
-          <thead>
-            <tr>
-              <th>Type</th>
-              <th>Identifier (Code)</th>
-              <th>Display Text (LaTeX)</th>
-              <th>Attributes / Definition</th>
-              <th>Notes</th>
-              <th style="width: 150px;">Actions (Right-click)</th>
-            </tr>
-          </thead>
-          <tbody id="symbolTableBody">
-            <!-- Dynamically populated -->
-          </tbody>
-        </table>
-      </div>
-      <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.5rem;">
-        Tip: <b>Right-click</b> on any row to open the context menu (rename, modify display text, assumptions, notes, insert into input, delete).
-      </p>
-    </div>
-
     <!-- Expression Input & Processing -->
     <div class="card">
       <div class="card-title">
@@ -722,6 +721,49 @@
         </div>
       </div>
     </div>
+
+    <!-- Defined Symbols and Operators Table -->
+    <div class="card">
+      <div class="card-title">
+        <span>Defined Symbols & Operators Table</span>
+        <div class="btn-group">
+          <button class="btn btn-secondary btn-sm" onclick="resetTableDefaults('tab2')">
+            Reset Defaults
+          </button>
+          <div class="dropdown" id="addDropdown">
+            <button class="btn btn-primary btn-sm" onclick="toggleDropdown('addDropdown')">
+              Add / Create ▼
+            </button>
+            <div class="dropdown-content">
+              <button onclick="openSymbolModal(null, 'tab2')">New Commutative Symbol</button>
+              <button onclick="openOperatorModal('boson', null, 'tab2')">New Boson Operator</button>
+              <button onclick="openOperatorModal('fermion', null, 'tab2')">New Fermion Operator</button>
+              <button onclick="openSaveAnswerModal('tab2')">Save Answer Area PF</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="custom-table" id="symbolTable">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Identifier (Code)</th>
+              <th>Display Text (LaTeX)</th>
+              <th>Notes</th>
+              <th style="width: 120px;">Actions (Right-click)</th>
+            </tr>
+          </thead>
+          <tbody id="symbolTableBody">
+            <!-- Dynamically populated -->
+          </tbody>
+        </table>
+      </div>
+      <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.5rem;">
+        Tip: <b>Right-click</b> on any row to open the context menu (rename, modify display text, assumptions, notes, insert into input, delete).
+      </p>
+    </div>
   </div>
 
   <!-- TAB 3: Post-Evolution Operator Combinations -->
@@ -733,18 +775,27 @@
       </div>
       <div class="form-grid">
         <div class="form-group">
-          <label for="combo-dc">Mixing Process Type (dc)</label>
+          <label for="combo-dc">Mixing Process Type</label>
           <select id="combo-dc" onchange="onComboPresetChange()">
-            <option value="true" selected>Down-conversion (dc = True)</option>
-            <option value="false">Frequency Conversion / State Transfer (dc = False)</option>
+            <option value="true" selected>Down-conversion</option>
+            <option value="false">Frequency Conversion / State Transfer</option>
           </select>
           <span class="form-tip">Determines the mode structure of multimode operators A, N_t and driving mode</span>
         </div>
 
         <div class="form-group">
+          <label for="combo-mismatch">Phase-Matching Condition</label>
+          <select id="combo-mismatch" onchange="onComboMismatchChange()">
+            <option value="false" selected>Phase Matched (Δk = 0)</option>
+            <option value="true">Phase Unmatched (Δk ≠ 0)</option>
+          </select>
+          <span class="form-tip">Whether to consider wave-vector mismatch Δk in Heisenberg evolution</span>
+        </div>
+
+        <div class="form-group">
           <label for="combo-order">Retained Order (get_sol input)</label>
-          <input id="combo-order" type="number" min="-1" max="10" value="1" onchange="onComboPresetChange()">
-          <span class="form-tip">Integer ≥ -1 (-1: classical, 0: undepleted drive, 1: 1st-order depletion, ...)</span>
+          <input id="combo-order" type="number" step="1" value="1" onchange="onComboPresetChange()" oninput="onComboPresetChange()">
+          <span class="form-tip">Truncation order limit (can be &le; -1 for driving mode products, e.g. -2 for N_(a_p), 0: undepleted, 1: 1st-order depletion...)</span>
         </div>
 
         <div class="form-group" style="justify-content: center;">
@@ -752,51 +803,9 @@
             <input type="checkbox" id="combo-gain" onchange="onComboGainChange()">
             Display in terms of parametric gain
           </label>
-          <span class="form-tip">Convert t to ĝ / (χ √N̂) and simplify commutative N expressions</span>
+          <span class="form-tip">Convert t to ĝ / gc and simplify commutative N expressions</span>
         </div>
       </div>
-    </div>
-
-    <!-- Defined Symbols, Operators & Expressions Table -->
-    <div class="card">
-      <div class="card-title">
-        <span>Defined Symbols, Operators & Expressions Table</span>
-        <div class="btn-group">
-          <button class="btn btn-secondary btn-sm" onclick="resetTableDefaults('tab3')">
-            Reset Defaults
-          </button>
-          <div class="dropdown" id="addComboDropdown">
-            <button class="btn btn-primary btn-sm" onclick="toggleDropdown('addComboDropdown')">
-              Add / Create ▼
-            </button>
-            <div class="dropdown-content">
-              <button onclick="openSymbolModal(null, 'tab3')">New Commutative Symbol</button>
-              <button onclick="openSaveAnswerModal('tab3')">Save Answer Area Expression</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="table-responsive">
-        <table class="custom-table" id="comboTable">
-          <thead>
-            <tr>
-              <th>Type</th>
-              <th>Identifier (Code)</th>
-              <th>Display Text (LaTeX)</th>
-              <th>Attributes / Definition</th>
-              <th>Notes</th>
-              <th style="width: 150px;">Actions (Right-click)</th>
-            </tr>
-          </thead>
-          <tbody id="comboTableBody">
-            <!-- Dynamically populated -->
-          </tbody>
-        </table>
-      </div>
-      <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.5rem;">
-        Tip: <b>Right-click</b> on any row to open the context menu (rename, modify display text, assumptions, notes, insert into input, delete).
-      </p>
     </div>
 
     <!-- Combination Expression Input & Processing -->
@@ -823,7 +832,7 @@
       <div class="output-box">
         <div class="output-header">
           <span>Combination Result</span>
-          <span id="combo-mode-tag" class="badge badge-gray">dc=True | order=1 | _ind</span>
+          <span id="combo-mode-tag" class="badge badge-gray">dc=True | mismatch=False | order=1 | _ind</span>
         </div>
         <div id="combo-output" class="output-content">
           <span style="color: var(--text-secondary); font-size: 0.95rem;">Click Calculate Combination above...</span>
@@ -839,6 +848,52 @@
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- Defined Symbols, Operators & Expressions Table -->
+    <div class="card">
+      <div class="card-title">
+        <span>Defined Symbols, Operators & Expressions Table</span>
+        <div class="btn-group">
+          <button class="btn btn-secondary btn-sm" onclick="resetTableDefaults('tab3')">
+            Reset Defaults
+          </button>
+          <button class="btn btn-secondary btn-sm" onclick="restoreBaseOperators('tab3')">
+            Restore Base Solutions
+          </button>
+          <div class="dropdown" id="addComboDropdown">
+            <button class="btn btn-primary btn-sm" onclick="toggleDropdown('addComboDropdown')">
+              Add / Create ▼
+            </button>
+            <div class="dropdown-content">
+              <button onclick="openSymbolModal(null, 'tab3')">New Commutative Symbol</button>
+              <button onclick="openSaveAnswerModal('tab3')">Save Answer Area Expression</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="custom-table" id="comboTable">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Identifier (Code)</th>
+              <th>Display Text (LaTeX)</th>
+              <th>Accuracy (Order)</th>
+              <th>Lowest Order</th>
+              <th>Notes</th>
+              <th style="width: 120px;">Actions (Right-click)</th>
+            </tr>
+          </thead>
+          <tbody id="comboTableBody">
+            <!-- Dynamically populated -->
+          </tbody>
+        </table>
+      </div>
+      <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.5rem;">
+        Tip: <b>Right-click</b> on any row to open the context menu (rename, modify display text, assumptions, notes, insert into input, delete).
+      </p>
     </div>
   </div>
 
@@ -935,16 +990,12 @@
         <label for="ne-notes">Notes / Description</label>
         <input type="text" id="ne-notes" placeholder="Optional note to describe expression meaning">
       </div>
-      <div id="combo-save-both-group" class="form-group" style="margin-bottom: 0.75rem; display: none;">
-        <label class="checkbox-label" style="font-weight: 600;">
-          <input type="checkbox" id="combo-save-both" checked onchange="onComboSaveBothToggle()">
-          Save both time (t) and gain (g) representations simultaneously
-        </label>
-        <span class="form-tip">Will save two table entries with suffixes <code>_t</code> and <code>_g</code>.</span>
+      <div id="combo-save-order-info" class="form-group" style="margin-bottom: 0.75rem; display: none;">
+        <span class="form-tip" style="color: #475569;">Recorded Order: <strong id="combo-save-order-val">1</strong> &bull; Simultaneously preserves both time (t) and parametric gain (g) views for this variable.</span>
       </div>
       <div class="form-group">
         <label>Evaluated Expression Source</label>
-        <textarea id="ne-expr-preview" rows="2" readonly style="background: #f8fafc; font-family: monospace;"></textarea>
+        <textarea id="ne-expr-preview" rows="3" readonly style="background: #f8fafc; font-family: monospace;"></textarea>
         <span class="form-tip">Saves the evaluated PF or dict-like operator representation for this variable.</span>
       </div>
     </div>
@@ -966,6 +1017,10 @@
       <div class="form-group" style="margin-bottom: 0.75rem;">
         <label for="rename-input">Identifier Name (Valid Python variable name)</label>
         <input type="text" id="rename-input" placeholder="Enter variable name">
+      </div>
+      <div id="rename-def-group" class="form-group" style="margin-bottom: 0.75rem; display: none;">
+        <label>Evaluated Expression Definition</label>
+        <textarea id="rename-def-preview" rows="5" readonly style="background: #f8fafc; font-family: monospace; font-size: 0.85rem; width: 100%;"></textarea>
       </div>
       <div class="form-group">
         <label for="rename-notes">Notes / Description</label>
@@ -1013,8 +1068,77 @@
   </div>
 </div>
 
+<!-- Modal 6: Perturbation Order Inconsistency Warning Modal -->
+<div id="orderWarningModal" class="modal-overlay">
+  <div class="modal" style="max-width: 520px;">
+    <div class="modal-header">
+      <span style="color: #b45309; font-weight: 700;">Perturbation Order Inconsistency Warning</span>
+      <button style="border:none;background:none;font-size:1.2rem;cursor:pointer;" onclick="closeOrderWarningModal(false)">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="margin-bottom: 0.75rem; font-size: 0.95rem; color: var(--text-primary);">
+        The target calculation order (<strong>Order <span id="warn-target-order"></span></strong>) is higher than the recorded order of the following referenced variable(s):
+      </p>
+      <div id="warn-var-list" style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; padding: 0.75rem; margin-bottom: 0.75rem; font-size: 0.9rem;"></div>
+      <p style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.4;">
+        Using lower-order variables in a higher-order calculation may lead to missing expansion terms and inaccurate perturbation results.
+      </p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeOrderWarningModal(false)">Cancel</button>
+      <button class="btn btn-warning btn-sm" style="background:#d97706; border-color:#d97706; color:#fff;" onclick="closeOrderWarningModal(true)">Force Continue</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal 7: Restore Base Operator / Built-in Parameter Name Conflict Modal -->
+<div id="restoreConflictModal" class="modal-overlay">
+  <div class="modal" style="max-width: 520px;">
+    <div class="modal-header">
+      <span id="restore-conflict-title" style="color: var(--primary); font-weight: 700;">Base Operator Restore Conflict</span>
+      <button style="border:none;background:none;font-size:1.2rem;cursor:pointer;" onclick="resolveRestoreConflict('cancel')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="margin-bottom: 0.75rem; font-size: 0.95rem; color: var(--text-primary);">
+        Cannot restore <span id="restore-conflict-entity-type">base operator</span> <strong id="restore-conflict-op-name" style="color: var(--primary);"></strong> because the name is currently occupied by an existing variable:
+      </p>
+      <div id="restore-conflict-item-details" style="background: #f8fafc; border: 1px solid var(--border-color); border-radius: 6px; padding: 0.75rem; margin-bottom: 1rem; font-size: 0.88rem; line-height: 1.6;"></div>
+      
+      <div style="margin-bottom: 1.25rem; background: #fff; border: 1px solid var(--border-color); border-radius: 6px; padding: 0.85rem;">
+        <label for="restore-conflict-new-name" style="font-weight: 600; font-size: 0.9rem; display: block; margin-bottom: 0.4rem;">
+          Option 1: Rename the existing variable
+        </label>
+        <p style="font-size: 0.83rem; color: var(--text-secondary); margin-bottom: 0.5rem; line-height: 1.4;">
+          Keep the variable and its definition under a new identifier name:
+        </p>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <input type="text" id="restore-conflict-new-name" class="form-control" style="flex: 1; padding: 0.4rem 0.6rem; font-size: 0.9rem;" placeholder="e.g. a_p_saved" onkeydown="if(event.key === 'Enter') handleRestoreRenameClick()" />
+          <button class="btn btn-primary btn-sm" onclick="handleRestoreRenameClick()">Rename & Restore</button>
+        </div>
+        <div id="restore-conflict-error" style="color: var(--danger); font-size: 0.82rem; margin-top: 0.35rem; display: none;"></div>
+      </div>
+      
+      <div style="background: #fff; border: 1px solid #fee2e2; border-radius: 6px; padding: 0.85rem;">
+        <label style="font-weight: 600; font-size: 0.9rem; display: block; margin-bottom: 0.35rem; color: #b91c1c;">
+          Option 2: Delete the existing variable
+        </label>
+        <p style="font-size: 0.83rem; color: var(--text-secondary); margin-bottom: 0.5rem; line-height: 1.4;">
+          Permanently remove this conflicting variable so the item can take its original name.
+        </p>
+        <button class="btn btn-secondary btn-sm" style="color: var(--danger); border-color: #fca5a5; background: #fef2f2;" onclick="resolveRestoreConflict('delete')">Delete Conflicting Variable & Restore</button>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="resolveRestoreConflict('cancel')">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <!-- Toast -->
 <div id="toast" class="toast">LaTeX copied to clipboard!</div>
+
+<!-- Row Floating Tooltip -->
+<div id="rowTooltip" class="custom-row-tooltip"></div>
 
 <script>
 // Global State
@@ -1081,7 +1205,12 @@ function saveWorkspaceToStorage(ws) {
 function resetTableDefaults(ws) {
   if (ws === 'tab3' || ws === 'tab4') {
     if (!confirm('Reset Tab 3 table to default parametric symbols and operators?')) return;
-    comboTableItems = JSON.parse(JSON.stringify(DEFAULT_COMBO_TABLE_ITEMS));
+    const isMismatch = document.getElementById('combo-mismatch') ? (document.getElementById('combo-mismatch').value === 'true') : false;
+    let defaults = JSON.parse(JSON.stringify(DEFAULT_COMBO_TABLE_ITEMS));
+    if (!isMismatch) {
+      defaults = defaults.filter(x => x.builtinKey !== 'pm' && x.name !== 'pm');
+    }
+    comboTableItems = defaults;
     saveComboTableItemsToStorage();
     renderComboTable();
     showToast('Tab 3 table reset to defaults.');
@@ -1091,6 +1220,252 @@ function resetTableDefaults(ws) {
     saveTableItemsToStorage();
     renderTable();
     showToast('Tab 2 table reset to defaults.');
+  }
+}
+
+let restoreConflictResolver = null;
+let currentConflictOccupyingItem = null;
+let currentConflictBaseOpName = '';
+
+function getSuggestedUniqueName(baseName) {
+  let candidate = `${baseName}_saved`;
+  let counter = 1;
+  while (comboTableItems.some(x => x.name === candidate)) {
+    candidate = `${baseName}_saved_${counter}`;
+    counter++;
+  }
+  return candidate;
+}
+
+function formatConflictItemDetails(item) {
+  let typeText = item.type;
+  if (item.type === 'named_expr') typeText = 'Custom Saved Expression';
+  else if (item.type === 'symbol') typeText = 'Commutative Symbol';
+  else if (item.type === 'evolved_op') typeText = 'Evolved Operator';
+  else if (item.type === 'operator') typeText = 'Quantum Operator';
+  else if (item.type === 'mm_op') typeText = 'Multimode Operator';
+
+  let lines = [];
+  lines.push(`<div><strong>Name:</strong> <code>${escapeHtml(item.name)}</code> &nbsp; <span class="badge badge-info">${typeText}</span></div>`);
+  if (item.order !== undefined && item.order !== null && item.order !== '') {
+    lines.push(`<div><strong>Accuracy Order:</strong> ${item.order}</div>`);
+  }
+  const minOrd = (typeof item.lowestOrder === 'number') ? item.lowestOrder : (typeof item.lowest_order === 'number' ? item.lowest_order : null);
+  if (minOrd !== null) {
+    lines.push(`<div><strong>Lowest Order:</strong> ${minOrd}</div>`);
+  }
+  if (item.notes) {
+    lines.push(`<div><strong>Notes:</strong> ${escapeHtml(item.notes)}</div>`);
+  }
+  const expr = item.exprStr_t || item.exprStr_g || item.exprStr;
+  if (expr) {
+    const preview = expr.length > 90 ? expr.substring(0, 90) + '...' : expr;
+    lines.push(`<div><strong>Definition:</strong> <code style="white-space: pre-wrap; word-break: break-all;">${escapeHtml(preview)}</code></div>`);
+  }
+  return lines.join('');
+}
+
+function promptRestoreConflict(baseOp, occupyingItem, entityType = 'base operator') {
+  return new Promise((resolve) => {
+    restoreConflictResolver = resolve;
+    currentConflictOccupyingItem = occupyingItem;
+    currentConflictBaseOpName = baseOp.name;
+
+    const titleEl = document.getElementById('restore-conflict-title');
+    if (titleEl) {
+      titleEl.textContent = entityType === 'parameter' ? 'Parameter Restore Conflict' : 'Base Operator Restore Conflict';
+    }
+    const typeEl = document.getElementById('restore-conflict-entity-type');
+    if (typeEl) {
+      typeEl.textContent = entityType;
+    }
+
+    document.getElementById('restore-conflict-op-name').textContent = baseOp.name;
+    document.getElementById('restore-conflict-item-details').innerHTML = formatConflictItemDetails(occupyingItem);
+
+    const suggestedName = getSuggestedUniqueName(baseOp.name);
+    const input = document.getElementById('restore-conflict-new-name');
+    input.value = suggestedName;
+
+    const errDiv = document.getElementById('restore-conflict-error');
+    errDiv.textContent = '';
+    errDiv.style.display = 'none';
+
+    document.getElementById('restoreConflictModal').classList.add('active');
+    setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 50);
+  });
+}
+
+function handleRestoreRenameClick() {
+  const input = document.getElementById('restore-conflict-new-name');
+  const errDiv = document.getElementById('restore-conflict-error');
+  const newName = input.value.trim();
+
+  const check = validateVariableName(newName);
+  if (!check.valid) {
+    errDiv.textContent = check.error;
+    errDiv.style.display = 'block';
+    return;
+  }
+
+  if (newName === currentConflictBaseOpName) {
+    errDiv.textContent = `Identifier cannot be '${currentConflictBaseOpName}' because that is the name of the item being restored.`;
+    errDiv.style.display = 'block';
+    return;
+  }
+
+  if (comboTableItems.some(x => x.id !== currentConflictOccupyingItem.id && x.name === newName)) {
+    errDiv.textContent = `Identifier '${newName}' already exists in the table. Please choose a different name.`;
+    errDiv.style.display = 'block';
+    return;
+  }
+
+  resolveRestoreConflict('rename', newName);
+}
+
+function resolveRestoreConflict(action, newName) {
+  document.getElementById('restoreConflictModal').classList.remove('active');
+  if (restoreConflictResolver) {
+    const res = restoreConflictResolver;
+    restoreConflictResolver = null;
+    currentConflictOccupyingItem = null;
+    currentConflictBaseOpName = '';
+    res({ action, newName });
+  }
+}
+
+function insertPmIntoComboTable(defaultPm) {
+  if (comboTableItems.some(x => x.builtinKey === 'pm' || x.name === defaultPm.name)) return;
+  const itemToInsert = JSON.parse(JSON.stringify(defaultPm));
+  const nlcIdx = comboTableItems.findIndex(x => x.builtinKey === 'nlc' || x.name === 'nlc');
+  if (nlcIdx !== -1) {
+    comboTableItems.splice(nlcIdx + 1, 0, itemToInsert);
+  } else {
+    comboTableItems.unshift(itemToInsert);
+  }
+}
+
+async function onComboMismatchChange() {
+  const mismatchSelect = document.getElementById('combo-mismatch');
+  const isMismatch = mismatchSelect ? (mismatchSelect.value === 'true') : false;
+
+  if (isMismatch) {
+    const defaultPm = DEFAULT_COMBO_TABLE_ITEMS.find(x => x.builtinKey === 'pm') || {
+      id: 'c2',
+      type: 'symbol',
+      builtinKey: 'pm',
+      name: 'pm',
+      displayName: '\\Delta k',
+      isReal: true,
+      isInteger: false,
+      isNonnegative: false,
+      isPositive: false,
+      notes: 'Phase mismatch parameter (Δk)'
+    };
+
+    const occupyingIndex = comboTableItems.findIndex(x => x.name === defaultPm.name);
+    if (occupyingIndex !== -1) {
+      const occupyingItem = comboTableItems[occupyingIndex];
+      if (occupyingItem.builtinKey === 'pm' || (occupyingItem.type === 'symbol' && occupyingItem.name === 'pm' && occupyingItem.displayName === '\\Delta k')) {
+        occupyingItem.builtinKey = 'pm';
+      } else {
+        const resolution = await promptRestoreConflict(defaultPm, occupyingItem, 'parameter');
+        if (resolution.action === 'cancel') {
+          mismatchSelect.value = 'false';
+          onComboPresetChange();
+          return;
+        } else if (resolution.action === 'delete') {
+          const delIdx = comboTableItems.findIndex(x => x.id === occupyingItem.id);
+          if (delIdx !== -1) {
+            comboTableItems.splice(delIdx, 1);
+          }
+          insertPmIntoComboTable(defaultPm);
+        } else if (resolution.action === 'rename') {
+          occupyingItem.name = resolution.newName;
+          insertPmIntoComboTable(defaultPm);
+        }
+      }
+    } else {
+      insertPmIntoComboTable(defaultPm);
+    }
+    showToast("Phase Unmatched: 'pm' (Δk) added to variables table.");
+  } else {
+    const pmIdx = comboTableItems.findIndex(x => x.builtinKey === 'pm' || (x.type === 'symbol' && x.name === 'pm'));
+    if (pmIdx !== -1) {
+      comboTableItems.splice(pmIdx, 1);
+      showToast("Phase Matched: 'pm' removed from variables table.");
+    }
+  }
+
+  saveComboTableItemsToStorage();
+  onComboPresetChange();
+}
+
+async function restoreBaseOperators(ws) {
+  activeWorkspace = ws || 'tab3';
+  const baseEvolvedOps = DEFAULT_COMBO_TABLE_ITEMS.filter(x => x.type === 'evolved_op');
+  let restoredCount = 0;
+
+  for (const baseOp of baseEvolvedOps) {
+    // Check if an item in comboTableItems currently occupies baseOp.name
+    const occupyingIndex = comboTableItems.findIndex(x => x.name === baseOp.name);
+
+    if (occupyingIndex !== -1) {
+      const occupyingItem = comboTableItems[occupyingIndex];
+      // If it is already the evolved_op for this modeIndex, no conflict
+      if (occupyingItem.type === 'evolved_op' && occupyingItem.modeIndex === baseOp.modeIndex) {
+        if (occupyingItem.displayName !== baseOp.displayName) {
+          occupyingItem.displayName = baseOp.displayName;
+          restoredCount++;
+        }
+        continue;
+      }
+
+      // It is occupied by a different item (custom expression, symbol, or another evolved_op)
+      const resolution = await promptRestoreConflict(baseOp, occupyingItem, 'base operator');
+      if (resolution.action === 'cancel') {
+        // User cancelled restoring this base operator, skip it
+        continue;
+      } else if (resolution.action === 'delete') {
+        const delIdx = comboTableItems.findIndex(x => x.id === occupyingItem.id);
+        if (delIdx !== -1) {
+          comboTableItems.splice(delIdx, 1);
+        }
+      } else if (resolution.action === 'rename') {
+        occupyingItem.name = resolution.newName;
+      }
+    }
+
+    // Now baseOp.name is free.
+    // Check if the evolved operator for this modeIndex exists under another name:
+    const opIdx = comboTableItems.findIndex(
+      x => x.type === 'evolved_op' && x.modeIndex === baseOp.modeIndex
+    );
+
+    if (opIdx === -1) {
+      // Operator was previously deleted, recreate it from baseOp
+      comboTableItems.push(JSON.parse(JSON.stringify(baseOp)));
+      restoredCount++;
+    } else {
+      // Operator was previously renamed or modified, restore its canonical name and displayName
+      const cur = comboTableItems[opIdx];
+      if (cur.name !== baseOp.name || cur.displayName !== baseOp.displayName) {
+        cur.name = baseOp.name;
+        cur.displayName = baseOp.displayName;
+        restoredCount++;
+      }
+    }
+  }
+
+  saveComboTableItemsToStorage();
+  renderComboTable();
+  if (restoredCount > 0) {
+    showToast(`Base operator solutions restored (${restoredCount} updated/recovered).`);
+  } else {
+    showToast(`All base operator solutions (a_p, a_s, a_i) are already present.`);
   }
 }
 
@@ -1374,12 +1749,80 @@ function escapeHtml(str) {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// ----------------------------------------------------
+// Row Floating Tooltip Handling
+// ----------------------------------------------------
+let tooltipTimer = null;
+
+function showRowTooltip(content, hint, e) {
+  const tooltipEl = document.getElementById('rowTooltip');
+  if (!tooltipEl) return;
+  clearTimeout(tooltipTimer);
+  tooltipTimer = setTimeout(() => {
+    let html = '';
+    if (content) {
+      html += `<div>${escapeHtml(content)}</div>`;
+    }
+    if (hint) {
+      html += `<div class="tooltip-hint"><strong>(${escapeHtml(hint)})</strong></div>`;
+    }
+    tooltipEl.innerHTML = html;
+    tooltipEl.classList.add('show');
+    positionRowTooltip(e);
+  }, 100);
+}
+
+function moveRowTooltip(e) {
+  const tooltipEl = document.getElementById('rowTooltip');
+  if (tooltipEl && tooltipEl.classList.contains('show')) {
+    positionRowTooltip(e);
+  }
+}
+
+function positionRowTooltip(e) {
+  const tooltipEl = document.getElementById('rowTooltip');
+  if (!tooltipEl) return;
+  const offset = 14;
+  let x = e.clientX + offset;
+  let y = e.clientY + offset;
+
+  const rect = tooltipEl.getBoundingClientRect();
+  if (x + rect.width > window.innerWidth - 10) {
+    x = e.clientX - rect.width - 10;
+  }
+  if (y + rect.height > window.innerHeight - 10) {
+    y = e.clientY - rect.height - 10;
+  }
+  tooltipEl.style.left = `${Math.max(10, x)}px`;
+  tooltipEl.style.top = `${Math.max(10, y)}px`;
+}
+
+function hideRowTooltip() {
+  clearTimeout(tooltipTimer);
+  const tooltipEl = document.getElementById('rowTooltip');
+  if (tooltipEl) {
+    tooltipEl.classList.remove('show');
+  }
+}
+
+function attachRowTooltip(tr, content, hint = 'Click to edit') {
+  tr.addEventListener('mouseenter', (e) => {
+    showRowTooltip(content, hint, e);
+  });
+  tr.addEventListener('mousemove', (e) => {
+    moveRowTooltip(e);
+  });
+  tr.addEventListener('mouseleave', () => {
+    hideRowTooltip();
+  });
+}
+
 function renderTable() {
   const tbody = document.getElementById('symbolTableBody');
   tbody.innerHTML = '';
 
   if (!tableItems.length) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary);">No defined symbols or operators. Click "Add / Create" in the top-right to create one.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-secondary);">No defined symbols or operators. Click "Add / Create" in the top-right to create one.</td></tr>';
     return;
   }
 
@@ -1388,7 +1831,7 @@ function renderTable() {
     tr.dataset.id = item.id;
 
     let typeBadge = '';
-    let attrStr = '-';
+    let attrOrDef = '';
     let dispCell = `<td>${escapeHtml(item.displayName || item.name)}</td>`;
     const notesStr = item.notes ? escapeHtml(item.notes) : '<span style="color: var(--text-secondary);">&ndash;</span>';
 
@@ -1399,30 +1842,35 @@ function renderTable() {
       if (item.isInteger) attrs.push('Integer');
       if (item.isNonnegative) attrs.push('Non-negative');
       if (item.isPositive) attrs.push('Positive');
-      attrStr = attrs.length ? attrs.join(', ') : 'Complex';
+      attrOrDef = attrs.length ? attrs.join(', ') : 'Complex';
     } else if (item.type === 'operator') {
       typeBadge = item.kind === 'boson' ? '<span class="badge badge-success">Boson Operator</span>' : '<span class="badge badge-warning">Fermion Operator</span>';
-      attrStr = item.kind === 'boson' ? 'Single Boson Mode' : 'Single Fermion Mode';
+      attrOrDef = item.kind === 'boson' ? 'Single Boson Mode' : 'Single Fermion Mode';
     } else if (item.type === 'named_expr') {
       typeBadge = '<span class="badge badge-gray">Named PF</span>';
-      attrStr = `<code style="font-size:0.85rem; color:#475569;">${escapeHtml(item.exprStr)}</code>`;
+      attrOrDef = item.exprStr || '';
       dispCell = `<td style="text-align: center; color: var(--text-secondary);">&ndash;</td>`;
     }
+
+    attachRowTooltip(tr, attrOrDef, 'Click to edit');
 
     tr.innerHTML = `
       <td>${typeBadge}</td>
       <td><strong>${escapeHtml(item.name)}</strong></td>
       ${dispCell}
-      <td>${attrStr}</td>
       <td>${notesStr}</td>
       <td>
         <div class="btn-group">
           <button class="btn btn-secondary btn-sm" title="Insert identifier into expression input at cursor position" onclick="insertIntoInput('pf-input', '${escapeHtml(item.name)}')">Insert</button>
-          <button class="btn btn-secondary btn-sm" title="Edit identifier name, attributes, display text, or notes" onclick="editItem('${item.id}', 'tab2')">Edit</button>
           <button class="btn btn-secondary btn-sm" style="color:var(--danger);" title="Delete this entry from the table" onclick="deleteItem('${item.id}', 'tab2')">Delete</button>
         </div>
       </td>
     `;
+
+    tr.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      editItem(item.id, 'tab2');
+    });
 
     tr.addEventListener('contextmenu', (e) => {
       e.preventDefault();
@@ -1438,63 +1886,107 @@ function renderComboTable() {
   if (!tbody) return;
   tbody.innerHTML = '';
 
-  if (!comboTableItems.length) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary);">No defined entries. Click "Reset Defaults" or "Add / Create" in the top-right.</td></tr>';
+  const isDc = document.getElementById('combo-dc') ? (document.getElementById('combo-dc').value === 'true') : true;
+  const isMismatch = document.getElementById('combo-mismatch') ? (document.getElementById('combo-mismatch').value === 'true') : false;
+  const orderVal = document.getElementById('combo-order') ? parseInt(document.getElementById('combo-order').value) : 1;
+
+  const visibleItems = comboTableItems;
+
+  if (!visibleItems.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-secondary);">No defined entries. Click "Reset Defaults" or "Add / Create" in the top-right.</td></tr>';
     return;
   }
 
-  const isDc = document.getElementById('combo-dc') ? (document.getElementById('combo-dc').value === 'true') : true;
-  const orderVal = document.getElementById('combo-order') ? document.getElementById('combo-order').value : '1';
-
-  comboTableItems.forEach(item => {
+  visibleItems.forEach(item => {
     const tr = document.createElement('tr');
     tr.dataset.id = item.id;
 
     let typeBadge = '';
-    let attrStr = '-';
+    let attrOrDef = '';
+    let savedOrderCell = '';
+    let lowestOrderCell = '';
     let dispCell = `<td>${escapeHtml(item.displayName || item.name)}</td>`;
-    const notesStr = item.notes ? escapeHtml(item.notes) : '<span style="color: var(--text-secondary);">&ndash;</span>';
+    let notesStr = item.notes ? escapeHtml(item.notes) : '<span style="color: var(--text-secondary);">&ndash;</span>';
 
     if (item.type === 'symbol') {
       typeBadge = '<span class="badge badge-info">Commutative Symbol</span>';
-      const attrs = [];
-      if (item.isReal) attrs.push('Real');
-      if (item.isInteger) attrs.push('Integer');
-      if (item.isNonnegative) attrs.push('Non-negative');
-      if (item.isPositive) attrs.push('Positive');
-      attrStr = attrs.length ? attrs.join(', ') : 'Complex';
+      savedOrderCell = '<td><span class="badge badge-gray">Any</span></td>';
+      const isNlc = item.builtinKey === 'nlc' || item.name === 'nlc';
+      lowestOrderCell = `<td><span class="badge badge-gray">${isNlc ? 1 : 0}</span></td>`;
+
+      if (item.builtinKey === 'pm' || item.name === 'pm') {
+        attrOrDef = 'Phase mismatch parameter (Real)';
+        notesStr = item.notes ? escapeHtml(item.notes) : 'Phase mismatch parameter (&Delta;k)';
+      } else if (isNlc) {
+        attrOrDef = 'Nonlinear coupling coefficient (χ): Non-negative, Real';
+      } else {
+        const attrs = [];
+        if (item.isReal) attrs.push('Real');
+        if (item.isInteger) attrs.push('Integer');
+        if (item.isNonnegative) attrs.push('Non-negative');
+        if (item.isPositive) attrs.push('Positive');
+        attrOrDef = attrs.length ? attrs.join(', ') : 'Complex';
+      }
     } else if (item.type === 'evolved_op') {
       typeBadge = '<span class="badge badge-success">Evolved Operator</span>';
       const modeLabels = ['Pump (mode 0)', 'Signal (mode 1)', 'Idler (mode 2)'];
-      attrStr = `${modeLabels[item.modeIndex] || 'Boson Mode'} at t (order ${orderVal})`;
+      attrOrDef = `${modeLabels[item.modeIndex] || 'Boson Mode'} at t`;
+      const isStrong = (isDc && item.modeIndex === 0) || (!isDc && item.modeIndex === 2);
+      const minOrd = isStrong ? -1 : 0;
+      savedOrderCell = `<td><span class="badge badge-info" title="Dynamically changes with global preset order">${orderVal} (preset)</span></td>`;
+      lowestOrderCell = `<td><span class="badge badge-gray" title="${isStrong ? 'Strong driving mode (starts at order -1)' : 'Weak mode (starts at order 0)'}">${minOrd}</span></td>`;
     } else if (item.type === 'mm_op') {
       typeBadge = '<span class="badge badge-warning">Multimode Operator</span>';
       dispCell = `<td style="text-align: center; color: var(--text-secondary);">&ndash;</td>`;
+      savedOrderCell = '<td><span class="badge badge-gray">Any</span></td>';
+      lowestOrderCell = '<td><span class="badge badge-gray">0</span></td>';
       if (item.mmKind === 'COP') {
-        attrStr = isDc ? 'MultimodeCOP: &Sigma; a<sub>1</sub> a<sub>2</sub> (dc=True)' : 'MultimodeCOP: &Sigma; a<sub>0</sub> a<sub>1</sub><sup>&dagger;</sup> (dc=False)';
+        attrOrDef = isDc ? 'MultimodeCOP: Σ a1 a2 (dc=True)' : 'MultimodeCOP: Σ a0 a1† (dc=False)';
       } else {
-        attrStr = isDc ? 'MultimodeNum2: &Sigma; (1 + N<sub>1</sub> + N<sub>2</sub>) (dc=True)' : 'MultimodeNum2: &Sigma; (N<sub>1</sub> &minus; N<sub>0</sub>) (dc=False)';
+        attrOrDef = isDc ? 'MultimodeNum2: Σ (1 + N1 + N2) (dc=True)' : 'MultimodeNum2: Σ (N1 - N0) (dc=False)';
       }
     } else if (item.type === 'named_expr') {
       typeBadge = '<span class="badge badge-gray">Saved Expression</span>';
-      attrStr = `<code style="font-size:0.85rem; color:#475569;">${escapeHtml(item.exprStr)}</code>`;
+      if (typeof item.order === 'number') {
+        const isLower = item.order < orderVal;
+        if (isLower) {
+          tr.classList.add('row-warning');
+          savedOrderCell = `<td><span class="badge badge-warning" title="Saved at order ${item.order}, lower than current global order ${orderVal}">${item.order}</span></td>`;
+        } else {
+          savedOrderCell = `<td><span class="badge badge-info" title="Saved at order ${item.order}">${item.order}</span></td>`;
+        }
+      } else {
+        savedOrderCell = '<td><span class="badge badge-gray">N/A</span></td>';
+      }
+      const minOrd = (typeof item.lowestOrder === 'number') ? item.lowestOrder : (typeof item.lowest_order === 'number' ? item.lowest_order : 0);
+      lowestOrderCell = `<td><span class="badge badge-gray">${minOrd}</span></td>`;
+      attrOrDef = (item.exprStr_t || item.exprStr_g)
+        ? `[Time Form (t)]:\n${item.exprStr_t || item.exprStr}\n\n[Gain Form (g)]:\n${item.exprStr_g || item.exprStr}`
+        : (item.exprStr || '');
       dispCell = `<td style="text-align: center; color: var(--text-secondary);">&ndash;</td>`;
     }
+
+    attachRowTooltip(tr, attrOrDef, 'Click to edit');
 
     tr.innerHTML = `
       <td>${typeBadge}</td>
       <td><strong>${escapeHtml(item.name)}</strong></td>
       ${dispCell}
-      <td>${attrStr}</td>
+      ${savedOrderCell}
+      ${lowestOrderCell}
       <td>${notesStr}</td>
       <td>
         <div class="btn-group">
           <button class="btn btn-secondary btn-sm" title="Insert identifier into expression input at cursor position" onclick="insertIntoInput('combo-input', '${escapeHtml(item.name)}')">Insert</button>
-          <button class="btn btn-secondary btn-sm" title="Edit identifier name, attributes, display text, or notes" onclick="editItem('${item.id}', 'tab3')">Edit</button>
           <button class="btn btn-secondary btn-sm" style="color:var(--danger);" title="Delete this entry from the table" onclick="deleteItem('${item.id}', 'tab3')">Delete</button>
         </div>
       </td>
     `;
+
+    tr.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      editItem(item.id, 'tab3');
+    });
 
     tr.addEventListener('contextmenu', (e) => {
       e.preventDefault();
@@ -1508,11 +2000,12 @@ function renderComboTable() {
 function onComboPresetChange() {
   renderComboTable();
   const isDc = document.getElementById('combo-dc').value === 'true';
+  const isMismatch = document.getElementById('combo-mismatch') ? (document.getElementById('combo-mismatch').value === 'true') : false;
   const orderVal = document.getElementById('combo-order').value;
   const useGain = document.getElementById('combo-gain').checked;
   const tag = document.getElementById('combo-mode-tag');
   if (tag) {
-    tag.textContent = `dc=${isDc ? 'True' : 'False'} | order=${orderVal} | ${useGain ? 'gain (g)' : 'time (t)'} | _ind`;
+    tag.textContent = `dc=${isDc ? 'True' : 'False'} | mismatch=${isMismatch ? 'True' : 'False'} | order=${orderVal} | ${useGain ? 'gain (g)' : 'time (t)'} | _ind`;
   }
 }
 
@@ -1537,6 +2030,7 @@ window.addEventListener('click', (e) => {
 
 // Context Menu Handling
 function showContextMenu(e, item, ws) {
+  hideRowTooltip();
   contextMenuItem = item;
   activeWorkspace = ws || 'tab2';
   const inputId = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4') ? 'combo-input' : 'pf-input';
@@ -1560,8 +2054,9 @@ function showContextMenu(e, item, ws) {
       <button class="danger" onclick="deleteItem('${item.id}', '${activeWorkspace}')">Delete Operator</button>
     `;
   } else if (item.type === 'mm_op' || item.type === 'named_expr') {
+    const editLabel = item.type === 'named_expr' ? 'View Definition & Edit' : 'Rename & Edit Notes';
     menu.innerHTML = `
-      <button onclick="openRenameModal('${item.id}', '${activeWorkspace}')">Rename & Edit Notes</button>
+      <button onclick="openRenameModal('${item.id}', '${activeWorkspace}')">${editLabel}</button>
       <button onclick="insertIntoInput('${inputId}', '${item.name}')">Insert into Input</button>
       <div class="context-menu-divider"></div>
       <button class="danger" onclick="deleteItem('${item.id}', '${activeWorkspace}')">Delete Item</button>
@@ -1792,7 +2287,8 @@ function openSaveAnswerModal(ws) {
   activeWorkspace = ws || 'tab2';
   document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
   const title = document.getElementById('saveAnswerModalTitle');
-  const bothGroup = document.getElementById('combo-save-both-group');
+  const orderInfo = document.getElementById('combo-save-order-info');
+  const orderInput = document.getElementById('combo-order');
 
   if (activeWorkspace === 'tab3' || activeWorkspace === 'tab4') {
     if (!currentComboLatex || !currentComboExpr) {
@@ -1802,10 +2298,17 @@ function openSaveAnswerModal(ws) {
     title.textContent = 'Save Answer Area Expression (Tab 3)';
     document.getElementById('ne-name').value = '';
     document.getElementById('ne-notes').value = '';
-    if (bothGroup) bothGroup.style.display = 'block';
-    const bothCheck = document.getElementById('combo-save-both');
-    if (bothCheck) bothCheck.checked = true;
-    updateComboSaveAnswerPreview();
+    if (orderInfo && orderInput) {
+      orderInfo.style.display = 'block';
+      const leadingOrd = (cachedComboResult && typeof cachedComboResult.leading_order === 'number') ? cachedComboResult.leading_order : 0;
+      document.getElementById('combo-save-order-val').textContent = `${orderInput.value} (Leading Order: ${leadingOrd})`;
+    }
+    const preview = document.getElementById('ne-expr-preview');
+    if (cachedComboResult) {
+      preview.value = `[Time Form (t)]:\n${cachedComboResult.expr_str_t}\n\n[Gain Form (g)]:\n${cachedComboResult.expr_str_g}`;
+    } else {
+      preview.value = currentComboExpr;
+    }
     document.getElementById('saveAnswerModal').classList.add('active');
   } else {
     if (!currentPatternFormLatex || !currentPatternFormExpr) {
@@ -1815,25 +2318,10 @@ function openSaveAnswerModal(ws) {
     title.textContent = 'Save Answer Area PF as Variable (Tab 2)';
     document.getElementById('ne-name').value = '';
     document.getElementById('ne-notes').value = '';
-    if (bothGroup) bothGroup.style.display = 'none';
+    if (orderInfo) orderInfo.style.display = 'none';
     document.getElementById('ne-expr-preview').value = currentPatternFormExpr;
     document.getElementById('saveAnswerModal').classList.add('active');
   }
-}
-
-function updateComboSaveAnswerPreview() {
-  if (activeWorkspace !== 'tab3' && activeWorkspace !== 'tab4') return;
-  const bothCheck = document.getElementById('combo-save-both');
-  const preview = document.getElementById('ne-expr-preview');
-  if (bothCheck && bothCheck.checked && cachedComboResult) {
-    preview.value = `[Time Form (t)]:\n${cachedComboResult.expr_str_t}\n\n[Gain Form (g)]:\n${cachedComboResult.expr_str_g}`;
-  } else {
-    preview.value = currentComboExpr;
-  }
-}
-
-function onComboSaveBothToggle() {
-  updateComboSaveAnswerPreview();
 }
 
 function saveAnswerExpression() {
@@ -1847,47 +2335,63 @@ function saveAnswerExpression() {
   }
 
   const arr = getWorkspaceArray(activeWorkspace);
+  const isComboWs = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
+  const currentComboOrder = (isComboWs && document.getElementById('combo-order'))
+    ? parseInt(document.getElementById('combo-order').value)
+    : null;
 
-  if ((activeWorkspace === 'tab3' || activeWorkspace === 'tab4') && document.getElementById('combo-save-both') && document.getElementById('combo-save-both').checked && cachedComboResult) {
-    const nameT = `${name}_t`;
-    const nameG = `${name}_g`;
-    const checkT = validateVariableName(nameT);
-    const checkG = validateVariableName(nameG);
-    if (!checkT.valid || !checkG.valid) {
-      alert('Generated variable names with suffixes _t or _g are invalid Python identifiers.');
+  if (isComboWs) {
+    const exprT = cachedComboResult ? cachedComboResult.expr_str_t : currentComboExpr;
+    const exprG = cachedComboResult ? cachedComboResult.expr_str_g : currentComboExpr;
+    const latexT = cachedComboResult ? cachedComboResult.latex_t : currentComboLatex;
+    const latexG = cachedComboResult ? cachedComboResult.latex_g : currentComboLatex;
+    const useGain = document.getElementById('combo-gain') ? document.getElementById('combo-gain').checked : false;
+    const activeExpr = useGain ? exprG : exprT;
+
+    const lowestOrdVal = (cachedComboResult && typeof cachedComboResult.lowest_order === 'number') ? cachedComboResult.lowest_order : 0;
+
+    const dupIndex = arr.findIndex(x => x.name === name);
+    if (dupIndex !== -1) {
+      const doOverwrite = confirm(`Identifier '${name}' already exists in the table. Do you want to overwrite its definition?`);
+      if (!doOverwrite) return;
+      arr[dupIndex] = {
+        id: arr[dupIndex].id,
+        type: 'named_expr',
+        name: name,
+        displayName: '',
+        exprStr: activeExpr,
+        exprStr_t: exprT,
+        exprStr_g: exprG,
+        latex_t: latexT,
+        latex_g: latexG,
+        order: currentComboOrder,
+        lowestOrder: lowestOrdVal,
+        notes: notes
+      };
+      saveWorkspaceToStorage(activeWorkspace);
+      closeModal('saveAnswerModal');
+      showToast(`Expression '${name}' overwritten successfully!`);
       return;
     }
 
-    function upsertComboItem(varName, exprVal, noteSuffix) {
-      const fullNotes = notes ? `${notes} (${noteSuffix})` : noteSuffix;
-      const dupIndex = arr.findIndex(x => x.name === varName);
-      if (dupIndex !== -1) {
-        arr[dupIndex] = {
-          id: arr[dupIndex].id,
-          type: 'named_expr',
-          name: varName,
-          displayName: '',
-          exprStr: exprVal,
-          notes: fullNotes
-        };
-      } else {
-        arr.push({
-          id: String(Date.now() + Math.random()),
-          type: 'named_expr',
-          name: varName,
-          displayName: '',
-          exprStr: exprVal,
-          notes: fullNotes
-        });
-      }
-    }
-
-    upsertComboItem(nameT, cachedComboResult.expr_str_t, 'time representation t');
-    upsertComboItem(nameG, cachedComboResult.expr_str_g, 'parametric gain representation g');
+    arr.push({
+      id: String(Date.now()),
+      type: 'named_expr',
+      name: name,
+      displayName: '',
+      exprStr: activeExpr,
+      exprStr_t: exprT,
+      exprStr_g: exprG,
+      latex_t: latexT,
+      latex_g: latexG,
+      order: currentComboOrder,
+      lowestOrder: lowestOrdVal,
+      notes: notes
+    });
 
     saveWorkspaceToStorage(activeWorkspace);
     closeModal('saveAnswerModal');
-    showToast(`Saved both '${nameT}' and '${nameG}' to Tab 3 table!`);
+    showToast(`Expression successfully saved as variable '${name}'!`);
     return;
   }
 
@@ -1937,6 +2441,27 @@ function openRenameModal(itemId, ws) {
   activeEditItem = item;
   document.getElementById('rename-input').value = item.name;
   document.getElementById('rename-notes').value = item.notes || '';
+
+  const defGroup = document.getElementById('rename-def-group');
+  const defPreview = document.getElementById('rename-def-preview');
+  if (defGroup && defPreview) {
+    if (item.type === 'named_expr') {
+      defGroup.style.display = 'block';
+      if (item.exprStr_t || item.exprStr_g) {
+        defPreview.value = `[Time Form (t)]:\n${item.exprStr_t || item.exprStr}\n\n[Gain Form (g)]:\n${item.exprStr_g || item.exprStr}`;
+      } else {
+        defPreview.value = item.exprStr || '';
+      }
+    } else {
+      defGroup.style.display = 'none';
+    }
+  }
+
+  const title = document.getElementById('renameModalTitle');
+  if (title) {
+    title.textContent = item.type === 'named_expr' ? 'View Definition & Edit Expression' : 'Edit Identifier & Notes';
+  }
+
   document.getElementById('renameModal').classList.add('active');
 }
 
@@ -1964,6 +2489,7 @@ function applyRename() {
 }
 
 function editItem(id, ws) {
+  hideRowTooltip();
   activeWorkspace = ws || 'tab2';
   const arr = getWorkspaceArray(activeWorkspace);
   const item = arr.find(x => x.id === id);
@@ -1979,12 +2505,27 @@ function editItem(id, ws) {
 
 function deleteItem(id, ws) {
   activeWorkspace = ws || 'tab2';
-  if (activeWorkspace === 'tab3' || activeWorkspace === 'tab4') {
+  const isCombo = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
+  const arr = isCombo ? comboTableItems : tableItems;
+  const item = arr.find(x => x.id === id);
+  if (!item) return;
+
+  if (isCombo && (item.type === 'evolved_op' || ['a_p', 'a_s', 'a_i'].includes(item.name))) {
+    const confirmed = confirm(
+      `Warning: '${item.name}' is an essential base operator for Three-Wave Mixing calculations.\n` +
+      `Are you sure you want to delete it?\n` +
+      `(Note: You can recover it anytime using the "Restore Base Solutions" button).`
+    );
+    if (!confirmed) return;
+  }
+
+  if (isCombo) {
     comboTableItems = comboTableItems.filter(x => x.id !== id);
   } else {
     tableItems = tableItems.filter(x => x.id !== id);
   }
   saveWorkspaceToStorage(activeWorkspace);
+  showToast(`'${item.name}' deleted.`);
 }
 
 // ----------------------------------------------------
@@ -2080,6 +2621,59 @@ function onComboGainChange() {
   }
 }
 
+let orderWarningResolver = null;
+
+function escapeRegExp(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getReferencedNamedExprs(exprText, allNamedExprs) {
+  const referenced = new Set();
+  const queue = [exprText];
+  const visitedNames = new Set();
+
+  while (queue.length > 0) {
+    const currentText = queue.shift();
+    for (const ne of allNamedExprs) {
+      if (!visitedNames.has(ne.name)) {
+        const re = new RegExp(`\\b${escapeRegExp(ne.name)}\\b`);
+        if (re.test(currentText)) {
+          visitedNames.add(ne.name);
+          referenced.add(ne);
+          const childExpr = ne.exprStr_t || ne.exprStr;
+          if (childExpr) {
+            queue.push(childExpr);
+          }
+        }
+      }
+    }
+  }
+  return Array.from(referenced);
+}
+
+function confirmOrderWarning(lowerOrderItems, targetOrder) {
+  return new Promise((resolve) => {
+    orderWarningResolver = resolve;
+    document.getElementById('warn-target-order').textContent = targetOrder;
+    const list = document.getElementById('warn-var-list');
+    list.innerHTML = lowerOrderItems.map(item => 
+      `<div style="margin-bottom: 0.35rem; color: #92400e;">` +
+      `&bull; <strong>${escapeHtml(item.name)}</strong>: recorded at <strong>Order ${item.order}</strong> (target is <strong>Order ${targetOrder}</strong>)` +
+      `</div>`
+    ).join('');
+    document.getElementById('orderWarningModal').classList.add('active');
+  });
+}
+
+function closeOrderWarningModal(proceed) {
+  document.getElementById('orderWarningModal').classList.remove('active');
+  if (orderWarningResolver) {
+    const res = orderWarningResolver;
+    orderWarningResolver = null;
+    res(proceed);
+  }
+}
+
 async function runCombination() {
   const input = document.getElementById('combo-input').value.trim();
   const output = document.getElementById('combo-output');
@@ -2092,16 +2686,33 @@ async function runCombination() {
   }
 
   const isDc = document.getElementById('combo-dc').value === 'true';
+  const isMismatch = document.getElementById('combo-mismatch') ? (document.getElementById('combo-mismatch').value === 'true') : false;
   const orderVal = parseInt(document.getElementById('combo-order').value);
   const useGain = document.getElementById('combo-gain').checked;
 
-  if (isNaN(orderVal) || orderVal < -1) {
+  if (isNaN(orderVal)) {
     output.classList.add('error');
-    output.textContent = 'Please enter a valid retained order (integer ≥ -1)!';
+    output.textContent = 'Please enter a valid retained order (integer)!';
     return;
   }
 
   onComboPresetChange();
+
+  // Check if target order is higher than the evaluated order of any referenced named expressions
+  const allNamedExprs = comboTableItems.filter(x => x.type === 'named_expr');
+  const referencedNamedExprs = getReferencedNamedExprs(input, allNamedExprs);
+  const lowerOrderItems = referencedNamedExprs.filter(
+    item => typeof item.order === 'number' && item.order < orderVal
+  );
+
+  if (lowerOrderItems.length > 0) {
+    const proceed = await confirmOrderWarning(lowerOrderItems, orderVal);
+    if (!proceed) {
+      output.innerHTML = '<span style="color: var(--text-secondary);">Calculation cancelled due to order inconsistency.</span>';
+      return;
+    }
+  }
+
   output.innerHTML = '<span style="color: var(--text-secondary);">Calculating operator combination...</span>';
 
   const symbols = comboTableItems.filter(x => x.type === 'symbol').map(s => ({
@@ -2128,7 +2739,11 @@ async function runCombination() {
 
   const namedExprs = comboTableItems.filter(x => x.type === 'named_expr').map(ne => ({
     name: ne.name,
-    expr_str: ne.exprStr
+    expr_str: useGain ? (ne.exprStr_g || ne.exprStr) : (ne.exprStr_t || ne.exprStr),
+    expr_str_t: ne.exprStr_t || ne.exprStr,
+    expr_str_g: ne.exprStr_g || ne.exprStr,
+    order: ne.order,
+    lowest_order: typeof ne.lowestOrder === 'number' ? ne.lowestOrder : (ne.lowest_order ?? 0)
   }));
 
   try {
@@ -2138,6 +2753,7 @@ async function runCombination() {
       body: JSON.stringify({
         text: input,
         dc: isDc,
+        mismatch: isMismatch,
         order: orderVal,
         use_gain: useGain,
         symbols: symbols,
@@ -2163,6 +2779,14 @@ async function runCombination() {
 // Initialization
 document.addEventListener('DOMContentLoaded', () => {
   renderTable();
+  const isMismatch = document.getElementById('combo-mismatch') ? (document.getElementById('combo-mismatch').value === 'true') : false;
+  if (!isMismatch) {
+    const pmIdx = comboTableItems.findIndex(x => x.builtinKey === 'pm' || (x.type === 'symbol' && x.name === 'pm'));
+    if (pmIdx !== -1) {
+      comboTableItems.splice(pmIdx, 1);
+      saveComboTableItemsToStorage();
+    }
+  }
   renderComboTable();
   onModeTypeChange();
   onComboPresetChange();
