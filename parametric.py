@@ -11,6 +11,7 @@ from sympy.functions.elementary.exponential import exp
 from sympy.concrete.summations import Sum
 from sympy.physics.quantum.operator import Operator, HermitianOperator
 from sympy.core.traversal import bottom_up
+from sympy.core.containers import Dict
 from op_patterns.boson_pattern import BosonNum
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.dagger import Dagger
@@ -444,7 +445,7 @@ class TWMSolver:
                          f_dict({a_s: {(None,): PF0}, Dagger(a_i): {(None,): PF0}}, b_left=False),
                          f_dict({Dagger(a_s): {(None,): PF0}, a_i: {(None,): PF0}}))]
             self.gc = (nlc**2*self.nd-self.pm**2/4)**S.Half
-            pe = PE({a_p.name: S.NegativeOne, nlc: S.One})
+            self.base_assumptions = {a_p.name: S.NegativeOne, nlc: S.One}
         else:
             self.nd = BosonNum(a_i.name)
             self.a = (MultimodeCOP(a_p.name, a_s.name, 1, 0),
@@ -453,15 +454,19 @@ class TWMSolver:
                          f_dict({a_p: {(None,): PF0}, a_s: {(None,): PF0}}),
                          {(None,): PF({((a_i,), ()): S.One})})]
             self.gc = (nlc**2*self.nd+self.pm**2/4)**S.Half
-            pe = PE({a_i.name: S.NegativeOne, nlc: S.One})
-        pe.register(MultimodeNum)
-        pe.register(MultimodeNum2)
-        pe.register(MultimodeCOP)
+            self.base_assumptions = {a_i.name: S.NegativeOne, nlc: S.One}
+        self.pe = PE(dict(self.base_assumptions))
+        self.pe.register(MultimodeNum)
+        self.pe.register(MultimodeNum2)
+        self.pe.register(MultimodeCOP)
+        from op_patterns import FermionPat
+        self.pe.rc.discard(FermionPat)
+        self.pe.rp[FermionPat] = ('name', lambda p: Add(*p.exps))
         # d/dt a_drive / (-i χ) for the last solved order
         self.dd_last = {(None,): PF0}
         # Standard expansion of an expression up to the given order
         self.expand = (lambda pf, order:
-                       pe.expand_pf(pf, order).n_apply(lambda t:
+                       self.pe.expand_pf(pf, order).n_apply(lambda t:
                                                          t.subs({t_: _g/self.gc})))
         # Homogeneous solutions to the time differential equations
         @cache
@@ -482,6 +487,17 @@ class TWMSolver:
                 return PF({((Dagger(a_i),),()): dsd2(self.gc*t_, dict(), False,
                                                         S.Zero, -I*nlc/self.gc)})
         self.fdf0 = _fdf0
+    def update_pe(self, orders: dict = None):
+        """Update self.pe assumptions with custom symbol/mode orders."""
+        assumptions = dict(self.base_assumptions)
+        if orders:
+            for k, v in orders.items():
+                if v is not None:
+                    assumptions[k] = sympify(v)
+        self.pe.assumptions = Dict(assumptions)
+        self.pe._lo_cache.clear()
+        self.pe._subs_cache.clear()
+
     def to_expr(self, x):
         """
         Converts the class representation into expression.

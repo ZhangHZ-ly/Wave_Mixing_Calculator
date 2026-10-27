@@ -3,7 +3,7 @@ from .pattern_form import *
 from .perturb_expander import *
 from .state_eval import *
 
-__all__ = ['bsc', 'fsc', 'PF', 'pf', 'PE', 'cohr_avr']
+__all__ = ['bsc', 'fsc', 'PF', 'pf', 'PE', 'cohr_avr', 'Pat', 'pattern']
 
 bsc = BosonSortContext
 fsc = FermionSortContext

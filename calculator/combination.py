@@ -1,582 +1,42 @@
 from __future__ import annotations
 import ast
-import keyword
-import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from dsolve_pm import d_p2s
 from op_patterns import BosonNum, BosonPat, FermionPat
-from perturb_eval import pattern_form, PF, PFTableProcessor
 from parametric import (
-    TWMSolver, f_dict, d_apply, t_, _g, _nd, _ps, nlc, pm,
+    TWMSolver, f_dict, d_apply, t_, _g, nlc, pm,
     a_p, a_s, a_i, MultimodeNum, MultimodeNum2, MultimodeCOP
 )
-from dsolve_pm import d_p2s
+from perturb_eval import pattern_form, PF, PE, Pat
 from sympy.core.expr import Expr
 from sympy.core.function import diff
-from sympy.core.mul import Mul
 from sympy.core.numbers import I, Integer, pi
 from sympy.core.singleton import S
 from sympy.core.symbol import Symbol
-from sympy.core.traversal import bottom_up
+from sympy.core.sympify import sympify
 from sympy.functions.elementary.exponential import exp
 from sympy.functions.elementary.hyperbolic import cosh, sinh, tanh
 from sympy.functions.elementary.miscellaneous import sqrt
 from sympy.functions.elementary.trigonometric import cos, sin
-from sympy.parsing.sympy_parser import (
-    convert_xor,
-    implicit_multiplication_application,
-    parse_expr,
-    standard_transformations,
-)
+from sympy.parsing.sympy_parser import parse_expr
 from sympy.physics.quantum.boson import BosonOp
-from sympy.physics.quantum.dagger import Dagger
 from sympy.physics.quantum.fermion import FermionOp
 from sympy.printing.latex import latex
-from sympy.core.sympify import sympify
 
-TRANSFORMS = standard_transformations + (implicit_multiplication_application, convert_xor)
+from .common import (
+    TRANSFORMS,
+    is_valid_variable_name,
+    expr_to_code_str,
+    g_hat,
+)
+from .twm_transforms import t_to_g, g_to_t
 
 # Cached TWMSolver instances indexed by [dc][mismatch]
 SOLVERS = (
     (TWMSolver(False, False), TWMSolver(False, True)),
     (TWMSolver(True, False), TWMSolver(True, True)),
 )
-
-# Parametric gain operator symbol \hat{g} (non-commutative to preserve operator ordering)
-g_hat = Symbol(r'\hat{g}', commutative=False)
-
-
-RESERVED_NAMES = {
-    # Constants
-    'i', 'I', 'pi', 'PI', 'e', 'E',
-    # Elementary functions
-    'exp', 'sin', 'cos', 'tan', 'cot', 'sec', 'csc',
-    'sinh', 'cosh', 'tanh', 'coth',
-    'asin', 'acos', 'atan', 'asinh', 'acosh', 'atanh',
-    'sqrt', 'log', 'ln',
-    # Quantum macros / operators
-    'dag', 'Dagger', 'dagger', 'BosonNum', 'N_', 'BP', 'FP',
-    'BosonPat', 'FermionPat', 'BosonOp', 'FermionOp',
-    'MMN', 'MMN2', 'MMC',
-}
-
-
-def is_valid_variable_name(name: str) -> Tuple[bool, str]:
-    """Validate whether name conforms to Python identifier rules and does not conflict with keywords or built-in functions/constants."""
-    if not name or not isinstance(name, str):
-        return False, "Identifier cannot be empty."
-    name = name.strip()
-    if not name.isidentifier():
-        return False, f"'{name}' is not a valid Python identifier."
-    if keyword.iskeyword(name):
-        return False, f"'{name}' is a reserved Python keyword."
-    if name in RESERVED_NAMES:
-        return False, f"'{name}' conflicts with a built-in constant or mathematical function ({name})."
-    return True, ""
-
-
-def is_valid_python_name(name: str) -> bool:
-    """Validate whether name conforms to Python identifier rules and does not conflict with keywords or built-ins."""
-    return is_valid_variable_name(name)[0]
-
-
-def expr_to_code_str(e: Expr, dc: bool = True) -> str:
-    """
-    Convert a SymPy quantum operator expression (from PF.expr() or TWMSolver.to_expr())
-    into a valid Python expression string that can be parsed back by parse_expr.
-    """
-    if e == 0 or e == S.Zero:
-        return "0"
-    if e == 1 or e == S.One:
-        return "1"
-
-    s_Nt = Symbol('N_t', commutative=False)
-    s_A = Symbol('A', commutative=False)
-    s_dagA = Symbol('dag(A)', commutative=False)
-    s_t = Symbol('t', real=True)
-    s_g = Symbol('g', commutative=False)
-    s_nlc = Symbol('nlc', real=True, nonnegative=True)
-    s_pm = Symbol('pm', real=True)
-
-    mmc_ann = MultimodeCOP(a_s.name, a_i.name) if dc else MultimodeCOP(a_p.name, a_s.name, 1)
-    mmc_cre = Dagger(mmc_ann)
-
-    def _rec(x):
-        if isinstance(x, MultimodeCOP):
-            if x == mmc_ann:
-                return s_A
-            if x == mmc_cre:
-                return s_dagA
-        if isinstance(x, MultimodeNum2):
-            if x.displacement == 0:
-                return s_Nt
-            return Symbol(f'MMN2({x.displacement})', commutative=False)
-        if isinstance(x, MultimodeNum):
-            if x.displacement == 0:
-                return Symbol(f'MMN({x.name})', commutative=False)
-            return Symbol(f'MMN({x.name}, {x.displacement})', commutative=False)
-        if isinstance(x, BosonNum):
-            return Symbol(f'N_({x.name})', commutative=False)
-        if isinstance(x, (BosonOp, FermionOp)):
-            return Symbol(str(x.name), commutative=False) if x.is_annihilation else Symbol(f'dag({x.name})', commutative=False)
-        if isinstance(x, (BosonPat, FermionPat)):
-            factors = []
-            is_ann = x.left_base.is_annihilation
-            for exp_val in x.exps:
-                op_sym = Symbol(str(x.name), commutative=False) if is_ann else Symbol(f'dag({x.name})', commutative=False)
-                factors.append(op_sym ** exp_val if exp_val != 1 else op_sym)
-                is_ann = not is_ann
-            return Mul(*factors)
-        if isinstance(x, Dagger):
-            inner = _rec(x.args[0])
-            return Symbol(f'dag({inner})', commutative=False)
-        if x == t_:
-            return s_t
-        if x == g_hat or x == _g:
-            return s_g
-        if x == nlc:
-            return s_nlc
-        if x == pm:
-            return s_pm
-        if not getattr(x, 'args', None):
-            return x
-        return x.func(*(_rec(a) for a in x.args))
-
-    return str(_rec(sympify(e)))
-
-
-def t_to_g(obj, dc: bool = True, mismatch: bool = False):
-    r"""
-    Convert time variable t_ to parametric gain operator \hat{g} / gc
-    and simplify commutative number-operator expressions.
-    Independent of TWMSolver; only requires dc and mismatch to identify the driving mode and effective coupling.
-    """
-    nd = BosonNum(a_p.name if dc else a_i.name)
-    if mismatch:
-        gc = (nlc**2 * nd - pm**2 / 4)**S.Half if dc else (nlc**2 * nd + pm**2 / 4)**S.Half
-    else:
-        gc = nlc * nd ** S.Half
-
-    def _simp_n(expr):
-        if not isinstance(expr, Expr):
-            return expr
-        expr = expr.subs({t_: g_hat / gc, _g: g_hat})
-
-        def _combine(e):
-            if e.is_Mul:
-                n_part = []
-                other = []
-                for arg in Mul.make_args(e.subs({nd: _nd, g_hat: _g})):
-                    if arg.has(_nd, _g):
-                        n_part.append(arg)
-                    else:
-                        other.append(arg)
-                if n_part:
-                    simp_n = _ps(Mul(*n_part)).subs({_nd: nd, _g: g_hat})
-                    e = Mul(*other, simp_n)
-            return _ps(e)
-
-        return bottom_up(expr, _combine)
-
-    if isinstance(obj, (PF, dict, f_dict)):
-        return d_apply(obj, _simp_n)
-    return _simp_n(obj)
-
-
-def g_to_t(obj, dc: bool = True, mismatch: bool = False):
-    r"""
-    Inverse of t_to_g: convert parametric gain operator \hat{g} back to gc * t_
-    and simplify commutative number-operator expressions.
-    Independent of TWMSolver; only requires dc and mismatch to identify the driving mode and effective coupling.
-    """
-    nd = BosonNum(a_p.name if dc else a_i.name)
-    if mismatch:
-        gc = (nlc**2 * nd - pm**2 / 4)**S.Half if dc else (nlc**2 * nd + pm**2 / 4)**S.Half
-    else:
-        gc = nlc * nd ** S.Half
-
-    def _simp_n(expr):
-        if not isinstance(expr, Expr):
-            return expr
-        expr = expr.subs({g_hat: gc * t_, _g: gc * t_})
-
-        def _combine(e):
-            if e.is_Mul:
-                n_part = []
-                other = []
-                for arg in Mul.make_args(e.subs({nd: _nd})):
-                    if arg.has(_nd):
-                        n_part.append(arg)
-                    else:
-                        other.append(arg)
-                if n_part:
-                    simp_n = _ps(Mul(*n_part)).subs({_nd: nd})
-                    e = Mul(*other, simp_n)
-            return _ps(e)
-
-        return bottom_up(expr, _combine)
-
-    if isinstance(obj, (PF, dict, f_dict)):
-        return d_apply(obj, _simp_n)
-    return _simp_n(obj)
-
-
-def eval_single_mode(mode_type: str, name: str, first_op: str, exp_str: str, action: str) -> Tuple[str, bool, str]:
-    """
-    Evaluates single-mode quantum operator product (BosonPat or FermionPat).
-    Returns: (latex_str, is_hermitian, expr_str)
-    """
-    name = (name or '').strip()
-    if not name:
-        name = 'a' if mode_type == 'boson' else 'c'
-    is_ann = (first_op == 'annihilation')
-    exps = [int(x) for x in re.findall(r'\d+', exp_str or '')]
-
-    if mode_type == 'boson':
-        if not exps or all(e == 0 for e in exps):
-            orig = patform = norm = S.One
-            is_hermitian = True
-        else:
-            orig = BosonPat(name, is_ann, *exps, eval_exp=False)
-            if isinstance(orig, BosonOp):
-                patform = norm = orig
-                is_hermitian = False
-            elif isinstance(orig, BosonNum):
-                patform = norm = orig
-                is_hermitian = True
-            else:
-                patform = orig.rewrite(BosonNum)
-                norm = orig.to_normal_order(via_dict=True).rewrite(BosonOp)
-                is_hermitian = (getattr(orig, 'parity_diff', None) == 0)
-
-        target = orig if action == 'original' else (patform if action == 'patform' else norm)
-        return latex(target), is_hermitian, expr_to_code_str(target)
-
-    else:  # fermion
-        if not exps or all(e == 0 for e in exps):
-            orig = simp = norm = S.One
-            is_hermitian = True
-        else:
-            orig = FermionPat(name, is_ann, *exps, eval_exp=False)
-            simp = orig.doit()
-            if simp == 0:
-                norm = S.Zero
-                is_hermitian = True
-            elif simp == 1:
-                norm = S.One
-                is_hermitian = True
-            elif isinstance(simp, FermionOp):
-                norm = simp
-                is_hermitian = False
-            elif isinstance(simp, FermionPat) and simp.exps == (1, 1):
-                if simp.left_base.is_annihilation:
-                    # c c† -> 1 - c† c
-                    norm = 1 - FermionPat(name, False, 1, 1)
-                    is_hermitian = True
-                else:
-                    norm = simp
-                    is_hermitian = True
-            else:
-                norm = simp
-                is_hermitian = (getattr(simp, 'is_hermitian', None) is True)
-
-        target = orig if action == 'original' else (simp if action == 'patform' else norm)
-        target_str = _fermion_target_to_expr_str(target, name)
-        return latex(target), is_hermitian, target_str
-
-
-def _fermion_target_to_expr_str(target, name: str) -> str:
-    """Format single-mode fermion result into a valid Python expression string for Tab 2."""
-    if target == 0 or target == S.Zero:
-        return "0"
-    if target == 1 or target == S.One:
-        return "1"
-    if isinstance(target, FermionOp):
-        return name if target.is_annihilation else f"dag({name})"
-    if isinstance(target, FermionPat) and target.exps == (1, 1):
-        if target.left_base.is_annihilation:
-            return f"{name} * dag({name})"
-        else:
-            return f"dag({name}) * {name}"
-    try:
-        norm_test = 1 - FermionPat(name, False, 1, 1)
-        if target == norm_test:
-            return f"1 - dag({name}) * {name}"
-    except Exception:
-        pass
-    return expr_to_code_str(target)
-
-
-class PFWrapper:
-    """
-    Wrapper around PFTableProcessor to support operator algebra expressions
-    via PFTableProcessor's add, mul_ind/mul_res, and power_ind/power_res methods.
-    """
-    def __init__(self, pf: PFTableProcessor, res=S.Zero, use_res: bool = False):
-        self.pf = pf
-        self.res = res
-        self.use_res = use_res
-
-    @classmethod
-    def from_val(cls, val, use_res: bool = False):
-        if isinstance(val, PFWrapper):
-            val.use_res = use_res
-            return val
-        if isinstance(val, PFTableProcessor):
-            return cls(val, use_res=use_res)
-        expr = sympify(val)
-        if getattr(expr, 'is_commutative', True) or not expr.has(BosonOp, BosonPat, FermionOp, FermionPat):
-            return cls(PFTableProcessor({((), ()): expr}), use_res=use_res)
-        pf = pattern_form(expr, as_dict=None)
-        return cls(pf, use_res=use_res)
-
-    def __add__(self, other):
-        other = PFWrapper.from_val(other, self.use_res)
-        new_pf = PFTableProcessor.add(self.pf, other.pf)
-        return PFWrapper(new_pf, self.res + other.res, self.use_res)
-
-    def __radd__(self, other):
-        return self.__add__(other)
-
-    def __sub__(self, other):
-        other = PFWrapper.from_val(other, self.use_res)
-        neg_table = {k: -v for k, v in other.pf.table.items()}
-        neg_pf = PFTableProcessor(neg_table, -other.pf.npf, other.pf._res_cache)
-        new_pf = PFTableProcessor.add(self.pf, neg_pf)
-        return PFWrapper(new_pf, self.res - other.res, self.use_res)
-
-    def __rsub__(self, other):
-        return PFWrapper.from_val(other, self.use_res).__sub__(self)
-
-    def __neg__(self):
-        neg_table = {k: -v for k, v in self.pf.table.items()}
-        neg_pf = PFTableProcessor(neg_table, -self.pf.npf, self.pf._res_cache)
-        return PFWrapper(neg_pf, -self.res, self.use_res)
-
-    def __mul__(self, other):
-        other = PFWrapper.from_val(other, self.use_res)
-        if self.use_res or other.use_res:
-            new_pf, r = self.pf.mul_res(other.pf)
-            total_res = self.res + other.res + r
-            return PFWrapper(new_pf, total_res, True)
-        else:
-            new_pf = self.pf.mul_ind(other.pf)
-            return PFWrapper(new_pf, S.Zero, False)
-
-    def __rmul__(self, other):
-        other = PFWrapper.from_val(other, self.use_res)
-        return other.__mul__(self)
-
-    def __pow__(self, power):
-        if isinstance(power, PFWrapper):
-            if power.pf.npf == S.Zero and set(power.pf.table.keys()).issubset({((), ())}):
-                power = power.pf.table.get(((), ()), S.Zero)
-            else:
-                raise ValueError("Exponent must be a scalar or number-operator expression.")
-        p_sym = sympify(power)
-        if self.pf.npf == S.Zero and set(self.pf.table.keys()).issubset({((), ())}):
-            base_expr = self.pf.table.get(((), ()), S.Zero)
-            return PFWrapper(PFTableProcessor({((), ()): base_expr ** p_sym}), self.res, self.use_res)
-        if p_sym.is_Integer and p_sym >= 0:
-            exp_int = int(p_sym)
-            if self.use_res:
-                new_pf, r = self.pf.power_res(exp_int, self.res)
-                return PFWrapper(new_pf, r, True)
-            else:
-                new_pf = self.pf.power_ind(exp_int)
-                return PFWrapper(new_pf, S.Zero, False)
-        raise ValueError("Operator exponentiation only supports non-negative integers.")
-
-    def __truediv__(self, other):
-        if isinstance(other, PFWrapper):
-            if other.pf.npf == S.Zero and set(other.pf.table.keys()).issubset({((), ())}):
-                val = other.pf.table.get(((), ()), S.One)
-                return self.__mul__(PFWrapper.from_val(val ** S.NegativeOne, self.use_res))
-            raise ValueError("Division is only supported by scalar or number-operator expressions.")
-        return self.__mul__(PFWrapper.from_val(sympify(other) ** S.NegativeOne, self.use_res))
-
-    def __rtruediv__(self, other):
-        return PFWrapper.from_val(other, self.use_res).__truediv__(self)
-
-    def adjoint(self):
-        new_pf = self.pf.adjoint(res=self.use_res)
-        return PFWrapper(new_pf, self.res, self.use_res)
-
-    def diff(self, *symbols, **kwargs):
-        resolved = []
-        for s in symbols:
-            if isinstance(s, PFWrapper):
-                if s.pf.npf == S.Zero and set(s.pf.table.keys()).issubset({((), ())}):
-                    resolved.append(s.pf.table.get(((), ()), S.Zero))
-                else:
-                    raise ValueError(f"Cannot differentiate with respect to operator: {s}")
-            elif isinstance(s, str):
-                resolved.append(Symbol(s))
-            else:
-                resolved.append(s)
-
-        new_table = {}
-        for k, v in self.pf.table.items():
-            dv = diff(v, *resolved, **kwargs)
-            if dv != 0 and dv != S.Zero:
-                new_table[k] = dv
-        if not new_table and self.pf.npf == S.Zero:
-            new_table = {((), ()): S.Zero}
-        new_npf = diff(self.pf.npf, *resolved, **kwargs)
-        new_res = diff(self.res, *resolved, **kwargs) if self.res != S.Zero else S.Zero
-        return PFWrapper(PFTableProcessor(new_table, new_npf), new_res, self.use_res)
-
-    def Derivative(self, *symbols, **kwargs):
-        return self.diff(*symbols, **kwargs)
-
-    def expr(self):
-        return self.pf.expr()
-
-
-def eval_pattern_form(
-    text: str,
-    symbols: List[Dict[str, Any]],
-    operators: List[Dict[str, Any]],
-    named_expressions: List[Dict[str, Any]],
-    use_res: bool = False
-) -> Tuple[str, str, Optional[str], Optional[str]]:
-    """
-    Evaluates quantum expressions using PFTableProcessor add/mul/power arithmetic.
-    Returns: (latex_result, expr_str, residue_latex, residue_str)
-    """
-    text = (text or '').strip()
-    if not text:
-        raise ValueError("Expression input cannot be empty.")
-
-    def _make_boson_num(item):
-        if isinstance(item, PFWrapper):
-            name = str(item.pf.expr())
-        elif hasattr(item, 'name'):
-            name = str(item.name)
-        else:
-            name = str(item)
-        return PFWrapper.from_val(BosonNum(name), use_res)
-
-    def _wrap_fn(fn):
-        def _inner(item):
-            if isinstance(item, PFWrapper):
-                if item.pf.npf == S.Zero and set(item.pf.table.keys()).issubset({((), ())}):
-                    arg = item.pf.table.get(((), ()), S.Zero)
-                    return PFWrapper(PFTableProcessor({((), ()): fn(arg)}), item.res, use_res)
-                return PFWrapper.from_val(fn(item.pf.expr()), use_res)
-            return PFWrapper.from_val(fn(sympify(item)), use_res)
-        return _inner
-
-    local_dict: Dict[str, Any] = {
-        'i': I,
-        'I': I,
-        'pi': pi,
-        'e': exp(1),
-        'exp': _wrap_fn(exp),
-        'sin': _wrap_fn(sin),
-        'cos': _wrap_fn(cos),
-        'sinh': _wrap_fn(sinh),
-        'cosh': _wrap_fn(cosh),
-        'tanh': _wrap_fn(tanh),
-        'sqrt': _wrap_fn(sqrt),
-        'dag': lambda item: PFWrapper.from_val(item, use_res).adjoint(),
-        'Dagger': lambda item: PFWrapper.from_val(item, use_res).adjoint(),
-        'dagger': lambda item: PFWrapper.from_val(item, use_res).adjoint(),
-        'N_': _make_boson_num,
-        'BosonNum': _make_boson_num,
-        'BP': lambda item, *args: PFWrapper.from_val(BosonPat(str(item), True, *args), use_res),
-        'FP': lambda item, *args: PFWrapper.from_val(FermionPat(str(item), True, *args), use_res),
-        'diff': lambda expr, *args, **kwargs: expr.diff(*args, **kwargs) if hasattr(expr, 'diff') else diff(expr, *args, **kwargs),
-        'Derivative': lambda expr, *args, **kwargs: expr.diff(*args, **kwargs) if hasattr(expr, 'diff') else diff(expr, *args, **kwargs),
-    }
-
-    disp_subs = {}
-
-    # Register symbols as scalar PFWrapper
-    for s in symbols:
-        s_name = s.get('name', '').strip()
-        valid, err_msg = is_valid_variable_name(s_name)
-        if not valid:
-            raise ValueError(f"Invalid symbol identifier: {err_msg}")
-        kwargs = {}
-        if s.get('is_positive'): kwargs['positive'] = True
-        elif s.get('is_nonnegative'): kwargs['nonnegative'] = True
-        elif s.get('is_integer'): kwargs['integer'] = True
-        elif s.get('is_real'): kwargs['real'] = True
-        sym_obj = Symbol(s_name, **kwargs)
-        local_dict[s_name] = PFWrapper.from_val(sym_obj, use_res)
-
-        d_name = (s.get('display_name') or '').strip()
-        if d_name and d_name != s_name:
-            disp_subs[sym_obj] = Symbol(d_name)
-
-    # Register field operators
-    for op in operators:
-        op_name = op.get('name', '').strip()
-        valid, err_msg = is_valid_variable_name(op_name)
-        if not valid:
-            raise ValueError(f"Invalid operator identifier: {err_msg}")
-        kind = op.get('kind', 'boson')
-        op_obj = BosonOp(op_name) if kind == 'boson' else FermionOp(op_name)
-        w_op = PFWrapper.from_val(op_obj, use_res)
-        w_dag = w_op.adjoint()
-
-        local_dict[op_name] = w_op
-        local_dict[f'{op_name}d'] = w_dag
-        local_dict[f'{op_name}_dag'] = w_dag
-        local_dict[f'dag_{op_name}'] = w_dag
-
-        d_name = (op.get('display_name') or '').strip()
-        if d_name and d_name != op_name:
-            disp_subs[Symbol(op_name)] = Symbol(d_name)
-
-    # Register saved named expressions (evaluate them to obtain their PFTableProcessor)
-    for ne in named_expressions:
-        ne_name = ne.get('name', '').strip()
-        ne_str = (ne.get('expr_str') or ne.get('exprStr') or '').strip()
-        valid, err_msg = is_valid_variable_name(ne_name)
-        if not valid:
-            raise ValueError(f"Invalid expression identifier: {err_msg}")
-        if not ne_str:
-            continue
-        try:
-            parsed_ne = parse_expr(ne_str, local_dict=local_dict, transformations=TRANSFORMS)
-            w_ne = PFWrapper.from_val(parsed_ne, use_res)
-            local_dict[ne_name] = w_ne
-        except Exception as e:
-            raise ValueError(f"Failed to evaluate named expression '{ne_name}': {e}")
-
-    try:
-        parsed_target = parse_expr(text, local_dict=local_dict, transformations=TRANSFORMS)
-        wrapper_target = PFWrapper.from_val(parsed_target, use_res)
-    except Exception as e:
-        raise ValueError(f"Calculation failed: {e}")
-
-    pf_result = wrapper_target.pf
-    expr_result = pf_result.expr()
-
-    # Apply display name substitutions to LaTeX output
-    expr_disp = expr_result
-    if disp_subs:
-        try:
-            expr_disp = expr_result.subs(disp_subs)
-        except Exception:
-            expr_disp = expr_result
-
-    latex_str = latex(expr_disp)
-    expr_str = expr_to_code_str(expr_result)
-
-    if use_res:
-        residue_expr = wrapper_target.res
-        res_disp = residue_expr
-        if disp_subs:
-            try:
-                res_disp = residue_expr.subs(disp_subs)
-            except Exception:
-                res_disp = residue_expr
-        return latex_str, expr_str, latex(res_disp), expr_to_code_str(residue_expr)
-    else:
-        return latex_str, expr_str, None, None
 
 
 def eval_twm_solve(
@@ -865,14 +325,85 @@ class ComboWrapper:
         return self.diff(*symbols, **kwargs)
 
 
-def compute_lowest_order(
+def compute_val_leading_order(val: Any, s: TWMSolver) -> int:
+    """
+    Computes the leading (lowest) perturbation order of a calculated TWM result value `val`.
+    Uses TWMSolver.pe which includes base assumptions and any custom symbol/operator orders.
+    Driving mode: order -1 (a_p in dc=True; a_i in dc=False).
+    Weak modes, symbols, multimode operators: order 0 (or custom order if defined).
+    Nonlinear coupling (nlc): order 1.
+    Driving photon number N_d: order -2.
+    """
+    dc = getattr(s, 'dc', True)
+    strong_name = a_p.name if dc else a_i.name
+    pe = getattr(s, 'pe', None)
+    if pe is None:
+        pe = PE({strong_name: S.NegativeOne, nlc: S.One})
+        pe.register(MultimodeNum)
+        pe.register(MultimodeNum2)
+        pe.register(MultimodeCOP)
+
+    orders: List[int] = []
+
+    def _inspect_pf(p: PF, extra_ord: int = 0):
+        if p.npf != 0 and p.npf is not S.Zero:
+            try:
+                npf_ord = pe.leading_order(p.npf.subs({t_: _g / s.gc}))[1]
+                if npf_ord is not S.Infinity:
+                    orders.append(int(npf_ord) + extra_ord)
+            except Exception:
+                pass
+        for (bs, fs), t_expr in p.table.items():
+            if t_expr == 0 or t_expr is S.Zero:
+                continue
+            bs_ord = 0
+            for b in bs:
+                b_name = getattr(b, 'name', None)
+                if b_name == strong_name:
+                    bs_ord += -sum(b.exps)
+                elif b_name and b_name in pe.assumptions:
+                    bs_ord += int(pe.assumptions[b_name]) * sum(b.exps)
+            fs_ord = 0
+            for f in fs:
+                f_name = getattr(f, 'name', None)
+                if f_name and f_name in pe.assumptions:
+                    fs_ord += int(pe.assumptions[f_name]) * sum(f.exps)
+            try:
+                sub_t = t_expr.subs({t_: _g / s.gc})
+                t_ord = pe.leading_order(sub_t)[1]
+                if t_ord is not S.Infinity:
+                    orders.append(int(t_ord) + bs_ord + fs_ord + extra_ord)
+            except Exception:
+                pass
+
+    def _walk(obj, extra_ord: int = 0):
+        if isinstance(obj, PF):
+            _inspect_pf(obj, extra_ord)
+        elif isinstance(obj, f_dict):
+            for k, v in obj.items():
+                _walk(v, extra_ord)
+        elif isinstance(obj, dict):
+            for k, v in obj.items():
+                _walk(v, extra_ord)
+
+    _walk(val)
+    if not orders:
+        return 0
+    return min(orders)
+
+
+# Backward compatibility alias
+compute_val_lowest_order = compute_val_leading_order
+
+
+def compute_leading_order(
     expr_str: str,
     dc: bool = True,
     operators: Optional[List[Dict[str, Any]]] = None,
     named_expressions: Optional[List[Dict[str, Any]]] = None,
 ) -> int:
     """
-    Computes the lowest perturbation order of an expression string.
+    Computes the leading perturbation order of an expression string.
     Driving mode: order -1 (a_p in dc=True; a_i in dc=False).
     Weak modes, symbols, multimode operators: order 0.
     Multiplying factors sums their orders (e.g. a_p * a_p -> -2).
@@ -888,23 +419,18 @@ def compute_lowest_order(
             if mode_idx == strong_mode_idx and name:
                 strong_names.add(name)
 
-    all_strong = set()
-    for name in strong_names:
-        all_strong.add(name)
-        all_strong.add(f"{name}d")
-        all_strong.add(f"{name}_dag")
-        all_strong.add(f"dag_{name}")
+    all_strong = set(strong_names)
 
-    named_lowest_orders: Dict[str, int] = {}
+    named_leading_orders: Dict[str, int] = {}
     if named_expressions:
         for ne in named_expressions:
             ne_name = (ne.get('name') or '').strip()
             if not ne_name:
                 continue
-            if 'lowest_order' in ne and ne['lowest_order'] is not None:
-                named_lowest_orders[ne_name] = int(ne['lowest_order'])
-            elif 'lowestOrder' in ne and ne['lowestOrder'] is not None:
-                named_lowest_orders[ne_name] = int(ne['lowestOrder'])
+            for k in ('leading_order', 'leadingOrder', 'lowest_order', 'lowestOrder'):
+                if k in ne and ne[k] is not None:
+                    named_leading_orders[ne_name] = int(ne[k])
+                    break
 
     def get_order(node) -> int:
         if isinstance(node, ast.Expression):
@@ -913,8 +439,8 @@ def compute_lowest_order(
             return 0
         elif isinstance(node, ast.Name):
             name = node.id
-            if name in named_lowest_orders:
-                return named_lowest_orders[name]
+            if name in named_leading_orders:
+                return named_leading_orders[name]
             if name in all_strong:
                 return -1
             if name in ('nlc', 'chi', r'\chi', 'χ'):
@@ -969,6 +495,10 @@ def compute_lowest_order(
         return 0
 
 
+# Backward compatibility alias
+compute_lowest_order = compute_leading_order
+
+
 def eval_operator_combination(
     text: str,
     dc: bool,
@@ -982,7 +512,7 @@ def eval_operator_combination(
 ) -> Tuple[str, str, str, str, str, str, int]:
     """
     Evaluates post-evolution operator combinations in Tab 3 (formerly Tab 4).
-    Returns: (latex_curr, expr_curr, latex_t, expr_str_t, latex_g, expr_str_g, lowest_order)
+    Returns: (latex_curr, expr_curr, latex_t, expr_str_t, latex_g, expr_str_g, leading_order)
     """
     text = (text or '').strip()
     if not text:
@@ -1016,6 +546,34 @@ def eval_operator_combination(
         'a_1': 'a_1', 'a_s': 'a_1',
         'a_2': 'a_2', 'a_i': 'a_2',
     }
+    mode_kind_map = {
+        'a_0': 'boson', 'a_1': 'boson', 'a_2': 'boson',
+        'a_p': 'boson', 'a_s': 'boson', 'a_i': 'boson'
+    }
+
+    # Extract custom orders from symbols and operators to update s.pe
+    custom_orders = {}
+    for sym_def in symbols:
+        s_name = (sym_def.get('name') or '').strip()
+        if s_name and 'order' in sym_def and sym_def['order'] is not None:
+            try:
+                ord_v = int(sym_def['order'])
+                custom_orders[s_name] = ord_v
+                custom_orders[Symbol(s_name)] = ord_v
+            except (ValueError, TypeError):
+                pass
+    for op_def in operators:
+        op_name = (op_def.get('name') or '').strip()
+        if op_name and 'order' in op_def and op_def['order'] is not None:
+            try:
+                ord_v = int(op_def['order'])
+                custom_orders[op_name] = ord_v
+                custom_orders[Symbol(op_name)] = ord_v
+            except (ValueError, TypeError):
+                pass
+
+    if hasattr(s, 'update_pe'):
+        s.update_pe(custom_orders)
 
     def _make_boson_num(item):
         if isinstance(item, ComboWrapper):
@@ -1072,7 +630,18 @@ def eval_operator_combination(
         'dagger': lambda item: ComboWrapper.from_val(item, s).adjoint(),
         'N_': _make_boson_num,
         'BosonNum': _make_boson_num,
-        'BP': lambda item, *args: ComboWrapper.from_val(BosonPat(op_mode_map.get(str(item), str(item)), True, *args), s),
+        'Pat': lambda item, *args: ComboWrapper.from_val(
+            Pat(item, *args, mode_kind_map=mode_kind_map, op_mode_map=op_mode_map), s
+        ),
+        'pattern': lambda item, *args: ComboWrapper.from_val(
+            Pat(item, *args, mode_kind_map=mode_kind_map, op_mode_map=op_mode_map), s
+        ),
+        'BP': lambda item, *args: ComboWrapper.from_val(
+            Pat(item, *args, mode_kind_map=mode_kind_map, op_mode_map=op_mode_map), s
+        ),
+        'FP': lambda item, *args: ComboWrapper.from_val(
+            Pat(item, *args, mode_kind_map=mode_kind_map, op_mode_map=op_mode_map), s
+        ),
         'MMN': lambda name, disp=0: ComboWrapper.from_val(MultimodeNum(op_mode_map.get(str(name), str(name)), disp), s),
         'MMN2': lambda disp=0: ComboWrapper.from_val(
             MultimodeNum2(a_s.name, a_i.name, 0, disp) if dc else MultimodeNum2(a_p.name, a_s.name, 1, disp), s
@@ -1128,26 +697,41 @@ def eval_operator_combination(
         if d_name and d_name != s_name:
             disp_subs[sym_obj] = Symbol(d_name)
 
-    # 2. Register evolved mode operators (a_p, a_s, a_i or renamed identifiers)
+    # 2. Register evolved mode operators (a_p, a_s, a_i) and custom boson/fermion modes
     for op_def in operators:
         op_name = (op_def.get('name') or '').strip()
         valid, err_msg = is_valid_variable_name(op_name)
         if not valid:
             raise ValueError(f"Invalid operator identifier: {err_msg}")
-        mode_idx = int(op_def.get('mode_index', 0))
-        if 0 <= mode_idx <= 2:
-            w_op = evolved_wrappers[mode_idx]
-            w_dag = w_op.adjoint()
+
+        op_type = op_def.get('type')
+        if op_type == 'operator' or ('kind' in op_def and 'mode_index' not in op_def):
+            # Custom Boson or Fermion mode
+            kind = op_def.get('kind', 'boson')
+            mode_kind_map[op_name] = kind
+            op_mode_map[op_name] = op_name
+            op_obj = BosonOp(op_name) if kind == 'boson' else FermionOp(op_name)
+            w_op = ComboWrapper.from_val(op_obj, s)
             local_dict[op_name] = w_op
-            local_dict[f'{op_name}d'] = w_dag
-            local_dict[f'{op_name}_dag'] = w_dag
-            local_dict[f'dag_{op_name}'] = w_dag
-            op_mode_map[op_name] = f'a_{mode_idx}'
 
             d_name = (op_def.get('display_name') or '').strip()
-            default_mode_name = f'a_{mode_idx}'
-            if d_name and d_name != default_mode_name:
-                disp_subs[Symbol(default_mode_name)] = Symbol(d_name)
+            if d_name and d_name != op_name:
+                disp_subs[Symbol(op_name)] = Symbol(d_name)
+        else:
+            # Evolved operator mode (pump=0, signal=1, idler=2)
+            mode_idx = int(op_def.get('mode_index', 0))
+            if 0 <= mode_idx <= 2:
+                w_op = evolved_wrappers[mode_idx]
+                local_dict[op_name] = w_op
+
+                op_mode_map[op_name] = f'a_{mode_idx}'
+                mode_kind_map[op_name] = 'boson'
+                mode_kind_map[f'a_{mode_idx}'] = 'boson'
+
+                d_name = (op_def.get('display_name') or '').strip()
+                default_mode_name = f'a_{mode_idx}'
+                if d_name and d_name != default_mode_name:
+                    disp_subs[Symbol(default_mode_name)] = Symbol(d_name)
 
     # 3. Register multimode operators (A, N_t or renamed identifiers)
     for mm_def in mm_operators:
@@ -1157,11 +741,7 @@ def eval_operator_combination(
             raise ValueError(f"Invalid multimode operator identifier: {err_msg}")
         mm_kind = mm_def.get('mm_kind', 'COP')
         w_mm = w_A if mm_kind == 'COP' else w_Nt
-        w_mm_dag = w_mm.adjoint()
         local_dict[mm_name] = w_mm
-        local_dict[f'{mm_name}d'] = w_mm_dag
-        local_dict[f'{mm_name}_dag'] = w_mm_dag
-        local_dict[f'dag_{mm_name}'] = w_mm_dag
 
     # 4. Register saved named expressions
     for ne in named_expressions:
@@ -1229,11 +809,7 @@ def eval_operator_combination(
     latex_curr = latex_g if use_gain else latex_t
     expr_curr = expr_str_g if use_gain else expr_str_t
 
-    lowest_order = compute_lowest_order(
-        text,
-        dc=dc,
-        operators=operators,
-        named_expressions=named_expressions,
-    )
+    leading_order = compute_val_leading_order(val, s)
 
-    return latex_curr, expr_curr, latex_t, expr_str_t, latex_g, expr_str_g, lowest_order
+    return latex_curr, expr_curr, latex_t, expr_str_t, latex_g, expr_str_g, leading_order
+

@@ -267,6 +267,11 @@ class PerturbExpander:
         if isinstance(expr, tuple(self.rs)):
             if expr in self.assumptions:
                 return expr, sympify(self.assumptions[expr])
+            name = getattr(expr, 'name', None)
+            if name:
+                for k, v in self.assumptions.items():
+                    if getattr(k, 'name', str(k)) == name:
+                        return expr, sympify(v)
             if expr in self._subs_cache:
                 return self.leading_order(self._subs_cache[expr])
             return expr, S.Zero

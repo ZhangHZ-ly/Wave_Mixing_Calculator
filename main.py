@@ -10,6 +10,7 @@ from calculator import (
     eval_pattern_form,
     eval_twm_solve,
     eval_operator_combination,
+    SOLVERS,
 )
 
 
@@ -114,13 +115,16 @@ class SymbolDef(BaseModel):
     is_nonnegative: bool = False
     is_positive: bool = False
     builtin_key: Optional[str] = None
+    order: Optional[int] = 0
 
 
 class OperatorDef(BaseModel):
+    type: Optional[str] = 'evolved_op'
     kind: str = "boson"  # 'boson' or 'fermion'
     name: str
     display_name: Optional[str] = None
-    mode_index: int = 0
+    mode_index: Optional[int] = 0
+    order: Optional[int] = 0
 
 
 class MMOperatorDef(BaseModel):
@@ -134,6 +138,7 @@ class NamedExprDef(BaseModel):
     expr_str_t: Optional[str] = None
     expr_str_g: Optional[str] = None
     order: Optional[int] = None
+    leading_order: Optional[int] = None
     lowest_order: Optional[int] = None
 
 
@@ -226,7 +231,7 @@ def solve(req: SolveRequest):
 @app.post("/api/combination")
 def api_combination(req: CombinationRequest):
     try:
-        latex_curr, expr_curr, latex_t, expr_t, latex_g, expr_g, lowest_order = eval_operator_combination(
+        latex_curr, expr_curr, latex_t, expr_t, latex_g, expr_g, leading_order = eval_operator_combination(
             req.text,
             dc=req.dc,
             mismatch=req.mismatch,
@@ -244,8 +249,24 @@ def api_combination(req: CombinationRequest):
             "expr_str_t": expr_t,
             "latex_g": latex_g,
             "expr_str_g": expr_g,
-            "lowest_order": lowest_order,
+            "leading_order": leading_order,
+            "lowest_order": leading_order,
+            "order": req.order,
         }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/combination/reset")
+def api_reset_combination():
+    try:
+        for row in SOLVERS:
+            for s in row:
+                if hasattr(s, 'reset_pe'):
+                    s.reset_pe()
+                elif hasattr(s, 'update_pe'):
+                    s.update_pe({})
+        return {"status": "success", "message": "TWMSolver PE reset to defaults"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

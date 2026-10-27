@@ -12,7 +12,7 @@ from .sort_context import *
 from .sort_context import clear_cache
 import warnings
 
-__all__ = ['is_pattern_form', 'pattern_form']
+__all__ = ['is_pattern_form', 'pattern_form', 'Pat', 'pattern']
 
 def is_pattern_form(*exprs: Expr) -> bool:
     """
@@ -368,3 +368,92 @@ def pattern_form(expr, as_dict=False, res=False, ignore=(), _s=True):
         result = pftn.result_ind()
         return result.table, result.npf
     return pftn.result_ind().expr()
+
+
+def Pat(item, *args, mode_kind_map=None, op_mode_map=None):
+    """
+    Constructs a pattern-form (PF) object for a boson or fermion mode operator pattern.
+    Detects whether the operator comes from a boson or fermion mode,
+    then generates the pattern according to BP/FP parameter rules and converts it to a PF object.
+    """
+    if mode_kind_map is None:
+        mode_kind_map = {}
+    if op_mode_map is None:
+        op_mode_map = {}
+
+    is_fermion = False
+    is_ann = True
+    mode_name = None
+
+    # Handle wrapper or PF object
+    val = getattr(item, 'val', None) or getattr(item, 'pf', None) or item
+    while isinstance(val, dict) and val and not hasattr(next(iter(val.keys())), 'name'):
+        val = next(iter(val.values()))
+    if isinstance(val, PFTableProcessor):
+        if val.table:
+            first_key = next(iter(val.table.keys()))
+            if isinstance(first_key, tuple) and len(first_key) == 2:
+                bs, fs = first_key
+                if fs and not bs:
+                    is_fermion = True
+                    mode_name = str(fs[0].name)
+                    is_ann = fs[0].is_annihilation
+                elif bs and not fs:
+                    is_fermion = False
+                    mode_name = str(bs[0].name)
+                    is_ann = bs[0].is_annihilation
+    elif isinstance(val, dict):
+        first_k = next(iter(val.keys()))
+        if hasattr(first_k, 'name'):
+            mode_name = str(first_k.name)
+            is_ann = getattr(first_k, 'is_annihilation', True)
+            from sympy.physics.quantum.fermion import FermionOp
+            is_fermion = isinstance(first_k, FermionOp)
+
+    if mode_name is None:
+        from sympy.physics.quantum.dagger import Dagger
+        from sympy.physics.quantum.fermion import FermionOp
+        inner = item.args[0] if isinstance(item, Dagger) else item
+        if isinstance(item, Dagger):
+            is_ann = False
+        if hasattr(inner, 'is_annihilation'):
+            is_ann = bool(inner.is_annihilation) if not isinstance(item, Dagger) else not bool(inner.is_annihilation)
+            if hasattr(inner, 'name'):
+                mode_name = str(inner.name)
+            is_fermion = isinstance(inner, FermionOp)
+        elif hasattr(item, 'name'):
+            mode_name = str(item.name)
+        else:
+            mode_name = str(item)
+
+    if op_mode_map:
+        if mode_name in op_mode_map:
+            mode_name = str(op_mode_map[mode_name])
+        else:
+            for k, v in op_mode_map.items():
+                if str(k) == mode_name:
+                    mode_name = str(v)
+                    break
+
+    if mode_name in mode_kind_map:
+        is_fermion = (mode_kind_map[mode_name] == 'fermion')
+
+    exps = []
+    for a in args:
+        if isinstance(a, (tuple, list)):
+            exps.extend(a)
+        else:
+            exps.append(a)
+
+    if exps and isinstance(exps[0], bool):
+        is_ann = exps.pop(0)
+
+    if not exps:
+        exps = [1]
+
+    pat_cls = FermionPat if is_fermion else BosonPat
+    pat_obj = pat_cls(mode_name, is_ann, *exps)
+    return pattern_form(pat_obj, as_dict=None)
+
+
+pattern = Pat

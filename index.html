@@ -667,8 +667,8 @@
       </div>
       <div class="form-group">
         <label for="pf-input">Expression Input</label>
-        <textarea id="pf-input" rows="3" placeholder="e.g. (x*a + dag(a))**2 or (c + dag(c))**2 or saved PF variables like H" style="font-family: monospace; font-size: 1rem;">(x*a + dag(a))**2</textarea>
-        <span class="form-tip">Uses PFTableProcessor arithmetic (add, mul_ind / mul_res, power_ind / power_res). Shortcuts: dag(a) or ad denote a†, N_(a) denotes number operator.</span>
+        <textarea id="pf-input" rows="3" placeholder="e.g. (x*a + dag(a))**2 or Pat(a, 1, 2) + Pat(c, 1, 1) or saved PF variables like H" style="font-family: monospace; font-size: 1rem;">(x*a + dag(a))**2</textarea>
+        <span class="form-tip">Uses PFTableProcessor arithmetic (add, mul_ind / mul_res, power_ind / power_res). Shortcuts: dag(a) denotes a†, N_(a) denotes number operator, Pat(op, exps...) or pattern(...) / BP / FP for pattern forms.</span>
       </div>
 
       <div class="btn-group" style="margin-top: 1rem;">
@@ -736,8 +736,8 @@
             </button>
             <div class="dropdown-content">
               <button onclick="openSymbolModal(null, 'tab2')">New Commutative Symbol</button>
-              <button onclick="openOperatorModal('boson', null, 'tab2')">New Boson Operator</button>
-              <button onclick="openOperatorModal('fermion', null, 'tab2')">New Fermion Operator</button>
+              <button onclick="openOperatorModal('boson', null, 'tab2')">New Boson Operator / Mode</button>
+              <button onclick="openOperatorModal('fermion', null, 'tab2')">New Fermion Operator / Mode</button>
               <button onclick="openSaveAnswerModal('tab2')">Save Answer Area PF</button>
             </div>
           </div>
@@ -816,7 +816,7 @@
       <div class="form-group">
         <label for="combo-input">Combination Expression Input</label>
         <textarea id="combo-input" rows="3" placeholder="e.g. dag(a_p) * a_p - N_(a_p) or a_s * dag(a_s) + dag(a_i) * a_i or a_s * a_i" style="font-family: monospace; font-size: 1rem;">dag(a_p) * a_p - N_(a_p)</textarea>
-        <span class="form-tip">Defaults to independent-mode PF (_ind) and dispatches multiplication across PF, Multimode dict, and weak-field f_dict. Shortcuts: dag(op) or opd for adjoint, N_(a_p) for initial number operator, a_0, a_1, a_2 for initial (t=0) operators, t for time, g for parametric gain.</span>
+        <span class="form-tip">Defaults to independent-mode PF (_ind) and dispatches multiplication across PF, Multimode dict, and weak-field f_dict. Shortcuts: dag(op) for adjoint, N_(a_p) for initial number operator, a_0, a_1, a_2 for initial (t=0) operators, t for time, g for parametric gain.</span>
       </div>
 
       <div class="btn-group" style="margin-top: 1rem;">
@@ -1514,7 +1514,7 @@ const RESERVED_NAMES = new Set([
   // Quantum macros / operators
   'dag', 'Dagger', 'dagger', 'BosonNum', 'N_', 'BP', 'FP',
   'BosonPat', 'FermionPat', 'BosonOp', 'FermionOp',
-  'MMN', 'MMN2', 'MMC',
+  'MMN', 'MMN2', 'MMC', 'Pat', 'pattern',
 ]);
 
 const PYTHON_KEYWORDS = new Set([
@@ -2083,6 +2083,10 @@ function openSymbolModal(itemId, ws) {
   activeWorkspace = ws || 'tab2';
   document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
   const modal = document.getElementById('symbolModal');
+  const symOrderGroup = document.getElementById('sym-order-group');
+  if (symOrderGroup) {
+    symOrderGroup.style.display = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4') ? 'block' : 'none';
+  }
   const title = document.getElementById('symbolModalTitle');
   const arr = getWorkspaceArray(activeWorkspace);
   
@@ -2184,6 +2188,10 @@ function openOperatorModal(defaultKind, itemId, ws) {
   activeWorkspace = ws || 'tab2';
   document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
   const modal = document.getElementById('operatorModal');
+  const opOrderGroup = document.getElementById('op-order-group');
+  if (opOrderGroup) {
+    opOrderGroup.style.display = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4') ? 'block' : 'none';
+  }
   const title = document.getElementById('operatorModalTitle');
   const kindGroup = document.getElementById('op-kind-group');
   const arr = getWorkspaceArray(activeWorkspace);
