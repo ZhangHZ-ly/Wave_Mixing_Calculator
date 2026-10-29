@@ -14,6 +14,9 @@ __pycache__/
 *.fdb_latexmk
 *.fls
 
+# local static setup
+static/
+
 # VS Code
 .vscode/
 
