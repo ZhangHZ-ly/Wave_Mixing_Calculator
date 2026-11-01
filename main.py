@@ -2,101 +2,28 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from calculator import (
     eval_single_mode,
+    eval_pf_form,
     eval_pattern_form,
     eval_twm_solve,
     eval_operator_combination,
+    eval_combination_assertions,
+    save_latest_pf_variable,
+    save_latest_twm_variable,
     SOLVERS,
 )
 
 
-def _patch_reloader_ignore_draft():
-    """
-    Patch uvicorn and watchfiles reloaders to ignore changes in draft.py and temporary files.
-    This prevents the development server from reloading whenever draft.py is modified.
-    """
-    # 1. In-memory monkey patch for uvicorn WatchFiles FileFilter
-    try:
-        from uvicorn.supervisors import watchfilesreload
-        _orig_file_filter = watchfilesreload.FileFilter.__call__
-
-        def _patched_file_filter(self, path: Path):
-            name = path.name.lower()
-            path_str = str(path).lower()
-            if "draft" in name or name.endswith(".ipynb") or "scratch" in path_str:
-                return False
-            return _orig_file_filter(self, path)
-
-        watchfilesreload.FileFilter.__call__ = _patched_file_filter
-    except Exception:
-        pass
-
-    # 2. In-memory monkey patch for watchfiles filters
-    try:
-        import watchfiles.filters
-        _orig_wf_filter = watchfiles.filters.BaseFilter.__call__
-
-        def _patched_wf_filter(self, change, path: str):
-            p = str(path).lower()
-            if "draft" in p or p.endswith(".ipynb") or "scratch" in p:
-                return False
-            return _orig_wf_filter(self, change, path)
-
-        watchfiles.filters.BaseFilter.__call__ = _patched_wf_filter
-    except Exception:
-        pass
-
-    # 3. Ensure persistent hook in virtualenv site-packages so uvicorn CLI also ignores draft
-    try:
-        import site
-        sp_dirs = site.getsitepackages() if hasattr(site, "getsitepackages") else []
-        for sp in sp_dirs:
-            sp_path = Path(sp)
-            if sp_path.exists() and (sp_path / "uvicorn").exists():
-                patch_py = sp_path / "_draft_reload_patch.py"
-                pth_file = sp_path / "_draft_reload_patch.pth"
-                if not patch_py.exists():
-                    patch_py.write_text(
-                        'from pathlib import Path\n'
-                        'try:\n'
-                        '    from uvicorn.supervisors import watchfilesreload\n'
-                        '    _orig = watchfilesreload.FileFilter.__call__\n'
-                        '    def _f(self, path: Path):\n'
-                        '        name = path.name.lower()\n'
-                        '        path_str = str(path).lower()\n'
-                        '        if "draft" in name or name.endswith(".ipynb") or "scratch" in path_str:\n'
-                        '            return False\n'
-                        '        return _orig(self, path)\n'
-                        '    watchfilesreload.FileFilter.__call__ = _f\n'
-                        'except Exception:\n'
-                        '    pass\n'
-                        'try:\n'
-                        '    import watchfiles.filters\n'
-                        '    _orig_wf = watchfiles.filters.BaseFilter.__call__\n'
-                        '    def _f_wf(self, change, path: str):\n'
-                        '        p = str(path).lower()\n'
-                        '        if "draft" in p or p.endswith(".ipynb") or "scratch" in p:\n'
-                        '            return False\n'
-                        '        return _orig_wf(self, change, path)\n'
-                        '    watchfiles.filters.BaseFilter.__call__ = _f_wf\n'
-                        'except Exception:\n'
-                        '    pass\n',
-                        encoding="utf-8"
-                    )
-                if not pth_file.exists():
-                    pth_file.write_text("import _draft_reload_patch\n", encoding="utf-8")
-                break
-    except Exception:
-        pass
-
-
-_patch_reloader_ignore_draft()
-
 app = FastAPI(title="Quantum Operator Calculator")
+
+static_dir = Path(__file__).parent / "static"
+static_dir.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 
 class SingleModeRequest(BaseModel):
@@ -134,12 +61,23 @@ class MMOperatorDef(BaseModel):
 
 class NamedExprDef(BaseModel):
     name: str
-    expr_str: str = ""
+    expr_str: Optional[str] = ""
     expr_str_t: Optional[str] = None
     expr_str_g: Optional[str] = None
+    source_input: Optional[str] = None
+    latex: Optional[str] = None
+    latex_t: Optional[str] = None
+    latex_g: Optional[str] = None
     order: Optional[int] = None
     leading_order: Optional[int] = None
-    lowest_order: Optional[int] = None
+    dc: Optional[bool] = None
+    single_mode: Optional[bool] = None
+
+
+class SaveVarRequest(BaseModel):
+    workspace: str
+    name: str
+    notes: Optional[str] = ""
 
 
 class PatternFormRequest(BaseModel):
@@ -164,32 +102,50 @@ class CombinationRequest(BaseModel):
     mismatch: bool = False
     order: int = 1
     use_gain: bool = False
+    single_mode: bool = False
     symbols: List[SymbolDef] = []
     operators: List[OperatorDef] = []
     mm_operators: List[MMOperatorDef] = []
     named_expressions: List[NamedExprDef] = []
 
 
+class AssertionRequest(CombinationRequest):
+    coherent_drive: bool = False
+    vacuum_signal: bool = False
+    vacuum_other_weak: bool = False
+
+
 @app.get("/")
 def index():
-    return FileResponse(Path(__file__).parent / "index.html")
+    html_path = Path(__file__).parent / "index.html"
+    has_local_katex = (Path(__file__).parent / "static" / "katex" / "katex.min.js").exists()
+    if has_local_katex:
+        return FileResponse(html_path)
+
+    # Auto-fallback: if local static/katex is not installed, seamlessly serve with jsDelivr CDN
+    content = html_path.read_text(encoding="utf-8")
+    cdn_base = "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist"
+    content = content.replace("/static/katex", cdn_base)
+    return HTMLResponse(content)
 
 
 @app.post("/api/single_mode")
 def api_single_mode(req: SingleModeRequest):
     try:
-        latex_str, is_herm, expr_str = eval_single_mode(
+        latex_str, is_herm, expr_str, note = eval_single_mode(
             req.type, req.name, req.first_op, req.exponents, req.action
         )
         return {
             "latex": latex_str,
             "is_hermitian": is_herm,
-            "expr_str": expr_str
+            "expr_str": expr_str,
+            "note": note
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/api/pf_form")
 @app.post("/api/pattern_form")
 def api_pattern_form(req: PatternFormRequest):
     try:
@@ -204,7 +160,7 @@ def api_pattern_form(req: PatternFormRequest):
             "latex": latex_str,
             "expr_str": expr_str,
             "residue_latex": res_latex,
-            "residue_str": res_str
+            "residue_str": res_str,
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -231,28 +187,82 @@ def solve(req: SolveRequest):
 @app.post("/api/combination")
 def api_combination(req: CombinationRequest):
     try:
-        latex_curr, expr_curr, latex_t, expr_t, latex_g, expr_g, leading_order = eval_operator_combination(
+        latex_curr, expr_curr, latex_t, expr_t, latex_g, expr_g, leading_order, sol_len = eval_operator_combination(
             req.text,
             dc=req.dc,
             mismatch=req.mismatch,
             order=req.order,
             use_gain=req.use_gain,
+            single_mode=req.single_mode,
             symbols=[s.model_dump() for s in req.symbols],
             operators=[op.model_dump() for op in req.operators],
             mm_operators=[mm.model_dump() for mm in req.mm_operators],
             named_expressions=[ne.model_dump() for ne in req.named_expressions],
         )
+        lead_ord = int(leading_order)
         return {
-            "latex": latex_curr,
-            "expr_str": expr_curr,
-            "latex_t": latex_t,
-            "expr_str_t": expr_t,
-            "latex_g": latex_g,
-            "expr_str_g": expr_g,
-            "leading_order": leading_order,
-            "lowest_order": leading_order,
-            "order": req.order,
+            "latex": str(latex_curr),
+            "expr_str": str(expr_curr),
+            "latex_t": str(latex_t),
+            "expr_str_t": str(expr_t),
+            "latex_g": str(latex_g),
+            "expr_str_g": str(expr_g),
+            "leading_order": lead_ord,
+            "order": int(req.order),
+            "sol_len": int(sol_len),
+            "single_mode": bool(req.single_mode),
         }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/combination/assert")
+def api_combination_assert(req: AssertionRequest):
+    try:
+        latex_curr, expr_curr, latex_t, expr_t, latex_g, expr_g, leading_order, sol_len = eval_combination_assertions(
+            req.text,
+            dc=req.dc,
+            mismatch=req.mismatch,
+            order=req.order,
+            use_gain=req.use_gain,
+            single_mode=req.single_mode,
+            coherent_drive=req.coherent_drive,
+            vacuum_signal=req.vacuum_signal,
+            vacuum_other_weak=req.vacuum_other_weak,
+            symbols=[s.model_dump() for s in req.symbols],
+            operators=[op.model_dump() for op in req.operators],
+            mm_operators=[mm.model_dump() for mm in req.mm_operators],
+            named_expressions=[ne.model_dump() for ne in req.named_expressions],
+        )
+        lead_ord = int(leading_order)
+        return {
+            "latex": str(latex_curr),
+            "expr_str": str(expr_curr),
+            "latex_t": str(latex_t),
+            "expr_str_t": str(expr_t),
+            "latex_g": str(latex_g),
+            "expr_str_g": str(expr_g),
+            "leading_order": lead_ord,
+            "order": int(req.order),
+            "sol_len": int(sol_len),
+            "single_mode": bool(req.single_mode),
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/variable/save")
+def api_save_variable(req: SaveVarRequest):
+    try:
+        if req.workspace in ('tab3', 'tab4'):
+            save_latest_twm_variable(req.name, notes=req.notes or "")
+        else:
+            save_latest_pf_variable(req.name, notes=req.notes or "")
+        return {"status": "ok", "name": req.name}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -277,9 +287,5 @@ if __name__ == "__main__":
         "main:app",
         host="127.0.0.1",
         port=8000,
-        reload=True,
-        reload_excludes=["*draft*", "draft.py", "*.ipynb", "scratch/*"],
+        reload=True
     )
-
-
-

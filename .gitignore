@@ -14,8 +14,8 @@ __pycache__/
 *.fdb_latexmk
 *.fls
 
-# local static setup
-static/
+# local katex setup
+static/katex/
 
 # VS Code
 .vscode/
@@ -24,6 +24,8 @@ static/
 Thumbs.db
 Desktop.ini
 
-# for test
+# for test & debug & tutorial
 test_main.ipynb
+search.ps1
 draft.py
+docs/

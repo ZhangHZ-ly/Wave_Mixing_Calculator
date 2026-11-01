@@ -1,29 +1,68 @@
 from __future__ import annotations
-import ast
 import keyword
-import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Tuple
 
 from op_patterns import BosonNum, BosonPat, FermionPat
-from parametric import (
-    t_, _g, nlc, pm,
-    a_p, a_s, a_i, MultimodeNum, MultimodeNum2, MultimodeCOP
-)
 from sympy.core.expr import Expr
 from sympy.core.mul import Mul
 from sympy.core.singleton import S
 from sympy.core.symbol import Symbol
+import re
+from tokenize import NUMBER, NAME
 from sympy.core.sympify import sympify
 from sympy.parsing.sympy_parser import (
     convert_xor,
-    implicit_multiplication_application,
+    function_exponentiation,
+    implicit_application,
+    implicit_multiplication,
+    split_symbols_custom,
     standard_transformations,
+    _token_splittable,
 )
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.dagger import Dagger
 from sympy.physics.quantum.fermion import FermionOp
 
-TRANSFORMS = standard_transformations + (implicit_multiplication_application, convert_xor)
+
+def custom_can_split(symbol: str) -> bool:
+    """
+    Predicate for whether a token name can be split into multiple single-letter symbols.
+    Tokens containing digits (e.g. 'e1', 'a1', 'b2', 'x0') or underscores are treated
+    as single alphanumeric variable/operator names with index/subscript, and must NEVER be split.
+    """
+    if any(c.isdigit() for c in symbol):
+        return False
+    return _token_splittable(symbol)
+
+
+def split_scientific_variable(tokens, local_dict, global_dict):
+    """
+    Pre-pass to separate number followed by a variable starting with e/E (e.g. '2e1' -> 2 * e1)
+    when e1 is a registered variable in local_dict, preventing Python tokenizer from treating
+    it as scientific notation float.
+    """
+    result = []
+    for tok in tokens:
+        if tok[0] == NUMBER:
+            m = re.match(r'^(\d+)([eE]\d+)$', tok[1])
+            if m and (m.group(2) in local_dict or m.group(2).lower() in local_dict):
+                num_part, var_part = m.group(1), m.group(2)
+                result.append((NUMBER, num_part))
+                result.append((NAME, var_part))
+                continue
+        result.append(tok)
+    return result
+
+
+TRANSFORMS = (
+    split_scientific_variable,
+) + standard_transformations + (
+    split_symbols_custom(custom_can_split),
+    implicit_multiplication,
+    implicit_application,
+    function_exponentiation,
+    convert_xor,
+)
 
 # Parametric gain operator symbol \hat{g} (non-commutative to preserve operator ordering)
 g_hat = Symbol(r'\hat{g}', commutative=False)
@@ -62,41 +101,17 @@ def is_valid_python_name(name: str) -> bool:
     return is_valid_variable_name(name)[0]
 
 
-def expr_to_code_str(e: Expr, dc: bool = True) -> str:
+def expr_to_code_str(e: Expr) -> str:
     """
-    Convert a SymPy quantum operator expression (from PF.expr() or TWMSolver.to_expr())
+    Convert a SymPy quantum operator expression (from single-mode or pattern form)
     into a valid Python expression string that can be parsed back by parse_expr.
     """
-    if e == 0 or e == S.Zero:
+    if e == 0:
         return "0"
-    if e == 1 or e == S.One:
+    if e == 1:
         return "1"
 
-    s_Nt = Symbol('N_t', commutative=False)
-    s_A = Symbol('A', commutative=False)
-    s_dagA = Symbol('dag(A)', commutative=False)
-    s_t = Symbol('t', real=True)
-    s_g = Symbol('g', commutative=False)
-    s_nlc = Symbol('nlc', real=True, nonnegative=True)
-    s_pm = Symbol('pm', real=True)
-
-    mmc_ann = MultimodeCOP(a_s.name, a_i.name) if dc else MultimodeCOP(a_p.name, a_s.name, 1)
-    mmc_cre = Dagger(mmc_ann)
-
     def _rec(x):
-        if isinstance(x, MultimodeCOP):
-            if x == mmc_ann:
-                return s_A
-            if x == mmc_cre:
-                return s_dagA
-        if isinstance(x, MultimodeNum2):
-            if x.displacement == 0:
-                return s_Nt
-            return Symbol(f'MMN2({x.displacement})', commutative=False)
-        if isinstance(x, MultimodeNum):
-            if x.displacement == 0:
-                return Symbol(f'MMN({x.name})', commutative=False)
-            return Symbol(f'MMN({x.name}, {x.displacement})', commutative=False)
         if isinstance(x, BosonNum):
             return Symbol(f'N_({x.name})', commutative=False)
         if isinstance(x, (BosonOp, FermionOp)):
@@ -109,17 +124,9 @@ def expr_to_code_str(e: Expr, dc: bool = True) -> str:
                 factors.append(op_sym ** exp_val if exp_val != 1 else op_sym)
                 is_ann = not is_ann
             return Mul(*factors)
-        if isinstance(x, Dagger):
+        if isinstance(x, Dagger) or getattr(x, 'func', None) and x.func.__name__ == 'conjugate':
             inner = _rec(x.args[0])
             return Symbol(f'dag({inner})', commutative=False)
-        if x == t_:
-            return s_t
-        if x == g_hat or x == _g:
-            return s_g
-        if x == nlc:
-            return s_nlc
-        if x == pm:
-            return s_pm
         if not getattr(x, 'args', None):
             return x
         return x.func(*(_rec(a) for a in x.args))

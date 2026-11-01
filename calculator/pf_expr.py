@@ -29,6 +29,10 @@ class PFWrapper:
         self.pf = pf
         self.res = res
         self.use_res = use_res
+        self.name: str = ""
+        self.latex_str: Optional[str] = None
+        self.residue_latex: Optional[str] = None
+        self.notes: str = ""
 
     @classmethod
     def from_val(cls, val, use_res: bool = False):
@@ -146,7 +150,43 @@ class PFWrapper:
         return self.pf.expr()
 
 
-def eval_pattern_form(
+PF_VARIABLES: Dict[str, PFWrapper] = {}
+LAST_EVAL_PF: Dict[str, Any] = {}
+
+
+def save_pf_variable(name: str, pf: Any, res: Any = S.Zero, use_res: bool = False, **kwargs) -> PFWrapper:
+    w = PFWrapper.from_val(pf, use_res=use_res)
+    w.res = res
+    w.name = name
+    for k, v in kwargs.items():
+        setattr(w, k, v)
+    PF_VARIABLES[name] = w
+    return w
+
+
+def save_latest_pf_variable(name: str, **kwargs) -> Optional[PFWrapper]:
+    if not LAST_EVAL_PF:
+        return None
+    return save_pf_variable(
+        name,
+        LAST_EVAL_PF['pf'],
+        res=LAST_EVAL_PF.get('res', S.Zero),
+        latex_str=LAST_EVAL_PF.get('latex_str'),
+        residue_latex=LAST_EVAL_PF.get('residue_latex'),
+        **kwargs
+    )
+
+
+def get_pf_variable(name: str) -> Optional[PFWrapper]:
+    return PF_VARIABLES.get(name)
+
+
+def clear_pf_variables() -> None:
+    PF_VARIABLES.clear()
+    LAST_EVAL_PF.clear()
+
+
+def eval_pf_form(
     text: str,
     symbols: List[Dict[str, Any]],
     operators: List[Dict[str, Any]],
@@ -186,6 +226,30 @@ def eval_pattern_form(
             return PFWrapper.from_val(fn(sympify(item)), use_res)
         return _inner
 
+    def _make_bp(item, *args):
+        raw_args = []
+        for a in args:
+            if isinstance(a, (tuple, list)):
+                raw_args.extend(x if isinstance(x, bool) else (x.pf.expr() if isinstance(x, PFWrapper) else sympify(x)) for x in a)
+            else:
+                raw_args.append(a if isinstance(a, bool) else (a.pf.expr() if isinstance(a, PFWrapper) else sympify(a)))
+        name = item.name if hasattr(item, 'name') else str(item)
+        if op_mode_map and name in op_mode_map:
+            name = str(op_mode_map[name])
+        return PFWrapper.from_val(BosonPat(name, *raw_args), use_res)
+
+    def _make_fp(item, *args):
+        raw_args = []
+        for a in args:
+            if isinstance(a, (tuple, list)):
+                raw_args.extend(x if isinstance(x, bool) else (x.pf.expr() if isinstance(x, PFWrapper) else sympify(x)) for x in a)
+            else:
+                raw_args.append(a if isinstance(a, bool) else (a.pf.expr() if isinstance(a, PFWrapper) else sympify(a)))
+        name = item.name if hasattr(item, 'name') else str(item)
+        if op_mode_map and name in op_mode_map:
+            name = str(op_mode_map[name])
+        return PFWrapper.from_val(FermionPat(name, *raw_args), use_res)
+
     local_dict: Dict[str, Any] = {
         'i': I,
         'I': I,
@@ -209,12 +273,10 @@ def eval_pattern_form(
         'pattern': lambda item, *args: PFWrapper.from_val(
             Pat(item, *args, mode_kind_map=mode_kind_map, op_mode_map=op_mode_map), use_res
         ),
-        'BP': lambda item, *args: PFWrapper.from_val(
-            Pat(item, *args, mode_kind_map=mode_kind_map, op_mode_map=op_mode_map), use_res
-        ),
-        'FP': lambda item, *args: PFWrapper.from_val(
-            Pat(item, *args, mode_kind_map=mode_kind_map, op_mode_map=op_mode_map), use_res
-        ),
+        'BP': _make_bp,
+        'BosonPat': _make_bp,
+        'FP': _make_fp,
+        'FermionPat': _make_fp,
         'diff': lambda expr, *args, **kwargs: expr.diff(*args, **kwargs) if hasattr(expr, 'diff') else diff(expr, *args, **kwargs),
         'Derivative': lambda expr, *args, **kwargs: expr.diff(*args, **kwargs) if hasattr(expr, 'diff') else diff(expr, *args, **kwargs),
     }
@@ -255,21 +317,38 @@ def eval_pattern_form(
         if d_name and d_name != op_name:
             disp_subs[Symbol(op_name)] = Symbol(d_name)
 
-    # Register saved named expressions (evaluate them to obtain their PFTableProcessor)
+    # Register saved named expressions directly from PFTableProcessor
     for ne in named_expressions:
         ne_name = ne.get('name', '').strip()
-        ne_str = (ne.get('expr_str') or ne.get('exprStr') or '').strip()
         valid, err_msg = is_valid_variable_name(ne_name)
         if not valid:
             raise ValueError(f"Invalid expression identifier: {err_msg}")
-        if not ne_str:
-            continue
-        try:
-            parsed_ne = parse_expr(ne_str, local_dict=local_dict, transformations=TRANSFORMS)
-            w_ne = PFWrapper.from_val(parsed_ne, use_res)
+
+        if 'val' in ne and ne['val'] is not None:
+            val_obj = ne['val']
+            if isinstance(val_obj, PFWrapper):
+                w_ne = val_obj
+            elif isinstance(val_obj, PFTableProcessor):
+                w_ne = PFWrapper(val_obj, res=ne.get('res', S.Zero), use_res=use_res)
+            elif isinstance(val_obj, tuple):
+                w_ne = PFWrapper(val_obj[0], res=val_obj[1], use_res=use_res)
+            else:
+                w_ne = PFWrapper.from_val(val_obj, use_res)
             local_dict[ne_name] = w_ne
-        except Exception as e:
-            raise ValueError(f"Failed to evaluate named expression '{ne_name}': {e}")
+            save_pf_variable(ne_name, w_ne.pf, res=w_ne.res, latex_str=ne.get('latex'))
+        elif ne_name in PF_VARIABLES:
+            local_dict[ne_name] = PF_VARIABLES[ne_name]
+        else:
+            ne_str = (ne.get('expr_str') or ne.get('source_input') or ne.get('sourceInput') or '').strip()
+            if not ne_str:
+                continue
+            try:
+                parsed_ne = parse_expr(ne_str, local_dict=local_dict, transformations=TRANSFORMS)
+                w_ne = PFWrapper.from_val(parsed_ne, use_res)
+                local_dict[ne_name] = w_ne
+                save_pf_variable(ne_name, w_ne.pf, res=w_ne.res, latex_str=ne.get('latex'))
+            except Exception as e:
+                raise ValueError(f"Failed to evaluate named expression '{ne_name}': {e}")
 
     try:
         parsed_target = parse_expr(text, local_dict=local_dict, transformations=TRANSFORMS)
@@ -291,15 +370,30 @@ def eval_pattern_form(
     latex_str = latex(expr_disp)
     expr_str = expr_to_code_str(expr_result)
 
+    residue_expr = wrapper_target.res if use_res else S.Zero
+    res_latex = None
+    res_str = None
     if use_res:
-        residue_expr = wrapper_target.res
         res_disp = residue_expr
         if disp_subs:
             try:
                 res_disp = residue_expr.subs(disp_subs)
             except Exception:
                 res_disp = residue_expr
-        return latex_str, expr_str, latex(res_disp), expr_to_code_str(residue_expr)
-    else:
-        return latex_str, expr_str, None, None
+        res_latex = latex(res_disp)
+        res_str = expr_to_code_str(residue_expr)
 
+    global LAST_EVAL_PF
+    LAST_EVAL_PF = {
+        'pf': pf_result,
+        'res': residue_expr,
+        'latex_str': latex_str,
+        'residue_latex': res_latex,
+    }
+
+    return latex_str, expr_str, res_latex, res_str
+
+
+
+# Backwards compatibility alias
+eval_pattern_form = eval_pf_form

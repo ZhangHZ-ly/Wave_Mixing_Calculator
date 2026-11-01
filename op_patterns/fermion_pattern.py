@@ -120,7 +120,7 @@ class FermionPat(Operator):
             if new_args[2].args == ():
                 return S.One
             if new_args[2].args == (1,):
-                return FermionOp(args[0].args, left)
+                return FermionOp(args[0].name, new_args[1])
             pd = new_args[2].parity_diff()
             if pd.is_integer == False:
                 raise ValueError("Fermionic operators can only be raised to a"
