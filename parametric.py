@@ -439,87 +439,27 @@ INIT_OPS = {
     },
 }
 
-class TWMSolver:
+class WM_Processor:
     """
-    Three-wave mixing quantum multimode parametric process perturbation solver
+    Base processor for quantum multimode parametric wave-mixing processes (TWM, FWM).
 
     Ordering principle: The strong field and commutative parameters
     are extracted to the end, ordered in pat-form;
     the multimode patterns are left-multiplied to multimode number operators;
     the annihilation operator of single weak field with larger index number
-    is left-multipied to the rest of the expression (multi-mode part),
+    is left-multiplied to the rest of the expression (multi-mode part),
     and the other operators are ordered as such that the commutation
     between singlemode and multimode operators is avoided.
-
-    The above means that: a0, a1, a2† are right/left-multiplied to the expression
-    in the down-conversion/phase transfer case,
-    while their conjugates are left/right-multiplied.
-
-    Under this ordering principle, we take the time differential equation
-    in the following form:
-
-    d/dt a0 = -i χ a1 a2 exp(-i Δk t),
-    d/dt a1 = -i χ a0 a2† exp(i Δk t),
-    d/dt a2 = -i χ a1† a0 exp(i Δk t)
-
-    :param dc: whether the process is down-conversion (True)
-    or state transfer (False); a2 is strong in the state transfer case
-    :param mismatch: Phase mismatch of the process, assumed same for all modes,
-    k0 - k1 - k2
     """
 
     def __init__(self, dc=True, mismatch=False):
         self.dc = bool(dc)
-        self.pm = pm if mismatch else S.Zero
-        self.half_p_factor = exp(I * self.pm * t_ * S.Half)
-        if dc:
-            self.nd = BosonNum(a_p.name)
-            self.a = (MultimodeCOP(a_s.name, a_i.name, annih1=0),
-                      MultimodeCOP(a_s.name, a_i.name))
-            # Mark multiplication directions: a_s/a_i right-multiplied (False), a_s†/a_i† left-multiplied (True)
-            self.sol = [({(None,): PF({((a_p,), ()): S.One})},
-                         f_dict({a_s: {(None,): PF0}, Dagger(a_i): {(None,): PF0}}, b_left=False),
-                         f_dict({Dagger(a_s): {(None,): PF0}, a_i: {(None,): PF0}}))]
-            self.gc = (nlc**2*self.nd-self.pm**2/4)**S.Half
-            self.base_assumptions = {a_p.name: S.NegativeOne, nlc: S.One}
+        if isinstance(mismatch, (Expr, Symbol)):
+            self.pm = mismatch
         else:
-            self.nd = BosonNum(a_i.name)
-            self.a = (MultimodeCOP(a_p.name, a_s.name, 1, 0),
-                      MultimodeCOP(a_p.name, a_s.name, 1))
-            self.sol = [(f_dict({a_p: {(None,): PF0}, a_s: {(None,): PF0}}),
-                         f_dict({a_p: {(None,): PF0}, a_s: {(None,): PF0}}),
-                         {(None,): PF({((a_i,), ()): S.One})})]
-            self.gc = (nlc**2*self.nd+self.pm**2/4)**S.Half
-            self.base_assumptions = {a_i.name: S.NegativeOne, nlc: S.One}
-        self.pe = PE(self.base_assumptions)
-        self.pe.register(MultimodeNum)
-        self.pe.register(MultimodeNum2)
-        self.pe.register(MultimodeCOP)
-        # d/dt a_drive / (-i χ) for the last solved order
-        self.dd_last = {(None,): PF0}
-        # Standard expansion of an expression up to the given order
-        self.expand = (lambda pf, order:
-                       self.pe.expand_pf(pf, order).n_apply(lambda t:
-                                                         t.subs({t_: _g/self.gc})))
-        # Homogeneous solutions to the time differential equations
-        @cache
-        def _fdf0(n0, mode):
-            if n0:
-                if mode == 0:
-                    return PF({((), ()): dsd2(self.gc*t_, dict(), False,
-                                              S.One, I*self.pm*S.Half/self.gc)})
-                return PF({((), ()): dsd2(self.gc*t_, dict(), self.dc,
-                                          S.One, -I*self.pm*S.Half/self.gc)})
-            elif self.dc:
-                return PF({((a_p,), ()): dsd2(self.gc*t_, dict(), True,
-                                                 S.Zero, -I*nlc/self.gc)})
-            elif mode == 0:
-                return PF({((a_i,), ()): dsd2(self.gc*t_, dict(), False,
-                                                 S.Zero, -I*nlc/self.gc)})
-            else:
-                return PF({((Dagger(a_i),),()): dsd2(self.gc*t_, dict(), False,
-                                                        S.Zero, -I*nlc/self.gc)})
-        self.fdf0 = _fdf0
+            self.pm = pm if mismatch else S.Zero
+        self.sol = []
+
     def update_pe(self, orders: dict = None):
         """Update self.pe assumptions with custom symbol/mode orders."""
         assumptions = dict(self.base_assumptions)
@@ -680,7 +620,7 @@ class TWMSolver:
         """
         Multiplies two dict representations of operators.
         
-        if both dict contain BosonOps, this will generate an intermidiate dict
+        if both dict contain BosonOps, this will generate an intermediate dict
         including MultimodeNums (to be further collected as MultimodeNum2)
         
         By default, single-mode weak-field operators are assumed to be
@@ -690,12 +630,10 @@ class TWMSolver:
         """
         if not p1 or not p2:
             return dict()
-        # Super clean isinstance check
         is_f1 = isinstance(p1, f_dict)
         is_f2 = isinstance(p2, f_dict)
         result = dict()
         if is_f1 and is_f2:
-            # Subspace Validation
             if self.f_dict_parity(p1) == self.f_dict_parity(p2):
                 raise ValueError('Cannot use multimode operators to represent the product')
             if p1.b_left:
@@ -750,7 +688,6 @@ class TWMSolver:
         Swaps the order of the operator a and the dict d
         The direction of the swap (for a) is determined by the to_left parameter.
         """
-
         def btswap(a: BosonOp, i, exps):
             yield S.One, a, exps
             if to_left:
@@ -821,7 +758,6 @@ class TWMSolver:
                 c = c_m.subs({_nm: 0})
                 c_n2 = (_mexpand(r.subs({_nm: 0}) - c) / _n2).doit()
                 d =(_mexpand((c_m - c) / _nm) / c_n2).doit()
-                # non-integer displacement is also legal here
                 if d.is_number and d.is_real is not False:
                     expr = (c_n2 * _n2 + c).factor().subs({_n1: MultimodeNum(a_s.name),
                                                            _n2: MultimodeNum2(n1, n2, not self.dc, d)})
@@ -833,99 +769,10 @@ class TWMSolver:
             return expr
         return bottom_up(expr, combine_n)
 
-    def get_sol(self, order: int):
-        if order < -1:
-            raise ValueError('The order should be at least -1')
-        i = order + 1
-        if len(self.sol) > i:
-            return self.sol[i]
-        last_sol = self.get_sol(order-1)
-        dc = self.dc
-        gc_m2 = self.gc**(-2)
-        if i & 1:
-            def _d2ts(mode, n0, b):
-                s1 = S.NegativeOne if mode == 0 else S.One
-                s3 = S.NegativeOne if dc else S.One
-                for k in term1[b].keys() | term2[b].keys() | last_sol[mode][b].keys():
-                    pfs = []
-                    if k in term1[b]:
-                        pfs.append(term1[b][k].n_apply(lambda t: s1*t))
-                    if k in term2[b]:
-                        pfs.append(term2[b][k].n_apply(lambda t: -t))
-                    if k in last_sol[mode][b]:
-                        pfs.append(last_sol[mode][b][k].n_apply(lambda t: s3*t*self.nd))
-                    rhs = self.expand(PF.add(*pfs).n_apply(lambda t: Mul(nlc**2, t, gc_m2)), order)
-                    s0 = rhs.n_apply(lambda t: self.n_simp(dsd2(_g, self.p2s_group(t), self.dc,
-                                                                subs=self.gc*t_)))
-                    self.sol[i][mode][b][k] = PF.add(s0, self.fdf0(n0, mode)) if len(k) == 1 else s0
-            if dc:
-                self.sol.append((last_sol[0],
-                                 f_dict({a_s: dict(), Dagger(a_i): dict()}, b_left=False),
-                                 f_dict({Dagger(a_s): dict(), a_i: dict()})))
-                pd = self.d_adjoint(last_sol[0])
-                term1 = self.e_mul(self.e_mul(last_sol[0], pd), last_sol[1])
-                term2 = self.e_mul(self.dd_last, self.d_adjoint(last_sol[2]))
-                _d2ts(1, True, a_s)
-                _d2ts(1, False, Dagger(a_i))
-                term1 = self.e_mul(last_sol[2], self.e_mul(pd, last_sol[0]))
-                term2 = self.e_mul(self.d_adjoint(last_sol[1]), self.dd_last)
-                _d2ts(2, False, Dagger(a_s))
-                _d2ts(2, True, a_i)
-            else:
-                self.sol.append((f_dict({a_p: dict(), a_s: dict()}),
-                                 f_dict({a_p: dict(), a_s: dict()}),
-                                 last_sol[2]))
-                id = self.d_adjoint(last_sol[2])
-                term1 = self.e_mul(last_sol[0], self.e_mul(id, last_sol[2]))
-                term2 = self.e_mul(last_sol[1], self.dd_last)
-                _d2ts(0, True, a_p)
-                _d2ts(0, False, a_s)
-                term1 = self.e_mul(last_sol[0], self.d_adjoint(self.dd_last))
-                term2 = self.e_mul(last_sol[1], self.e_mul(last_sol[2], id))
-                _d2ts(1, True, a_s)
-                _d2ts(1, False, a_p)
-        else:
-            def _d1ts():
-                b = self.sol[0][0][(None,)] if dc else self.sol[0][2][(None,)]
-                result = dict()
-                for k, v in self.dd_last.items():
-                    rhs = self.expand(v.n_apply(lambda t: -I*nlc*t/self.gc), order)
-                    s0 = rhs.n_apply(lambda t: self.n_simp(dsd1(_g, self.p2s_group(t),
-                                                                subs=self.gc*t_))) 
-                    result[k] = PF.add(s0, b) if len(k) == 1 else s0
-                return result
-            if dc:
-                self.dd_last = self.e_mul(last_sol[1], last_sol[2])
-                self.sol.append((_d1ts(), *last_sol[1:]))
-            else:
-                self.dd_last = self.e_mul(self.d_adjoint(last_sol[1]), last_sol[0])
-                self.sol.append((*last_sol[:2], _d1ts()))
-        return self.sol[i]
-
-    def sol_expr(self, mode: int, order: int):
-        """
-        Get the expression of the solution for the given mode and order.
-
-        The order is consistent with the order of the perturbative expansion,
-        so the classical solution with zero input is considered as order -1,
-        and the parametirc amplifier/oscillator solution with undepleted drive
-        is considered as order 0.
-        """
-        s0 = self.sol[0]
-        if len(s0[mode]) == 1:
-            p = S.One
-        elif mode == 0:
-            p = self.half_p_factor**S.NegativeOne
-        else:
-            p = self.half_p_factor
-        if len(s0[mode]) == 1 or mode != 1 or len(s0[0]) == 2:  # driving field
-            return p*self.to_expr(self.get_sol(order)[mode])
-        return p*self.to_expr(self.get_sol(order)[mode])
-
     def p2s_group(self, expr):
         """
         Group the functions of g and process product-to-sum to
-        hyperbolic/trangular functions
+        hyperbolic/triangular functions
         """
         grouped = defaultdict(list)
         for term in Add.make_args(expr):
@@ -1381,20 +1228,278 @@ class TWMSolver:
 
         return (rt, rg) if return_both else rt
 
+    def expand(self, pf, order):
+        """Standard expansion of an expression up to the given order."""
+        return self.pe.expand_pf(pf, order).n_apply(lambda t: t.subs({t_: _g/self.gc}))
 
 
-def sep_weak(expr):
+class TWMSolver(WM_Processor):
     """
-    Separate the weak field multimode number operators from the given expr
+    Three-wave mixing quantum multimode parametric process perturbation solver
+
+    Ordering principle: The strong field and commutative parameters
+    are extracted to the end, ordered in pat-form;
+    the multimode patterns are left-multiplied to multimode number operators;
+    the annihilation operator of single weak field with larger index number
+    is left-multipied to the rest of the expression (multi-mode part),
+    and the other operators are ordered as such that the commutation
+    between singlemode and multimode operators is avoided.
+
+    The above means that: a0, a1, a2† are right/left-multiplied to the expression
+    in the down-conversion/phase transfer case,
+    while their conjugates are left/right-multiplied.
+
+    Under this ordering principle, we take the time differential equation
+    in the following form:
+
+    d/dt a0 = -i χ a1 a2 exp(-i Δk t),
+    d/dt a1 = -i χ a0 a2† exp(i Δk t),
+    d/dt a2 = -i χ a1† a0 exp(i Δk t)
+
+    :param dc: whether the process is down-conversion (True)
+    or state transfer (False); a2 is strong in the state transfer case
+    :param mismatch: Phase mismatch of the process, assumed same for all modes,
+    k0 - k1 - k2
     """
-    result = dict()
-    for term in Add.make_args(expr):
-        other = []
-        mmn = []
-        for factor in Mul.make_args(term):
-            if isinstance(factor, (MultimodeNum, MultimodeNum2)):
-                mmn.append(factor)
+
+    def __init__(self, dc=True, mismatch=False):
+        super().__init__(dc=dc, mismatch=mismatch)
+        self.half_p_factor = exp(I * self.pm * t_ * S.Half)
+        if dc:
+            self.nd = BosonNum(a_p.name)
+            self.a = (MultimodeCOP(a_s.name, a_i.name, annih1=0),
+                      MultimodeCOP(a_s.name, a_i.name))
+            # Mark multiplication directions: a_s/a_i right-multiplied (False), a_s†/a_i† left-multiplied (True)
+            self.sol = [({(None,): PF({((a_p,), ()): S.One})},
+                         f_dict({a_s: {(None,): PF0}, Dagger(a_i): {(None,): PF0}}, b_left=False),
+                         f_dict({Dagger(a_s): {(None,): PF0}, a_i: {(None,): PF0}}))]
+            self.gc = (nlc**2*self.nd-self.pm**2/4)**S.Half
+            self.base_assumptions = {a_p.name: S.NegativeOne, nlc: S.One}
+        else:
+            self.nd = BosonNum(a_i.name)
+            self.a = (MultimodeCOP(a_p.name, a_s.name, 1, 0),
+                      MultimodeCOP(a_p.name, a_s.name, 1))
+            self.sol = [(f_dict({a_p: {(None,): PF0}, a_s: {(None,): PF0}}),
+                         f_dict({a_p: {(None,): PF0}, a_s: {(None,): PF0}}),
+                         {(None,): PF({((a_i,), ()): S.One})})]
+            self.gc = (nlc**2*self.nd+self.pm**2/4)**S.Half
+            self.base_assumptions = {a_i.name: S.NegativeOne, nlc: S.One}
+        self.pe = PE(self.base_assumptions)
+        self.pe.register(MultimodeNum)
+        self.pe.register(MultimodeNum2)
+        self.pe.register(MultimodeCOP)
+        # d/dt a_drive / (-i χ) for the last solved order
+        self.dd_last = {(None,): PF0}
+        # Standard expansion of an expression up to the given order
+        self.expand = (lambda pf, order:
+                       self.pe.expand_pf(pf, order).n_apply(lambda t:
+                                                         t.subs({t_: _g/self.gc})))
+        # Homogeneous solutions to the time differential equations
+        @cache
+        def _fdf0(n0, mode):
+            if n0:
+                if mode == 0:
+                    return PF({((), ()): dsd2(self.gc*t_, dict(), False,
+                                              S.One, I*self.pm*S.Half/self.gc)})
+                return PF({((), ()): dsd2(self.gc*t_, dict(), self.dc,
+                                          S.One, -I*self.pm*S.Half/self.gc)})
+            elif self.dc:
+                return PF({((a_p,), ()): dsd2(self.gc*t_, dict(), True,
+                                                 S.Zero, -I*nlc/self.gc)})
+            elif mode == 0:
+                return PF({((a_i,), ()): dsd2(self.gc*t_, dict(), False,
+                                                 S.Zero, -I*nlc/self.gc)})
             else:
-                other.append(factor)
-        result[tuple(mmn)] = Mul(*other)
-    return result
+                return PF({((Dagger(a_i),),()): dsd2(self.gc*t_, dict(), False,
+                                                        S.Zero, -I*nlc/self.gc)})
+        self.fdf0 = _fdf0
+
+    def get_sol(self, order: int):
+        if order < -1:
+            raise ValueError('The order should be at least -1')
+        i = order + 1
+        if len(self.sol) > i:
+            return self.sol[i]
+        last_sol = self.get_sol(order-1)
+        dc = self.dc
+        gc_m2 = self.gc**(-2)
+        if i & 1:
+            def _d2ts(mode, n0, b):
+                s1 = S.NegativeOne if mode == 0 else S.One
+                s3 = S.NegativeOne if dc else S.One
+                for k in term1[b].keys() | term2[b].keys() | last_sol[mode][b].keys():
+                    pfs = []
+                    if k in term1[b]:
+                        pfs.append(term1[b][k].n_apply(lambda t: s1*t))
+                    if k in term2[b]:
+                        pfs.append(term2[b][k].n_apply(lambda t: -t))
+                    if k in last_sol[mode][b]:
+                        pfs.append(last_sol[mode][b][k].n_apply(lambda t: s3*t*self.nd))
+                    rhs = self.expand(PF.add(*pfs).n_apply(lambda t: Mul(nlc**2, t, gc_m2)), order)
+                    s0 = rhs.n_apply(lambda t: self.n_simp(dsd2(_g, self.p2s_group(t), self.dc,
+                                                                subs=self.gc*t_)))
+                    self.sol[i][mode][b][k] = PF.add(s0, self.fdf0(n0, mode)) if len(k) == 1 else s0
+            if dc:
+                self.sol.append((last_sol[0],
+                                 f_dict({a_s: dict(), Dagger(a_i): dict()}, b_left=False),
+                                 f_dict({Dagger(a_s): dict(), a_i: dict()})))
+                pd = self.d_adjoint(last_sol[0])
+                term1 = self.e_mul(self.e_mul(last_sol[0], pd), last_sol[1])
+                term2 = self.e_mul(self.dd_last, self.d_adjoint(last_sol[2]))
+                _d2ts(1, True, a_s)
+                _d2ts(1, False, Dagger(a_i))
+                term1 = self.e_mul(last_sol[2], self.e_mul(pd, last_sol[0]))
+                term2 = self.e_mul(self.d_adjoint(last_sol[1]), self.dd_last)
+                _d2ts(2, False, Dagger(a_s))
+                _d2ts(2, True, a_i)
+            else:
+                self.sol.append((f_dict({a_p: dict(), a_s: dict()}),
+                                 f_dict({a_p: dict(), a_s: dict()}),
+                                 last_sol[2]))
+                id = self.d_adjoint(last_sol[2])
+                term1 = self.e_mul(last_sol[0], self.e_mul(id, last_sol[2]))
+                term2 = self.e_mul(last_sol[1], self.dd_last)
+                _d2ts(0, True, a_p)
+                _d2ts(0, False, a_s)
+                term1 = self.e_mul(last_sol[0], self.d_adjoint(self.dd_last))
+                term2 = self.e_mul(last_sol[1], self.e_mul(last_sol[2], id))
+                _d2ts(1, True, a_s)
+                _d2ts(1, False, a_p)
+        else:
+            def _d1ts():
+                b = self.sol[0][0][(None,)] if dc else self.sol[0][2][(None,)]
+                result = dict()
+                for k, v in self.dd_last.items():
+                    rhs = self.expand(v.n_apply(lambda t: -I*nlc*t/self.gc), order)
+                    s0 = rhs.n_apply(lambda t: self.n_simp(dsd1(_g, self.p2s_group(t),
+                                                                subs=self.gc*t_))) 
+                    result[k] = PF.add(s0, b) if len(k) == 1 else s0
+                return result
+            if dc:
+                self.dd_last = self.e_mul(last_sol[1], last_sol[2])
+                self.sol.append((_d1ts(), *last_sol[1:]))
+            else:
+                self.dd_last = self.e_mul(self.d_adjoint(last_sol[1]), last_sol[0])
+                self.sol.append((*last_sol[:2], _d1ts()))
+        return self.sol[i]
+
+    def sol_expr(self, mode: int, order: int):
+        """
+        Get the expression of the solution for the given mode and order.
+
+        The order is consistent with the order of the perturbative expansion,
+        so the classical solution with zero input is considered as order -1,
+        and the parametirc amplifier/oscillator solution with undepleted drive
+        is considered as order 0.
+        """
+        s0 = self.sol[0]
+        if len(s0[mode]) == 1:
+            p = S.One
+        elif mode == 0:
+            p = self.half_p_factor**S.NegativeOne
+        else:
+            p = self.half_p_factor
+        if len(s0[mode]) == 1 or mode != 1 or len(s0[0]) == 2:  # driving field
+            return p*self.to_expr(self.get_sol(order)[mode])
+        return p*self.to_expr(self.get_sol(order)[mode])
+
+
+class FWMSolver(WM_Processor):
+    """
+    Four-wave mixing quantum multimode parametric process perturbation solver.
+
+    The driving pump field a_0 is strong and treated parametrically.
+    Solutions are obtained up to the first correction to the pump field (order 1),
+    including self-phase modulation and cross-phase modulation pump depletion.
+
+    Because the solution is capped at the first pump correction, results are
+    computed and stored directly upon initialization rather than solved recursively.
+    """
+
+    def __init__(self):
+        super().__init__(dc=True, mismatch=True)
+        self.nd = BosonNum(a_p.name)
+        self.a = (MultimodeCOP(a_s.name, a_i.name, annih1=0),
+                  MultimodeCOP(a_s.name, a_i.name))
+        self.hpm = -I*self.pm*S.Half + I*nlc*self.nd
+        self.gc = S.Half*(self.pm * (self.pm + 4*nlc*self.nd))**S.Half
+        self.base_assumptions = {a_p.name: -S.Half, nlc: S.One}
+        self.pe = PE(self.base_assumptions)
+        self.pe.register(MultimodeNum)
+        self.pe.register(MultimodeNum2)
+        self.pe.register(MultimodeCOP)
+        self.expand = (lambda pf, order:
+                       self.pe.expand_pf(pf, order).n_apply(lambda t:
+                                                             t.subs({t_: _g/self.gc})))
+        self._solve()
+
+    def _solve(self):
+        # Order -1: Initial operators at t=0
+        sol_m1 = (
+            {(None,): PF({((a_p,), ()): S.One})},
+            f_dict({a_s: {(None,): PF0}, Dagger(a_i): {(None,): PF0}}, b_left=False),
+            f_dict({Dagger(a_s): {(None,): PF0}, a_i: {(None,): PF0}}, b_left=True)
+        )
+
+        # Order 0: Undepleted pump and parametric weak field evolution
+        fwm0_0 = {(None,): PF({((a_p,), ()): S.One})}
+        fwm0_1 = f_dict({
+            a_s: {(None,): PF({((), ()): dsd2(self.gc*t_, dict(), True, S.One, self.hpm/self.gc)})},
+            Dagger(a_i): {(None,): PF({((a_p**2,), ()): dsd2(self.gc*t_, dict(), True, S.Zero, -I*nlc/self.gc)})}
+        }, b_left=False)
+        fwm0_2 = f_dict({
+            Dagger(a_s): {(None,): PF({((a_p**2,), ()): dsd2(self.gc*t_, dict(), True, S.Zero, -I*nlc/self.gc)})},
+            a_i: {(None,): PF({((), ()): dsd2(self.gc*t_, dict(), True, S.One, self.hpm/self.gc)})}
+        }, b_left=True)
+        sol_0 = (fwm0_0, fwm0_1, fwm0_2)
+
+        # Order 1: First correction to pump (pump depletion)
+        xpm_c = {(None,): PF({((a_p,), ()): S.Half*MultimodeNum2(a_s.name, a_i.name)})}
+        coeff = {(None,): PF({((a_p,), ()): S.Half})}
+        xpm_t1 = self.e_mul(sol_0[1], self.d_adjoint(sol_0[1]))
+        xpm_t2 = self.e_mul(self.d_adjoint(sol_0[2]), sol_0[2])
+        xpm_t = self.d_add(xpm_t1, xpm_t2)
+        dd2 = self.e_mul(self.e_mul(sol_0[1], self.d_adjoint(sol_0[0])), sol_0[2])
+        fwm1p = dict()
+        for k, v in self.d_add(dd2, xpm_c, self.e_mul(coeff, xpm_t)).items():
+            rhs = self.pe.expand_pf(v.n_apply(lambda t: -2*I*nlc*t.subs({t_: _g/self.gc})/self.gc), 1)
+            s0 = rhs.n_apply(lambda t: self.n_simp(dsd1(_g, self.p2s_group(t), subs=self.gc*t_)))
+            fwm1p[k] = PF.add(sol_0[0][(None,)], s0) if len(k) == 1 else s0
+
+        sol_1 = (fwm1p, sol_0[1], sol_0[2])
+        self.sol = [sol_m1, sol_0, sol_1]
+
+    def get_sol(self, order: int):
+        """
+        Get the solution tuple for the given order (-1, 0, or 1).
+        """
+        if order < -1 or order > 1:
+            raise ValueError(f"Order {order} out of range for FWMSolver (supports orders -1, 0, 1)")
+        return self.sol[order + 1]
+
+    def sol_expr(self, mode: int, order: int):
+        """
+        Get the expression of the solution for the given mode and order (up to order 1).
+        For the pump mode (mode 0), includes the SPM phase factor exp(-i * χ * N_0 * t) for order >= 0.
+        """
+        sol_dict = self.get_sol(order)[mode]
+        expr = self.to_expr(sol_dict)
+        if mode == 0 and order >= 0:
+            return expr * exp(-I * nlc * self.nd * t_)
+        return expr
+    def _zq(self, obj):
+        """
+        Assumes that the phase mismatch exactly compensates
+        the self-phase modulation of the strong field,
+        and evaluates the expression accordingly.
+
+        :param obj: Expr, PF, dict, f_dict, or TwmWrapper.
+        """
+        if hasattr(obj, 'val'):
+            obj = obj.val
+
+        return d_apply(obj, lambda x: self.nd_simp(x.subs({self.nd: self.gc/nlc})))
+
+
+TWM = TWMSolver
+FWM = FWMSolver

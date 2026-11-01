@@ -7,7 +7,7 @@ function renderWorkspaceTable(ws) {
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
   tbody.innerHTML = '';
-  setupTbodyDrop(tbody, ws);
+
 
   const items = isTwm ? twmTableItems : tableItems;
   const inputId = isTwm ? 'twm-input' : 'pf-input';
@@ -128,7 +128,7 @@ Created under Single Mode (n_m=1), but current preset is Multimode.
       </td>
     `;
 
-    makeRowDraggable(tr, item, ws);
+    makeRowDraggable(tr, ws);
 
     tr.addEventListener('click', (e) => {
       if (e.target.closest('button, input, select, .badge-editable')) return;
@@ -237,7 +237,7 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
     if (typeof item.order === 'number') {
       const isLower = item.order < curOrder;
       const orderBadge = isLower
-        ? `<span class="badge badge-warning">${item.order}</span>`
+        ? `<span class="badge badge-warning">${item.order}</span> <span class="details-note">(preset ${curOrder})</span>`
         : `<span class="badge badge-success">${item.order}</span>`;
       addRow('Accuracy (Order)', orderBadge);
     } else {
@@ -890,6 +890,9 @@ async function saveAnswerExpression() {
   if (isTwmWs) {
     const latexT = (cachedTwmResult && cachedTwmResult.latex_t) ? cachedTwmResult.latex_t : currentTwmLatex;
     const latexG = (cachedTwmResult && cachedTwmResult.latex_g) ? cachedTwmResult.latex_g : currentTwmLatex;
+    const exprStrT = (cachedTwmResult && cachedTwmResult.expr_str_t) ? cachedTwmResult.expr_str_t : (currentTwmExpr || '');
+    const exprStrG = (cachedTwmResult && cachedTwmResult.expr_str_g) ? cachedTwmResult.expr_str_g : (currentTwmExpr || '');
+    const exprStrVal = (cachedTwmResult && cachedTwmResult.expr_str) ? cachedTwmResult.expr_str : (currentTwmExpr || exprStrT || currentInputText || '');
     const leadOrdVal = (cachedTwmResult && typeof cachedTwmResult.leading_order === 'number')
       ? cachedTwmResult.leading_order
       : 0;

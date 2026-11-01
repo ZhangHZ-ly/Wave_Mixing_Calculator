@@ -140,7 +140,6 @@ function attachRowTooltip(tr, content, hint = 'Click to edit', note = '') {
 
 // ----------------------------------------------------
 // Table Row Drag & Drop Reordering Handling
-
 // ----------------------------------------------------
 let draggedRow = null;
 let draggedWs = null;
@@ -352,7 +351,7 @@ window.addEventListener('mousemove', (e) => {
   }
 });
 
-window.addEventListener('mouseup', (e) => {
+window.addEventListener('mouseup', () => {
   if (draggedRow) {
     if (currentDropTarget && draggedWs) {
       const arr = getWorkspaceArray(draggedWs);
@@ -432,7 +431,7 @@ function isEventNearText(e, threshold = 8) {
   return false;
 }
 
-function makeRowDraggable(tr, item, ws) {
+function makeRowDraggable(tr, ws) {
   tr.classList.add('draggable-row');
 
   // Prevent default HTML5 drag so browser doesn't switch to native OS arrow+box cursor
@@ -469,10 +468,6 @@ function makeRowDraggable(tr, item, ws) {
     pendingRowEl = tr;
     pendingRowWs = ws;
   });
-}
-
-function setupTbodyDrop(tbody, ws) {
-  // Handled smoothly via mouse window listeners
 }
 
 function toggleDropdown(id) {
@@ -516,4 +511,3 @@ function closeModal(id) {
   document.getElementById(id).classList.remove('active');
   activeEditItem = null;
 }
-

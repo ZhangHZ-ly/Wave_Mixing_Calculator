@@ -66,8 +66,5 @@ async function runPf(useRes) {
   }
 }
 
-
-
-
 // Backwards compatibility aliases
 window.runPatternForm = runPf;

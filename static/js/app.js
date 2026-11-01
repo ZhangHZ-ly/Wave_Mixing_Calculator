@@ -30,13 +30,13 @@ const DEFAULT_TABLE_ITEMS = [
 
 // Default interactive table entries for Tab 3 (from parametric.py)
 const DEFAULT_TWM_TABLE_ITEMS = [
+  { id: 'c0', type: 'symbol', builtinKey: 'pm', name: 'pm', displayName: '\\Delta k', isReal: true, isInteger: false, isNonnegative: false, isPositive: false, notes: 'Phase mismatch' },
   { id: 'c1', type: 'symbol', builtinKey: 'nlc', name: 'nlc', displayName: '\\chi', isReal: true, isInteger: false, isNonnegative: true, isPositive: false, notes: 'Nonlinear coupling coefficient' },
-  { id: 'c2', type: 'symbol', builtinKey: 'pm', name: 'pm', displayName: '\\Delta k', isReal: true, isInteger: false, isNonnegative: false, isPositive: false, notes: 'Phase mismatch' },
-  { id: 'c3', type: 'evolved_op', modeIndex: 0, name: 'a_p', displayName: 'a_0', notes: 'Evolved pump operator at time t' },
-  { id: 'c4', type: 'evolved_op', modeIndex: 1, name: 'a_s', displayName: 'a_1', notes: 'Evolved signal operator at time t' },
-  { id: 'c5', type: 'evolved_op', modeIndex: 2, name: 'a_i', displayName: 'a_2', notes: 'Evolved idler operator at time t' },
-  { id: 'c6', type: 'mm_op', mmKind: 'COP', name: 'A', displayName: '', notes: 'Multimode canonical operator (MultimodeCOP)' },
-  { id: 'c7', type: 'mm_op', mmKind: 'Num2', name: 'N_t', displayName: '', notes: 'Multimode number operator (MultimodeNum2)' }
+  { id: 'c2', type: 'evolved_op', modeIndex: 0, name: 'a_p', displayName: 'a_0', notes: 'Evolved pump operator at time t' },
+  { id: 'c3', type: 'evolved_op', modeIndex: 1, name: 'a_s', displayName: 'a_1', notes: 'Evolved signal operator at time t' },
+  { id: 'c4', type: 'evolved_op', modeIndex: 2, name: 'a_i', displayName: 'a_2', notes: 'Evolved idler operator at time t' },
+  { id: 'c5', type: 'mm_op', mmKind: 'COP', name: 'A', displayName: '', notes: 'Multimode canonical operator (MultimodeCOP)' },
+  { id: 'c6', type: 'mm_op', mmKind: 'Num2', name: 'N_t', displayName: '', notes: 'Multimode number operator (MultimodeNum2)' }
 ];
 
 let tableItems = JSON.parse(localStorage.getItem('qc_table_items_en') || 'null');
@@ -361,7 +361,7 @@ async function onTwmMismatchChange() {
 
   if (isMismatch) {
     const defaultPm = DEFAULT_TWM_TABLE_ITEMS.find(x => x.builtinKey === 'pm') || {
-      id: 'c2',
+      id: 'c0',
       type: 'symbol',
       builtinKey: 'pm',
       name: 'pm',
@@ -966,7 +966,7 @@ window.addEventListener('mousemove', (e) => {
   }
 });
 
-window.addEventListener('mouseup', (e) => {
+window.addEventListener('mouseup', () => {
   if (draggedRow) {
     if (currentDropTarget && draggedWs) {
       const arr = getWorkspaceArray(draggedWs);
@@ -1046,7 +1046,7 @@ function isEventNearText(e, threshold = 8) {
   return false;
 }
 
-function makeRowDraggable(tr, item, ws) {
+function makeRowDraggable(tr, ws) {
   tr.classList.add('draggable-row');
 
   // Prevent default HTML5 drag so browser doesn't switch to native OS arrow+box cursor
@@ -1085,9 +1085,11 @@ function makeRowDraggable(tr, item, ws) {
   });
 }
 
-function setupTbodyDrop(tbody, ws) {
+/* setupTbodyDrop removed
   // Handled smoothly via mouse window listeners
 }
+
+*/
 
 function renderWorkspaceTable(ws) {
   const isTwm = (ws === 'tab3' || ws === 'tab4');
@@ -1095,7 +1097,7 @@ function renderWorkspaceTable(ws) {
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
   tbody.innerHTML = '';
-  setupTbodyDrop(tbody, ws);
+
 
   const items = isTwm ? twmTableItems : tableItems;
   const inputId = isTwm ? 'twm-input' : 'pf-input';
@@ -1216,7 +1218,7 @@ Created under Single Mode (n_m=1), but current preset is Multimode.
       </td>
     `;
 
-    makeRowDraggable(tr, item, ws);
+    makeRowDraggable(tr, ws);
 
     tr.addEventListener('click', (e) => {
       if (e.target.closest('button, input, select, .badge-editable')) return;
@@ -2040,6 +2042,9 @@ async function saveAnswerExpression() {
   if (isTwmWs) {
     const latexT = (cachedTwmResult && cachedTwmResult.latex_t) ? cachedTwmResult.latex_t : currentTwmLatex;
     const latexG = (cachedTwmResult && cachedTwmResult.latex_g) ? cachedTwmResult.latex_g : currentTwmLatex;
+    const exprStrT = (cachedTwmResult && cachedTwmResult.expr_str_t) ? cachedTwmResult.expr_str_t : (currentTwmExpr || '');
+    const exprStrG = (cachedTwmResult && cachedTwmResult.expr_str_g) ? cachedTwmResult.expr_str_g : (currentTwmExpr || '');
+    const exprStrVal = (cachedTwmResult && cachedTwmResult.expr_str) ? cachedTwmResult.expr_str : (currentTwmExpr || exprStrT || currentInputText || '');
     const leadOrdVal = (cachedTwmResult && typeof cachedTwmResult.leading_order === 'number')
       ? cachedTwmResult.leading_order
       : 0;

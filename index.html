@@ -50,7 +50,7 @@ window.addEventListener('error', function(e) {
   <div id="tab-single" class="panel active">
     <div class="card">
       <div class="card-title">
-        <span>Single-Mode Operator Setup (BosonPat / FermionPat)</span>
+        <span>Single-Mode Operator Reordering</span>
       </div>
       <div class="form-grid">
         <div class="form-group">
@@ -126,7 +126,7 @@ window.addEventListener('error', function(e) {
     <!-- Expression Input & Processing -->
     <div class="card">
       <div class="card-title">
-        <span>Quantum Expression Processing (PFTableProcessor: sort_context & PF)</span>
+        <span>Quantum Expression Processing with Pattern-Form</span>
       </div>
       <div class="form-group">
         <label for="pf-input">Expression Input</label>
@@ -278,7 +278,7 @@ window.addEventListener('error', function(e) {
       <div class="form-group">
         <label for="twm-input">TWM Expression Input</label>
         <textarea id="twm-input" rows="3" placeholder="e.g. dag(a_p) * a_p - N_(a_p) or a_s * dag(a_s) + dag(a_i) * a_i or a_s * a_i" style="font-family: monospace; font-size: 1rem;">dag(a_p) * a_p - N_(a_p)</textarea>
-        <span class="form-tip">Shortcuts: <code>dag(op)</code> for adjoint \((\dots)^\dagger\), <code>N_(a_p)</code> for initial number operator, \(a_0, a_1, a_2\) for initial (\(t=0\)) operators, \(t\) for time, \(g\) for parametric gain.</span>
+        <span class="form-tip">Shortcuts: <code>dag(op)</code> for adjoint \((\dots)^\dagger\), <code>a_0, a_1, a_2</code> for initial (\(t=0\)) operators, <code>N_(…)</code> for initial number operator, <code>t</code> for time, <code>g</code> for parametric gain.</span>
       </div>
 
       <div class="btn-group" style="margin-top: 1rem;">
