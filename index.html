@@ -43,7 +43,7 @@ window.addEventListener('error', function(e) {
   <div class="tab-bar">
     <button class="tab-btn active" onclick="switchTab('tab-single')">Single Mode</button>
     <button class="tab-btn" onclick="switchTab('tab-pf')">Quantum Expression</button>
-    <button class="tab-btn" onclick="switchTab('tab-twm')">TWM Evolution</button>
+    <button class="tab-btn" onclick="switchTab('tab-wm')">WM Evolution</button>
   </div>
 
   <!-- TAB 1: Single Mode Calculation -->
@@ -229,8 +229,8 @@ window.addEventListener('error', function(e) {
     </div>
   </div>
 
-  <!-- TAB 3: Three-Wave Mixing (TWM) Evolution -->
-  <div id="tab-twm" class="panel">
+  <!-- TAB 3: Wave Mixing (WM) Evolution -->
+  <div id="tab-wm" class="panel">
     <!-- Preset Configuration Card -->
     <div class="card">
       <div class="card-title">
@@ -238,26 +238,27 @@ window.addEventListener('error', function(e) {
       </div>
       <div class="form-grid">
         <div class="form-group">
-          <label for="twm-dc">Mixing Process Type</label>
-          <select id="twm-dc" onchange="onTwmPresetChange()">
-            <option value="true" selected>Down-conversion</option>
-            <option value="false">Frequency Conversion / State Transfer</option>
+          <label for="wm-process">Mixing Process Type</label>
+          <select id="wm-process" onchange="onWmProcessChange()">
+            <option value="twm_dc" selected>Down-conversion</option>
+            <option value="twm_fc">Frequency Conversion / State Transfer</option>
+            <option value="fwm">Four-Wave Mixing</option>
           </select>
-          <span class="form-tip">Determines the driving mode (pump or idler)</span>
+          <span class="form-tip">Determines the wave-mixing process and driving mode</span>
         </div>
 
         <div class="form-group">
-          <label for="twm-mismatch">Phase-Matching Condition</label>
-          <select id="twm-mismatch" onchange="onTwmMismatchChange()">
+          <label for="wm-mismatch">Phase-Matching Condition</label>
+          <select id="wm-mismatch" onchange="onWmMismatchChange()">
             <option value="false" selected>Phase Matched (Δk = 0)</option>
-            <option value="true">Phase Unmatched (Δk ≠ 0)</option>
+            <option value="true">Arbitrary Phase Mismatch</option>
           </select>
           <span class="form-tip">Whether the phase-mismatch is compensated</span>
         </div>
 
         <div class="form-group">
-          <label for="twm-order">Retained Order</label>
-          <input id="twm-order" type="number" step="1" value="1" onchange="onTwmPresetChange()" oninput="onTwmPresetChange()">
+          <label for="wm-order">Retained Order</label>
+          <input id="wm-order" type="number" step="1" value="1" onchange="onWmPresetChange()" oninput="onWmPresetChange()">
           <span class="form-tip">Truncation order limit</span>
         </div>
 
@@ -266,26 +267,26 @@ window.addEventListener('error', function(e) {
       </div>
     </div>
 
-    <!-- TWM Expression Input & Processing -->
+    <!-- WM Expression Input & Processing -->
     <div class="card">
       <div class="card-title" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
-        <span>Three-Wave Mixing (TWM) Evolution Operator Calculation</span>
+        <span>Wave Mixing (WM) Evolution Operator Calculation</span>
         <label class="checkbox-label" style="font-size: 0.875rem; font-weight: 600; cursor: pointer; margin-bottom: 0;" title="Replace multimode operators with single-mode operators (n_m = 1) and unify into PF">
-          <input type="checkbox" id="twm-single-mode" onchange="onTwmSingleModeChange()">
+          <input type="checkbox" id="wm-single-mode" onchange="onWmSingleModeChange()">
           Single-mode processing
         </label>
       </div>
       <div class="form-group">
-        <label for="twm-input">TWM Expression Input</label>
-        <textarea id="twm-input" rows="3" placeholder="e.g. dag(a_p) * a_p - N_(a_p) or a_s * dag(a_s) + dag(a_i) * a_i or a_s * a_i" style="font-family: monospace; font-size: 1rem;">dag(a_p) * a_p - N_(a_p)</textarea>
+        <label for="wm-input">WM Expression Input</label>
+        <textarea id="wm-input" rows="3" placeholder="e.g. dag(a_p) * a_p - N_(a_p) or a_s * dag(a_s) + dag(a_i) * a_i or a_s * a_i" style="font-family: monospace; font-size: 1rem;">dag(a_p) * a_p - N_(a_p)</textarea>
         <span class="form-tip">Shortcuts: <code>dag(op)</code> for adjoint \((\dots)^\dagger\), <code>a_0, a_1, a_2</code> for initial (\(t=0\)) operators, <code>N_(…)</code> for initial number operator, <code>t</code> for time, <code>g</code> for parametric gain.</span>
       </div>
 
       <div class="btn-group" style="margin-top: 1rem;">
-        <button class="btn btn-primary" onclick="runTwm()">
-          Calculate TWM Evolution
+        <button class="btn btn-primary" onclick="runWm()">
+          Calculate Evolution
         </button>
-        <button class="btn btn-secondary" onclick="document.getElementById('twm-input').value = ''">
+        <button class="btn btn-secondary" onclick="document.getElementById('wm-input').value = ''">
           Clear
         </button>
       </div>
@@ -293,18 +294,18 @@ window.addEventListener('error', function(e) {
       <!-- Output Area -->
       <div class="output-box">
         <div class="output-header">
-          <span>TWM Result</span>
-          <span id="twm-mode-tag" class="badge badge-gray">Down-conversion | Phase Matched (Δk = 0) | order=1 | time | multimode</span>
+          <span>WM Result</span>
+          <span id="wm-mode-tag" class="badge badge-gray">Down-conversion | Phase Matched (Δk = 0) | order=1 | time (t) | multimode</span>
         </div>
-        <div id="twm-output" class="output-content">
-          <span style="color: var(--text-secondary); font-size: 0.95rem;">Click Calculate TWM Evolution above...</span>
+        <div id="wm-output" class="output-content">
+          <span style="color: var(--text-secondary); font-size: 0.95rem;">Click Calculate Evolution above...</span>
         </div>
         <div class="output-footer">
           <div class="btn-group">
-            <button id="twm-gain-toggle-btn" class="btn btn-secondary btn-sm" onclick="toggleTwmGainDisplay()">
+            <button id="wm-gain-toggle-btn" class="btn btn-secondary btn-sm" onclick="toggleWmGainDisplay()">
               Display in terms of gain
             </button>
-            <button class="btn btn-secondary btn-sm" onclick="copyLatex(currentTwmLatex)">
+            <button class="btn btn-secondary btn-sm" onclick="copyLatex(currentWmLatex)">
               Copy LaTeX
             </button>
             <button class="btn btn-success btn-sm" onclick="openSaveAnswerModal('tab3')">
@@ -317,16 +318,16 @@ window.addEventListener('error', function(e) {
 
     <!-- Tab 3 Sub-Tabs Bar: Defined Expressions vs Input State Assertions -->
     <div class="subtab-bar">
-      <button class="subtab-btn active" id="subtab-btn-defined" onclick="switchTwmSubTab('twm-sub-defined')">
+      <button class="subtab-btn active" id="subtab-btn-defined" onclick="switchWmSubTab('wm-sub-defined')">
         <span>Defined Expressions</span>
       </button>
-      <button class="subtab-btn" id="subtab-btn-assertions" onclick="switchTwmSubTab('twm-sub-assertions')">
+      <button class="subtab-btn" id="subtab-btn-assertions" onclick="switchWmSubTab('wm-sub-assertions')">
         <span>Input State Assertions</span>
       </button>
     </div>
 
     <!-- Sub-Panel 1: Defined Expressions -->
-    <div class="subtab-panel active" id="twm-sub-defined">
+    <div class="subtab-panel active" id="wm-sub-defined">
       <div class="card">
         <div class="card-title">
           <span>Defined Expressions</span>
@@ -337,8 +338,8 @@ window.addEventListener('error', function(e) {
             <button class="btn btn-secondary btn-sm" onclick="restoreBaseOperators('tab3')">
               Restore Base Solutions
             </button>
-            <div class="dropdown" id="addTwmDropdown">
-              <button class="btn btn-primary btn-sm" onclick="toggleDropdown('addTwmDropdown')">
+            <div class="dropdown" id="addWmDropdown">
+              <button class="btn btn-primary btn-sm" onclick="toggleDropdown('addWmDropdown')">
                 Add / Create ▼
               </button>
               <div class="dropdown-content">
@@ -352,7 +353,7 @@ window.addEventListener('error', function(e) {
         </div>
 
         <div class="table-responsive">
-          <table class="custom-table" id="twmTable">
+          <table class="custom-table" id="wmTable">
             <thead>
               <tr>
                 <th style="width: 160px;" class="col-center">Type</th>
@@ -362,7 +363,7 @@ window.addEventListener('error', function(e) {
                 <th style="width: 130px;" class="col-center">Actions</th>
               </tr>
             </thead>
-            <tbody id="twmTableBody">
+            <tbody id="wmTableBody">
               <!-- Dynamically populated -->
             </tbody>
           </table>
@@ -374,7 +375,7 @@ window.addEventListener('error', function(e) {
     </div>
 
     <!-- Sub-Panel 2: Input State Assertions -->
-    <div class="subtab-panel" id="twm-sub-assertions">
+    <div class="subtab-panel" id="wm-sub-assertions">
       <div class="card">
         <div class="card-title">
           <span>Input State Assertions (at \(t = 0\))</span>
@@ -399,10 +400,10 @@ window.addEventListener('error', function(e) {
         </div>
 
         <div class="btn-group">
-          <button class="btn btn-primary" onclick="runTwmAssertions()">
+          <button class="btn btn-primary" onclick="runWmAssertions()">
             Calculate under Assertions
           </button>
-          <button class="btn btn-secondary" onclick="clearTwmAssertions()">
+          <button class="btn btn-secondary" onclick="clearWmAssertions()">
             Clear Assertions
           </button>
         </div>
@@ -549,8 +550,8 @@ window.addEventListener('error', function(e) {
         <label for="ne-notes">Notes / Description</label>
         <input type="text" id="ne-notes" placeholder="Optional note to describe expression meaning">
       </div>
-      <div id="twm-save-order-info" class="form-group" style="margin-bottom: 0.75rem; display: none;">
-        <span class="form-tip" style="color: #475569;">Recorded Order: <strong id="twm-save-order-val">1</strong> &bull; Simultaneously preserves both time (\(t\)) and parametric gain (\(g\)) views for this variable.</span>
+      <div id="wm-save-order-info" class="form-group" style="margin-bottom: 0.75rem; display: none;">
+        <span class="form-tip" style="color: #475569;">Recorded Order: <strong id="wm-save-order-val">1</strong> &bull; Simultaneously preserves both time (\(t\)) and parametric gain (\(g\)) views for this variable.</span>
       </div>
       <div class="form-group" style="margin-bottom: 0.75rem;">
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.35rem;">
@@ -632,11 +633,11 @@ window.addEventListener('error', function(e) {
     </div>
     <div class="modal-body">
       <p style="margin-bottom: 0.75rem; font-size: 0.95rem; color: var(--text-primary);">
-        The calculation accuracy requirement for <strong>Order <span id="warn-target-order"></span></strong> is not satisfied by the following custom expression(s):
+        The calculation accuracy requirement for <strong>Order <span id="warn-target-order"></span></strong> is not satisfied by the following expression(s) / operator solution(s):
       </p>
       <div id="warn-var-list" style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; padding: 0.75rem; margin-bottom: 0.75rem; font-size: 0.9rem;"></div>
       <p style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.4;">
-        Using lower-order variables in a higher-order calculation may lead to missing expansion terms and inaccurate perturbation results.
+        Using lower-order approximations in a higher-order calculation may lead to missing expansion terms and inaccurate perturbation results.
       </p>
     </div>
     <div class="modal-footer">
@@ -646,7 +647,7 @@ window.addEventListener('error', function(e) {
   </div>
 </div>
 
-<!-- Modal: Condition Inconsistency Warning Modal (dc, single_mode, and extensible logic rules) -->
+<!-- Modal: Condition Inconsistency Warning Modal (process, single_mode, and extensible logic rules) -->
 <div id="conditionWarningModal" class="modal-overlay">
   <div class="modal" style="max-width: 520px;">
     <div class="modal-header">
@@ -724,7 +725,7 @@ window.addEventListener('error', function(e) {
   <script src="/static/js/tables.js"></script>
   <script src="/static/js/tab1_single.js"></script>
   <script src="/static/js/tab2_pf.js"></script>
-  <script src="/static/js/tab3_twm.js"></script>
+  <script src="/static/js/tab3_wm.js"></script>
   <script src="/static/js/main.js"></script>
 
 </body>

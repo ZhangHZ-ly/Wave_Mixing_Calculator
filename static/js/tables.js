@@ -2,27 +2,28 @@
 // tables.js - Table Rendering Engine & Interactive Modals
 // ====================================================
 function renderWorkspaceTable(ws) {
-  const isTwm = (ws === 'tab3' || ws === 'tab4');
-  const tbodyId = isTwm ? 'twmTableBody' : 'symbolTableBody';
+  const isWm = (ws === 'tab3' || ws === 'tab4');
+  const tbodyId = isWm ? 'wmTableBody' : 'symbolTableBody';
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
   tbody.innerHTML = '';
 
 
-  const items = isTwm ? twmTableItems : tableItems;
-  const inputId = isTwm ? 'twm-input' : 'pf-input';
+  const items = isWm ? wmTableItems : tableItems;
+  const inputId = isWm ? 'wm-input' : 'pf-input';
 
   if (!items.length) {
-    const emptyMsg = isTwm
+    const emptyMsg = isWm
       ? 'No defined entries. Click "Reset Defaults" or "Add / Create" in the top-right.'
       : 'No defined symbols or operators. Click "Add / Create" in the top-right to create one.';
     tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-secondary);">${emptyMsg}</td></tr>`;
     return;
   }
 
-  const isDc = document.getElementById('twm-dc') ? (document.getElementById('twm-dc').value === 'true') : true;
-  const orderVal = document.getElementById('twm-order') ? parseInt(document.getElementById('twm-order').value) : 1;
-  const isSingleMode = document.getElementById('twm-single-mode') ? document.getElementById('twm-single-mode').checked : false;
+  const curProcess = getWmProcess();
+  const isDc = getWmDc();
+  const orderVal = document.getElementById('wm-order') ? parseInt(document.getElementById('wm-order').value) : 1;
+  const isSingleMode = getWmSingleMode();
 
   items.forEach(item => {
     const tr = document.createElement('tr');
@@ -34,7 +35,7 @@ function renderWorkspaceTable(ws) {
     let notesStr = item.notes ? escapeHtml(item.notes) : '<span style="color: var(--text-secondary);">&ndash;</span>';
 
     if (item.type === 'symbol') {
-      typeBadge = isTwm ? '<span class="badge badge-info">Commutative Symbol</span>' : '<span class="badge badge-info badge-full">Commutative Symbol</span>';
+      typeBadge = isWm ? '<span class="badge badge-info">Commutative Symbol</span>' : '<span class="badge badge-info badge-full">Commutative Symbol</span>';
       const isNlc = item.builtinKey === 'nlc' || item.name === 'nlc';
 
       if (item.builtinKey === 'pm' || item.name === 'pm') {
@@ -52,9 +53,9 @@ function renderWorkspaceTable(ws) {
       }
     } else if (item.type === 'operator') {
       typeBadge = item.kind === 'boson'
-        ? (isTwm ? '<span class="badge badge-success">Boson Mode</span>' : '<span class="badge badge-success badge-full">Boson Operator</span>')
-        : (isTwm ? '<span class="badge badge-warning">Fermion Mode</span>' : '<span class="badge badge-warning badge-full">Fermion Operator</span>');
-      attrOrDef = item.kind === 'boson' ? (isTwm ? 'Custom Boson Mode' : 'Single Boson Mode') : (isTwm ? 'Custom Fermion Mode' : 'Single Fermion Mode');
+        ? (isWm ? '<span class="badge badge-success">Boson Mode</span>' : '<span class="badge badge-success badge-full">Boson Operator</span>')
+        : (isWm ? '<span class="badge badge-warning">Fermion Mode</span>' : '<span class="badge badge-warning badge-full">Fermion Operator</span>');
+      attrOrDef = item.kind === 'boson' ? (isWm ? 'Custom Boson Mode' : 'Single Boson Mode') : (isWm ? 'Custom Fermion Mode' : 'Single Fermion Mode');
     } else if (item.type === 'evolved_op') {
       typeBadge = '<span class="badge badge-success">Evolved Operator</span>';
       const modeLabels = ['Pump (mode 0)', 'Signal (mode 1)', 'Idler (mode 2)'];
@@ -63,15 +64,15 @@ function renderWorkspaceTable(ws) {
       typeBadge = '<span class="badge badge-warning">Multimode Operator</span>';
       dispCell = `<td style="color: var(--text-secondary);"><span class="cell-text">&ndash;</span></td>`;
       if (item.mmKind === 'COP') {
-        attrOrDef = isDc ? 'MultimodeCOP: Σ a1 a2 (dc=True)' : 'MultimodeCOP: Σ a0 a1† (dc=False)';
+        attrOrDef = isDc ? 'MultimodeCOP: Σ a1 a2 (Down-conversion / FWM)' : 'MultimodeCOP: Σ a0 a1† (State Transfer)';
       } else {
-        attrOrDef = isDc ? 'MultimodeNum2: Σ (1 + N1 + N2) (dc=True)' : 'MultimodeNum2: Σ (N1 - N0) (dc=False)';
+        attrOrDef = isDc ? 'MultimodeNum2: Σ (1 + N1 + N2) (Down-conversion / FWM)' : 'MultimodeNum2: Σ (N1 - N0) (State Transfer)';
       }
     } else if (item.type === 'named_expr') {
-      typeBadge = isTwm ? '<span class="badge badge-gray">Saved Expression</span>' : '<span class="badge badge-gray badge-full">Saved Expression</span>';
+      typeBadge = isWm ? '<span class="badge badge-gray">Saved Expression</span>' : '<span class="badge badge-gray badge-full">Saved Expression</span>';
       dispCell = `<td style="text-align: center; color: var(--text-secondary);"><span class="cell-text">&ndash;</span></td>`;
 
-      if (isTwm) {
+      if (isWm) {
         attrOrDef = item.sourceInput || ((item.latex_t || item.latex_g)
           ? `[Time Form (t)]:
 ${item.latex_t || ''}
@@ -83,17 +84,20 @@ ${item.latex_g || ''}`
         // Evaluate condition conflicts via propositional logic
         const itemHasDefault = (typeof item.hasDefaultOps === 'boolean')
           ? item.hasDefaultOps
-          : exprContainsDefaultOperators(item.latex_t || item.latex_g || item.latex || '', twmTableItems);
+          : exprContainsDefaultOperators(item.latex_t || item.latex_g || item.latex || '', wmTableItems);
 
-        const isDcMismatch = (typeof item.dc === 'boolean' && item.dc !== isDc && itemHasDefault);
+        const itemProc = item.process || (typeof item.dc === 'boolean' ? (item.dc ? 'twm_dc' : 'twm_fc') : null);
+        const isProcMismatch = (itemProc !== null && itemProc !== curProcess && itemHasDefault);
         const isSmMismatch = (item.single_mode === true && !isSingleMode);
 
-        if (isDcMismatch || isSmMismatch) {
+        if (isProcMismatch || isSmMismatch) {
           tr.classList.add('row-danger');
-          if (isDcMismatch) {
-            typeBadge += ` <span class="badge badge-danger" title="Created under ${item.dc ? 'Down-conversion (dc=True)' : 'State Transfer (dc=False)'}, incompatible with current preset!">dc conflict</span>`;
-            attrOrDef = `[WARNING: DC Inconsistency]
-Created under ${item.dc ? 'Down-conversion (dc=True)' : 'State Transfer (dc=False)'}, but current mixing mode is ${isDc ? 'Down-conversion' : 'State Transfer'}.
+          if (isProcMismatch) {
+            const itemProcLabel = PROCESS_LABELS[itemProc] || itemProc;
+            const curProcLabel = PROCESS_LABELS[curProcess] || curProcess;
+            typeBadge += ` <span class="badge badge-danger" title="Created under ${itemProcLabel}, incompatible with current preset!">process conflict</span>`;
+            attrOrDef = `[WARNING: Mixing Process Inconsistency]
+Created under ${itemProcLabel}, but current mixing process is ${curProcLabel}.
 
 ` + attrOrDef;
           }
@@ -104,7 +108,7 @@ Created under Single Mode (n_m=1), but current preset is Multimode.
 
 ` + attrOrDef;
           }
-        } else if (typeof item.order === 'number' && item.order < orderVal) {
+        } else if (typeof item.order === 'number' && !isNaN(orderVal) && item.order < orderVal) {
           tr.classList.add('row-warning');
         }
       } else {
@@ -113,7 +117,7 @@ Created under Single Mode (n_m=1), but current preset is Multimode.
     }
 
     const rowNote = item.notes || ((item.builtinKey === 'pm' || item.name === 'pm') ? 'Phase mismatch parameter (Δk)' : '');
-    attachRowTooltip(tr, attrOrDef, isTwm ? 'click to view details or edit\nright-click for more options' : 'click to edit\nright-click for more options', rowNote);
+    attachRowTooltip(tr, attrOrDef, isWm ? 'click to view details or edit\nright-click for more options' : 'click to edit\nright-click for more options', rowNote);
 
     tr.innerHTML = `
       <td class="cell-center">${typeBadge}</td>
@@ -151,7 +155,7 @@ function renderTable() {
   renderWorkspaceTable('tab2');
 }
 
-function renderTwmTable() {
+function renderWmTable() {
   renderWorkspaceTable('tab3');
 }
 
@@ -170,10 +174,12 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
   if (!tbodyEl || !item) return;
   tbodyEl.innerHTML = '';
 
-  const curDc = document.getElementById('twm-dc') ? (document.getElementById('twm-dc').value === 'true') : true;
-  const curSingleMode = document.getElementById('twm-single-mode') ? document.getElementById('twm-single-mode').checked : false;
-  const curOrder = document.getElementById('twm-order') ? parseInt(document.getElementById('twm-order').value) : 1;
-  const curMismatch = document.getElementById('twm-mismatch') ? (document.getElementById('twm-mismatch').value === 'true') : false;
+  const curProcess = getWmProcess();
+  const curDc = getWmDc();
+  const curSingleMode = getWmSingleMode();
+  const curOrderRaw = document.getElementById('wm-order') ? parseInt(document.getElementById('wm-order').value) : 1;
+  const curOrder = isNaN(curOrderRaw) ? 1 : curOrderRaw;
+  const curMismatch = getWmMismatch();
 
   const rows = [];
 
@@ -190,7 +196,7 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
   let typeDesc = '';
   if (item.type === 'symbol') typeDesc = 'Commutative Symbol';
   else if (item.type === 'operator') typeDesc = item.kind === 'boson' ? 'Boson Field Operator' : 'Fermion Field Operator';
-  else if (item.type === 'evolved_op') typeDesc = 'Evolved Operator (Three-Wave Mixing)';
+  else if (item.type === 'evolved_op') typeDesc = (curProcess === 'fwm') ? 'Evolved Operator (Four-Wave Mixing)' : 'Evolved Operator (Three-Wave Mixing)';
   else if (item.type === 'mm_op') typeDesc = 'Multimode Preset Operator';
   else if (item.type === 'named_expr') typeDesc = 'Saved Expression (Named Variable)';
   addRow('Object Type', `<strong>${escapeHtml(typeDesc)}</strong>`);
@@ -223,13 +229,24 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
       addRow('Leading Order', `<span class="badge badge-gray">${leadOrd}</span> <span class="details-note">(Exact Fermion)</span>`);
     }
   } else if (item.type === 'evolved_op') {
-    const isStrong = (curDc && item.modeIndex === 0) || (!curDc && item.modeIndex === 2);
-    const leadOrd = isStrong ? -1 : 0;
-    const solverKey = `${curDc}_${curMismatch}`;
-    const curSolLen = cachedSolverSolLens[solverKey] || 1;
-    const evolvedAccuracy = curSolLen + leadOrd - 1;
-    addRow('Accuracy (Order)', `<span class="badge badge-info">${evolvedAccuracy}</span> <span class="details-note">(auto-update)</span>`);
-    addRow('Leading Order', `<span class="badge badge-gray">${leadOrd}</span> <span class="details-note">${isStrong ? '(Strong driving mode)' : '(Weak signal/idler mode)'}</span>`);
+    if (curProcess === 'fwm') {
+      const isStrong = (item.modeIndex === 0);
+      const leadOrd = isStrong ? -0.5 : 0;
+      const evolvedAccuracy = 1;
+      const isLower = evolvedAccuracy < curOrder;
+      const orderBadge = `<span class="badge ${isLower ? 'badge-warning' : 'badge-success'}">${evolvedAccuracy}</span> <span class="details-note">(auto-update (maximum 1))</span>`;
+      addRow('Accuracy (Order)', orderBadge);
+      addRow('Leading Order', `<span class="badge badge-gray">${leadOrd}</span> <span class="details-note">${isStrong ? '(Strong driving mode)' : '(Weak signal/idler mode)'}</span>`);
+    } else {
+      const isStrong = (curDc && item.modeIndex === 0) || (!curDc && item.modeIndex === 2);
+      const leadOrd = isStrong ? -1 : 0;
+      const solverKey = `${curProcess}_${curMismatch}`;
+      const legacyKey = `${curDc}_${curMismatch}`;
+      const curSolLen = cachedSolverSolLens[solverKey] || cachedSolverSolLens[legacyKey] || 1;
+      const evolvedAccuracy = curSolLen + leadOrd - 1;
+      addRow('Accuracy (Order)', `<span class="badge badge-info">${evolvedAccuracy}</span> <span class="details-note">(auto-update)</span>`);
+      addRow('Leading Order', `<span class="badge badge-gray">${leadOrd}</span> <span class="details-note">${isStrong ? '(Strong driving mode)' : '(Weak signal/idler mode)'}</span>`);
+    }
   } else if (item.type === 'mm_op') {
     addRow('Accuracy (Order)', '<span class="badge badge-gray">any</span> <span class="details-note">(Exact)</span>');
     addRow('Leading Order', '<span class="badge badge-gray">0</span>');
@@ -247,24 +264,25 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
     addRow('Leading Order', `<span class="badge badge-gray">${leadOrd}</span>`);
   }
 
-  // 4. Mixing Type (dc) Attribute
-  const curDcLabel = curDc ? 'Down-conversion' : 'State Transfer';
+  // 4. Mixing Type Attribute
+  const curProcLabel = PROCESS_LABELS[curProcess] || curProcess;
   if (item.type === 'named_expr') {
     const hasDefault = (typeof item.hasDefaultOps === 'boolean')
       ? item.hasDefaultOps
-      : exprContainsDefaultOperators(item.latex_t || item.latex_g || item.latex || '', twmTableItems);
+      : exprContainsDefaultOperators(item.latex_t || item.latex_g || item.latex || '', wmTableItems);
     if (!hasDefault) {
       addRow('Mixing Type', `<span class="badge badge-gray">any</span> <span class="details-note"></span>`);
     } else {
-      const isDcConflict = (typeof item.dc === 'boolean' && item.dc !== curDc);
-      const dcLabel = item.dc ? 'Down-conversion' : 'State Transfer';
-      const dcBadge = isDcConflict
-        ? `<span class="badge badge-danger">${dcLabel}</span>`
-        : `<span class="badge badge-success">${dcLabel}</span>`;
-      addRow('Mixing Type', dcBadge);
+      const itemProc = item.process || (typeof item.dc === 'boolean' ? (item.dc ? 'twm_dc' : 'twm_fc') : curProcess);
+      const isProcConflict = (itemProc !== curProcess);
+      const procLabel = PROCESS_LABELS[itemProc] || itemProc;
+      const procBadge = isProcConflict
+        ? `<span class="badge badge-danger">${procLabel}</span>`
+        : `<span class="badge badge-success">${procLabel}</span>`;
+      addRow('Mixing Type', procBadge);
     }
   } else if (item.type === 'evolved_op' || item.type === 'mm_op') {
-    addRow('Mixing Type', `<span class="badge badge-info">${curDcLabel}</span> <span class="details-note">(auto-update)</span>`);
+    addRow('Mixing Type', `<span class="badge badge-info">${curProcLabel}</span> <span class="details-note">(auto-update)</span>`);
   } else {
     addRow('Mixing Type', `<span class="badge badge-gray">any</span> <span class="details-note"></span>`);
   }
@@ -312,7 +330,7 @@ function startLeadingOrderInlineEdit(event, itemId, ws) {
 
   const input = document.createElement('input');
   input.type = 'number';
-  input.step = '1';
+  input.step = 'any';
   input.value = currentVal;
   input.style.width = '70px';
   input.style.padding = '2px 8px';
@@ -337,7 +355,7 @@ function startLeadingOrderInlineEdit(event, itemId, ws) {
     if (committed) return;
     committed = true;
     if (save) {
-      const parsed = parseInt(input.value);
+      const parsed = parseFloat(input.value);
       const finalVal = isNaN(parsed) ? 0 : parsed;
       item.order = finalVal;
 
@@ -352,7 +370,7 @@ function startLeadingOrderInlineEdit(event, itemId, ws) {
 
       saveWorkspaceToStorage(ws);
       if (ws === 'tab3' || ws === 'tab4') {
-        renderTwmTable();
+        renderWmTable();
       } else {
         renderTable();
       }
@@ -386,10 +404,10 @@ function startLeadingOrderInlineEdit(event, itemId, ws) {
 
 function onOpKindChanged() {
   const kind = document.getElementById('op-kind')?.value;
-  const isTwm = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
+  const isWm = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
   const opOrderGroup = document.getElementById('op-order-group');
   if (opOrderGroup) {
-    opOrderGroup.style.display = (kind === 'boson' && isTwm) ? 'block' : 'none';
+    opOrderGroup.style.display = (kind === 'boson' && isWm) ? 'block' : 'none';
   }
 }
 
@@ -397,7 +415,7 @@ function openSymbolModal(itemId, ws) {
   activeWorkspace = ws || 'tab2';
   document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
   const modal = document.getElementById('symbolModal');
-  const isTwm = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
+  const isWm = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
   const symOrderGroup = document.getElementById('sym-order-group');
   const symOrderInput = document.getElementById('sym-order');
   const title = document.getElementById('symbolModalTitle');
@@ -418,7 +436,7 @@ function openSymbolModal(itemId, ws) {
 
     const isBuiltin = !!item.builtinKey || ['nlc', 'pm'].includes(item.name);
     if (symOrderGroup && symOrderInput) {
-      if (isTwm && !isBuiltin) {
+      if (isWm && !isBuiltin) {
         symOrderGroup.style.display = 'block';
         symOrderInput.value = (typeof item.order === 'number') ? item.order : 0;
       } else {
@@ -437,7 +455,7 @@ function openSymbolModal(itemId, ws) {
     document.getElementById('sym-notes').value = '';
 
     if (symOrderGroup && symOrderInput) {
-      if (isTwm) {
+      if (isWm) {
         symOrderGroup.style.display = 'block';
         symOrderInput.value = 0;
       } else {
@@ -448,7 +466,7 @@ function openSymbolModal(itemId, ws) {
   const symDetailsGroup = document.getElementById('sym-details-group');
   const symDetailsBody = document.getElementById('sym-details-body');
   if (symDetailsGroup && symDetailsBody) {
-    if (itemId && isTwm) {
+    if (itemId && isWm) {
       symDetailsGroup.style.display = 'block';
       renderItemDetailsTable(activeEditItem, symDetailsBody, activeWorkspace);
     } else {
@@ -466,9 +484,9 @@ function saveSymbol() {
   const isNonnegative = document.getElementById('sym-nonnegative').checked;
   const isPositive = document.getElementById('sym-positive').checked;
   const notes = document.getElementById('sym-notes').value.trim();
-  const isTwm = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
+  const isWm = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
   const symOrderEl = document.getElementById('sym-order');
-  const symOrder = (symOrderEl && isTwm) ? (parseInt(symOrderEl.value) || 0) : 0;
+  const symOrder = (symOrderEl && isWm) ? (parseFloat(symOrderEl.value) || 0) : 0;
 
   const check = validateVariableName(name);
   if (!check.valid) {
@@ -513,7 +531,7 @@ function saveSymbol() {
     activeEditItem.isNonnegative = isNonnegative;
     activeEditItem.isPositive = isPositive;
     activeEditItem.notes = notes;
-    if (!activeEditItem.builtinKey && !['nlc', 'pm'].includes(activeEditItem.name) && isTwm) {
+    if (!activeEditItem.builtinKey && !['nlc', 'pm'].includes(activeEditItem.name) && isWm) {
       activeEditItem.order = symOrder;
     }
   } else {
@@ -528,7 +546,7 @@ function saveSymbol() {
       isPositive: isPositive,
       notes: notes
     };
-    if (isTwm) {
+    if (isWm) {
       newSym.order = symOrder;
     }
     arr.push(newSym);
@@ -545,7 +563,7 @@ function openOperatorModal(defaultKind, itemId, ws) {
   const title = document.getElementById('operatorModalTitle');
   const kindGroup = document.getElementById('op-kind-group');
   const arr = getWorkspaceArray(activeWorkspace);
-  const isTwm = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
+  const isWm = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
   const opOrderGroup = document.getElementById('op-order-group');
   const opOrderInput = document.getElementById('op-order');
   
@@ -563,7 +581,7 @@ function openOperatorModal(defaultKind, itemId, ws) {
       const kind = item.kind || 'boson';
       document.getElementById('op-kind').value = kind;
       if (opOrderGroup && opOrderInput) {
-        if (isTwm && kind === 'boson') {
+        if (isWm && kind === 'boson') {
           opOrderGroup.style.display = 'block';
           opOrderInput.value = (typeof item.order === 'number') ? item.order : 0;
         } else {
@@ -584,7 +602,7 @@ function openOperatorModal(defaultKind, itemId, ws) {
     document.getElementById('op-disp').value = '';
     document.getElementById('op-notes').value = '';
     if (opOrderGroup && opOrderInput) {
-      if (isTwm && kind === 'boson') {
+      if (isWm && kind === 'boson') {
         opOrderGroup.style.display = 'block';
         opOrderInput.value = 0;
       } else {
@@ -595,7 +613,7 @@ function openOperatorModal(defaultKind, itemId, ws) {
   const opDetailsGroup = document.getElementById('op-details-group');
   const opDetailsBody = document.getElementById('op-details-body');
   if (opDetailsGroup && opDetailsBody) {
-    if (itemId && isTwm) {
+    if (itemId && isWm) {
       opDetailsGroup.style.display = 'block';
       renderItemDetailsTable(activeEditItem, opDetailsBody, activeWorkspace);
     } else {
@@ -610,9 +628,9 @@ function saveOperator() {
   const name = document.getElementById('op-var-name').value.trim();
   const disp = document.getElementById('op-disp').value.trim() || name;
   const notes = document.getElementById('op-notes').value.trim();
-  const isTwm = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
+  const isWm = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
   const opOrderEl = document.getElementById('op-order');
-  const opOrder = (opOrderEl && isTwm && kind === 'boson') ? (parseInt(opOrderEl.value) || 0) : 0;
+  const opOrder = (opOrderEl && isWm && kind === 'boson') ? (parseFloat(opOrderEl.value) || 0) : 0;
 
   const check = validateVariableName(name);
   if (!check.valid) {
@@ -642,7 +660,7 @@ function saveOperator() {
         name: name,
         displayName: disp,
         notes: notes,
-        order: (kind === 'boson' && isTwm) ? opOrder : 0
+        order: (kind === 'boson' && isWm) ? opOrder : 0
       };
     }
     if (activeEditItem && activeEditItem.id !== arr[dupIndex].id) {
@@ -658,7 +676,7 @@ function saveOperator() {
   if (activeEditItem) {
     if (activeEditItem.type !== 'evolved_op') {
       activeEditItem.kind = kind;
-      if (kind === 'boson' && isTwm) {
+      if (kind === 'boson' && isWm) {
         activeEditItem.order = opOrder;
       }
     }
@@ -674,7 +692,7 @@ function saveOperator() {
       displayName: disp,
       notes: notes
     };
-    if (kind === 'boson' && isTwm) {
+    if (kind === 'boson' && isWm) {
       newOp.order = opOrder;
     }
     arr.push(newOp);
@@ -734,8 +752,8 @@ function openSaveAnswerModal(ws) {
   activeWorkspace = ws || 'tab2';
   document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
   const title = document.getElementById('saveAnswerModalTitle');
-  const orderInfo = document.getElementById('twm-save-order-info');
-  const orderInput = document.getElementById('twm-order');
+  const orderInfo = document.getElementById('wm-save-order-info');
+  const orderInput = document.getElementById('wm-order');
 
   if (activeWorkspace === 'tab1') {
     if (!currentSingleModeLatex) {
@@ -760,7 +778,7 @@ function openSaveAnswerModal(ws) {
     );
     document.getElementById('saveAnswerModal').classList.add('active');
   } else if (activeWorkspace === 'tab3' || activeWorkspace === 'tab4') {
-    if (!currentTwmLatex) {
+    if (!currentWmLatex) {
       alert('Answer area has no evaluated combination result! Please enter an expression and compute it first.');
       return;
     }
@@ -769,16 +787,18 @@ function openSaveAnswerModal(ws) {
     document.getElementById('ne-notes').value = '';
     if (orderInfo && orderInput) {
       orderInfo.style.display = 'block';
-      const leadingOrd = (cachedTwmResult && typeof cachedTwmResult.leading_order === 'number') ? cachedTwmResult.leading_order : 0;
-      const isSingleMode = (cachedTwmResult && typeof cachedTwmResult.single_mode === 'boolean')
-        ? cachedTwmResult.single_mode
-        : (document.getElementById('twm-single-mode') ? document.getElementById('twm-single-mode').checked : false);
-      document.getElementById('twm-save-order-val').textContent = `${orderInput.value} (Leading Order: ${leadingOrd}) | ${isSingleMode ? 'Single Mode' : 'Multimode'}`;
+      const leadingOrd = (cachedWmResult && typeof cachedWmResult.leading_order === 'number') ? cachedWmResult.leading_order : 0;
+      const curProc = (cachedWmResult && cachedWmResult.process) ? cachedWmResult.process : getWmProcess();
+      const procLabel = PROCESS_LABELS[curProc] || curProc;
+      const isSingleMode = (cachedWmResult && typeof cachedWmResult.single_mode === 'boolean')
+        ? cachedWmResult.single_mode
+        : getWmSingleMode();
+      document.getElementById('wm-save-order-val').textContent = `${orderInput.value} (Leading Order: ${leadingOrd}) | ${procLabel} | ${isSingleMode ? 'Single Mode' : 'Multimode'}`;
     }
 
-    const latexT = (cachedTwmResult && cachedTwmResult.latex_t) ? cachedTwmResult.latex_t : currentTwmLatex;
-    const latexG = (cachedTwmResult && cachedTwmResult.latex_g) ? cachedTwmResult.latex_g : currentTwmLatex;
-    const defTab = (document.getElementById('twm-gain-mode') && document.getElementById('twm-gain-mode').checked) ? 'g' : 't';
+    const latexT = (cachedWmResult && cachedWmResult.latex_t) ? cachedWmResult.latex_t : currentWmLatex;
+    const latexG = (cachedWmResult && cachedWmResult.latex_g) ? cachedWmResult.latex_g : currentWmLatex;
+    const defTab = (typeof wmUseGain !== 'undefined' && wmUseGain) ? 'g' : 't';
     renderModalFormulaWithTabs(
       document.getElementById('ne-expr-preview'),
       document.getElementById('save-tab-group'),
@@ -868,14 +888,14 @@ async function saveAnswerExpression() {
   }
 
   const arr = getWorkspaceArray(activeWorkspace);
-  const isTwmWs = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
-  const currentTwmOrder = (isTwmWs && document.getElementById('twm-order'))
-    ? parseInt(document.getElementById('twm-order').value)
+  const isWmWs = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
+  const currentWmOrder = (isWmWs && document.getElementById('wm-order'))
+    ? parseInt(document.getElementById('wm-order').value)
     : null;
-  const currentInputText = isTwmWs
-    ? ((cachedTwmResult && cachedTwmResult.sourceInput)
-        ? cachedTwmResult.sourceInput
-        : (currentTwmSourceInput || localStorage.getItem('qc_tab3_source_input') || document.getElementById('twm-input')?.value?.trim() || ''))
+  const currentInputText = isWmWs
+    ? ((cachedWmResult && cachedWmResult.sourceInput)
+        ? cachedWmResult.sourceInput
+        : (currentWmSourceInput || localStorage.getItem('qc_tab3_source_input') || document.getElementById('wm-input')?.value?.trim() || ''))
     : (currentPfSourceInput || localStorage.getItem('qc_tab2_source_input') || document.getElementById('pf-input')?.value?.trim() || '');
 
   // Inform backend to persist the latest evaluated object directly under this variable name
@@ -887,17 +907,19 @@ async function saveAnswerExpression() {
     });
   } catch (_) {}
 
-  if (isTwmWs) {
-    const latexT = (cachedTwmResult && cachedTwmResult.latex_t) ? cachedTwmResult.latex_t : currentTwmLatex;
-    const latexG = (cachedTwmResult && cachedTwmResult.latex_g) ? cachedTwmResult.latex_g : currentTwmLatex;
-    const exprStrT = (cachedTwmResult && cachedTwmResult.expr_str_t) ? cachedTwmResult.expr_str_t : (currentTwmExpr || '');
-    const exprStrG = (cachedTwmResult && cachedTwmResult.expr_str_g) ? cachedTwmResult.expr_str_g : (currentTwmExpr || '');
-    const exprStrVal = (cachedTwmResult && cachedTwmResult.expr_str) ? cachedTwmResult.expr_str : (currentTwmExpr || exprStrT || currentInputText || '');
-    const leadOrdVal = (cachedTwmResult && typeof cachedTwmResult.leading_order === 'number')
-      ? cachedTwmResult.leading_order
+  if (isWmWs) {
+    const latexT = (cachedWmResult && cachedWmResult.latex_t) ? cachedWmResult.latex_t : currentWmLatex;
+    const latexG = (cachedWmResult && cachedWmResult.latex_g) ? cachedWmResult.latex_g : currentWmLatex;
+    const exprStrT = (cachedWmResult && cachedWmResult.expr_str_t) ? cachedWmResult.expr_str_t : (currentWmExpr || '');
+    const exprStrG = (cachedWmResult && cachedWmResult.expr_str_g) ? cachedWmResult.expr_str_g : (currentWmExpr || '');
+    const exprStrVal = (cachedWmResult && cachedWmResult.expr_str) ? cachedWmResult.expr_str : (currentWmExpr || exprStrT || currentInputText || '');
+    const leadOrdVal = (cachedWmResult && typeof cachedWmResult.leading_order === 'number')
+      ? cachedWmResult.leading_order
       : 0;
-    const isDc = document.getElementById('twm-dc') ? (document.getElementById('twm-dc').value === 'true') : true;
-    const hasDefault = exprContainsDefaultOperators(latexT, twmTableItems) || exprContainsDefaultOperators(latexG, twmTableItems);
+    const curProcess = (cachedWmResult && cachedWmResult.process) ? cachedWmResult.process : getWmProcess();
+    const isDc = curProcess !== 'twm_fc';
+    const hasDefault = exprContainsDefaultOperators(latexT, wmTableItems) || exprContainsDefaultOperators(latexG, wmTableItems);
+    const savedOrderVal = (cachedWmResult && typeof cachedWmResult.order === 'number') ? cachedWmResult.order : currentWmOrder;
 
     const dupIndex = arr.findIndex(x => x.name === name);
     if (dupIndex !== -1) {
@@ -914,12 +936,13 @@ async function saveAnswerExpression() {
         exprStr_g: exprStrG,
         latex_t: latexT,
         latex_g: latexG,
-        order: currentTwmOrder,
+        order: savedOrderVal,
         leadingOrder: leadOrdVal,
         dc: isDc,
-        single_mode: (cachedTwmResult && typeof cachedTwmResult.single_mode === 'boolean')
-          ? cachedTwmResult.single_mode
-          : (document.getElementById('twm-single-mode') ? document.getElementById('twm-single-mode').checked : false),
+        process: curProcess,
+        single_mode: (cachedWmResult && typeof cachedWmResult.single_mode === 'boolean')
+          ? cachedWmResult.single_mode
+          : getWmSingleMode(),
         hasDefaultOps: hasDefault,
         notes: notes
       };
@@ -929,9 +952,9 @@ async function saveAnswerExpression() {
       return;
     }
 
-    const isCurrentSm = (cachedTwmResult && typeof cachedTwmResult.single_mode === 'boolean')
-      ? cachedTwmResult.single_mode
-      : (document.getElementById('twm-single-mode') ? document.getElementById('twm-single-mode').checked : false);
+    const isCurrentSm = (cachedWmResult && typeof cachedWmResult.single_mode === 'boolean')
+      ? cachedWmResult.single_mode
+      : getWmSingleMode();
 
     arr.push({
       id: String(Date.now()),
@@ -944,9 +967,10 @@ async function saveAnswerExpression() {
       exprStr_g: exprStrG,
       latex_t: latexT,
       latex_g: latexG,
-      order: currentTwmOrder,
+      order: savedOrderVal,
       leadingOrder: leadOrdVal,
       dc: isDc,
+      process: curProcess,
       single_mode: isCurrentSm,
       hasDefaultOps: hasDefault,
       notes: notes
@@ -1121,22 +1145,22 @@ function editItem(id, ws) {
 
 function deleteItem(id, ws) {
   activeWorkspace = ws || 'tab2';
-  const isTwm = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
-  const arr = isTwm ? twmTableItems : tableItems;
+  const isWm = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
+  const arr = isWm ? wmTableItems : tableItems;
   const item = arr.find(x => x.id === id);
   if (!item) return;
 
-  if (isTwm && (item.type === 'evolved_op' || ['a_p', 'a_s', 'a_i'].includes(item.name))) {
+  if (isWm && (item.type === 'evolved_op' || ['a_p', 'a_s', 'a_i'].includes(item.name))) {
     const confirmed = confirm(
-      `Warning: '${item.name}' is an essential base operator for Three-Wave Mixing calculations.\n` +
+      `Warning: '${item.name}' is an essential base operator for Wave Mixing calculations.\n` +
       `Are you sure you want to delete it?\n` +
       `(Note: You can recover it anytime using the "Restore Base Solutions" button).`
     );
     if (!confirmed) return;
   }
 
-  if (isTwm) {
-    twmTableItems = twmTableItems.filter(x => x.id !== id);
+  if (isWm) {
+    wmTableItems = wmTableItems.filter(x => x.id !== id);
   } else {
     tableItems = tableItems.filter(x => x.id !== id);
   }
@@ -1144,8 +1168,3 @@ function deleteItem(id, ws) {
   showToast(`'${item.name}' deleted.`);
 }
 
-
-
-
-// Backwards compatibility aliases
-window.renderComboTable = renderTwmTable;

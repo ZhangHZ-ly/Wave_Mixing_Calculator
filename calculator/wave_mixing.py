@@ -1,11 +1,12 @@
 from __future__ import annotations
 import ast
-from typing import Any, Dict, List, Optional, Tuple
+import math
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from dsolve_pm import d_p2s
 from op_patterns import BosonNum, BosonPat, FermionPat, check_num
 from parametric import (
-    TWMSolver, f_dict, d_apply, t_, _g, _nm, nlc, pm,
+    WM_Processor, TWMSolver, FWMSolver, f_dict, d_apply, t_, _g, _nm, _ps, nlc, pm,
     a_p, a_s, a_i, MultimodeNum, MultimodeNum2, MultimodeCOP, _tdz,
     INIT_OPS, PF_ONE
 )
@@ -17,6 +18,8 @@ from sympy.core.numbers import I, Integer, pi
 from sympy.core.singleton import S
 from sympy.core.symbol import Symbol
 from sympy.core.sympify import sympify
+from sympy.core.traversal import bottom_up
+from sympy.functions.elementary.complexes import Abs
 from sympy.functions.elementary.exponential import exp
 from sympy.functions.elementary.hyperbolic import cosh, sinh, tanh
 from sympy.functions.elementary.miscellaneous import sqrt
@@ -32,18 +35,47 @@ from .common import (
     is_valid_variable_name,
     g_hat,
 )
-from .twm_transforms import t_to_g, g_to_t
+from .conditions import normalize_process, process_is_dc
+from .wm_transforms import t_to_g
 
 # Cached TWMSolver instances indexed by [dc][mismatch]
-SOLVERS = (
+TWM_SOLVERS = (
     (TWMSolver(False, False), TWMSolver(False, True)),
     (TWMSolver(True, False), TWMSolver(True, True)),
 )
+FWM_SOLVER = FWMSolver()
+
+SOLVERS: Dict[str, Any] = {
+    'twm_fc': TWM_SOLVERS[0],
+    'twm_dc': TWM_SOLVERS[1],
+    'fwm': (FWM_SOLVER, FWM_SOLVER),
+}
+
+ALL_SOLVERS: Tuple[WM_Processor, ...] = (
+    TWM_SOLVERS[0][0],
+    TWM_SOLVERS[0][1],
+    TWM_SOLVERS[1][0],
+    TWM_SOLVERS[1][1],
+    FWM_SOLVER,
+)
+
+
+def get_wm_solver(process: Optional[str] = None, mismatch: bool = False, dc: Optional[bool] = None) -> WM_Processor:
+    proc = normalize_process(process, dc)
+    if proc == 'fwm':
+        return FWM_SOLVER
+    return TWM_SOLVERS[1 if proc == 'twm_dc' else 0][1 if mismatch else 0]
+
+
+def _solver_process(s: WM_Processor) -> str:
+    if isinstance(s, FWMSolver):
+        return 'fwm'
+    return 'twm_dc' if getattr(s, 'dc', True) else 'twm_fc'
 
 
 def expr_to_code_str(e: Expr, dc: bool = True) -> str:
     """
-    Convert a SymPy quantum operator expression (from PF.expr() or TWMSolver.to_expr())
+    Convert a SymPy quantum operator expression (from PF.expr() or WM_Processor.to_expr())
     into a valid Python expression string that can be parsed back by parse_expr in Tab 3.
     """
     if e == 0 or e == S.Zero:
@@ -103,40 +135,49 @@ def expr_to_code_str(e: Expr, dc: bool = True) -> str:
     return str(_rec(sympify(e)))
 
 
-def eval_twm_solve(
-    dc: bool,
-    mismatch: bool,
-    var_index: int,
-    order: int,
-    use_gain: bool = False
+def eval_wm_solve(
+    dc: bool = True,
+    mismatch: bool = False,
+    var_index: int = 0,
+    order: int = 1,
+    use_gain: bool = False,
+    process: Optional[str] = None,
 ) -> Tuple[str, str, str, str, str, str]:
     """
-    Evaluates Three-Wave Mixing Heisenberg evolution for Tab 3.
+    Evaluates Wave Mixing Heisenberg evolution for Tab 3.
     Returns: (latex_curr, expr_curr, latex_t, expr_str_t, latex_g, expr_str_g)
     """
-    s = SOLVERS[bool(dc)][bool(mismatch)]
-    sol_order = max(-1, order - 1)
-    sol_d = s.get_sol(sol_order)[var_index]
+    proc = normalize_process(process, dc)
+    is_dc = process_is_dc(proc)
+    s = get_wm_solver(proc, mismatch=bool(mismatch))
 
-    s0 = s.sol[0]
-    if len(s0[var_index]) == 1:
-        p = S.One
-    elif var_index == 0:
-        p = s.half_p_factor ** S.NegativeOne
+    if proc == 'fwm':
+        sol_order = min(1, max(-1, order))
+        expr_t = s.sol_expr(var_index, sol_order)
+        if not mismatch:
+            expr_t = s._zq(expr_t)
+        expr_g = t_to_g(expr_t, process='fwm', mismatch=bool(mismatch))
     else:
-        p = s.half_p_factor
+        sol_order = max(-1, order - 1)
+        sol_d = s.get_sol(sol_order)[var_index]
 
-    # Time representation (t)
-    expr_t = p * s.to_expr(sol_d)
+        s0 = s.sol[0]
+        if len(s0[var_index]) == 1:
+            p = S.One
+        elif var_index == 0:
+            p = s.half_p_factor ** S.NegativeOne
+        else:
+            p = s.half_p_factor
+
+        expr_t = p * s.to_expr(sol_d)
+        sol_d_g = t_to_g(sol_d, process=proc, mismatch=bool(mismatch))
+        p_g = t_to_g(p, process=proc, mismatch=bool(mismatch))
+        expr_g = p_g * s.to_expr(sol_d_g)
+
     latex_t = latex(expr_t)
-    expr_str_t = expr_to_code_str(expr_t, dc=bool(dc))
-
-    # Parametric gain representation (g)
-    sol_d_g = t_to_g(sol_d, dc=bool(dc), mismatch=bool(mismatch))
-    p_g = t_to_g(p, dc=bool(dc), mismatch=bool(mismatch))
-    expr_g = p_g * s.to_expr(sol_d_g)
+    expr_str_t = expr_to_code_str(expr_t, dc=is_dc)
     latex_g = latex(expr_g)
-    expr_str_g = expr_to_code_str(expr_g, dc=bool(dc))
+    expr_str_g = expr_to_code_str(expr_g, dc=is_dc)
 
     latex_curr = latex_g if use_gain else latex_t
     expr_curr = expr_str_g if use_gain else expr_str_t
@@ -176,7 +217,7 @@ def _apply_to_pfs(val, pf_fn):
     return val
 
 
-def _mul_two_vals(v1, v2, solver: TWMSolver):
+def _mul_two_vals(v1, v2, solver: WM_Processor):
     """Multiply two single resolved values (PF, dict, or f_dict)."""
     # 1. Pure scalar PF fast-path
     if _is_pure_scalar_pf(v1):
@@ -199,7 +240,7 @@ def _mul_two_vals(v1, v2, solver: TWMSolver):
     return solver.e_mul(d1, d2)
 
 
-def _merge_non_f_dicts(items: List[Any], solver: TWMSolver) -> List[Any]:
+def _merge_non_f_dicts(items: List[Any], solver: WM_Processor) -> List[Any]:
     """
     Prioritize multiplying adjacent non-f_dict factors (PF and dict):
     1. First merge adjacent PF factors into a single PF.
@@ -224,7 +265,7 @@ def _merge_non_f_dicts(items: List[Any], solver: TWMSolver) -> List[Any]:
     return merged
 
 
-def _dict_pow(d: dict, n: int, solver: TWMSolver) -> dict:
+def _dict_pow(d: dict, n: int, solver: WM_Processor) -> dict:
     """Binary exponentiation for a multimode dict (non-f_dict)."""
     if n == 0:
         return {(None,): PF({((), ()): S.One})}
@@ -242,7 +283,7 @@ def _dict_pow(d: dict, n: int, solver: TWMSolver) -> dict:
     return result
 
 
-def _eval_product_factors(factors: List[Any], solver: TWMSolver):
+def _eval_product_factors(factors: List[Any], solver: WM_Processor):
     """
     Evaluate a product chain of factors:
     1. Checks the parities of all f_dict factors and counts them;
@@ -302,15 +343,15 @@ def _eval_product_factors(factors: List[Any], solver: TWMSolver):
     return res
 
 
-class TwmWrapper:
+class WmWrapper:
     """
-    Algebraic wrapper for Tab 3 (Post-Evolution Operator Combinations).
+    Algebraic wrapper for Tab 3 (Wave Mixing Operator Combinations).
     Dispatches addition, multiplication, exponentiation, and adjoint across:
     - PF (PFTableProcessor, independent-mode _ind: strong-field initial op, custom ops, number ops)
     - Multimode dict ({tuple: PF}: A and balanced weak-field pairs)
     - Weak-field f_dict ({BosonOp: {tuple: PF}}: weak-field initial ops and evolved weak modes)
     """
-    def __init__(self, val, solver: TWMSolver, _factors: Optional[List[Any]] = None):
+    def __init__(self, val, solver: WM_Processor, _factors: Optional[List[Any]] = None):
         self.solver = solver
         if _factors is not None:
             self._factors = list(_factors)
@@ -324,8 +365,9 @@ class TwmWrapper:
         self.latex_t: Optional[str] = None
         self.latex_g: Optional[str] = None
         self.order: Optional[int] = None
-        self.leading_order: Optional[int] = None
+        self.leading_order: Optional[Union[int, float]] = None
         self.dc: Optional[bool] = getattr(solver, 'dc', True) if solver else True
+        self.process: Optional[str] = _solver_process(solver) if solver else 'twm_dc'
         self.single_mode: Optional[bool] = False
         self.notes: str = ""
 
@@ -337,11 +379,11 @@ class TwmWrapper:
         return self._val
 
     @classmethod
-    def from_val(cls, val, solver: Any) -> 'TwmWrapper':
+    def from_val(cls, val, solver: Any) -> 'WmWrapper':
         if isinstance(val, cls):
             return val
 
-        s = solver if isinstance(solver, TWMSolver) else SOLVERS[bool(solver)][0]
+        s = solver if isinstance(solver, WM_Processor) else TWM_SOLVERS[1 if bool(solver) else 0][0]
         dc = s.dc
 
         if isinstance(val, str) and val in INIT_OPS[dc]:
@@ -352,27 +394,27 @@ class TwmWrapper:
                 return cls(v, s)
 
         if isinstance(val, (PF, dict, f_dict)):
-            return cls(val, solver)
+            return cls(val, s)
 
         expr = sympify(val)
         if isinstance(expr, MultimodeCOP):
-            return cls({(bool(expr.annih1), 1): PF_ONE}, solver)
+            return cls({(bool(expr.annih1), 1): PF_ONE}, s)
 
-        weak_names = set(solver.a[0].names)
+        weak_names = set(s.a[0].names)
         if isinstance(expr, BosonOp) and expr.name in weak_names:
-            return cls(f_dict({expr: {(None,): PF_ONE}}, b_left=True), solver)
+            return cls(f_dict({expr: {(None,): PF_ONE}}, b_left=True), s)
 
         if not expr.has(MultimodeCOP) and (
             check_num(expr) or not expr.has(BosonOp, BosonPat, FermionOp, FermionPat)
         ):
-            return cls(PF({((), ()): expr}), solver)
+            return cls(PF({((), ()): expr}), s)
 
         if isinstance(expr, BosonPat) and not isinstance(expr, (BosonOp, BosonNum)) and expr.name in weak_names:
             is_a = bool(expr.left_base.is_annihilation) if hasattr(expr, 'left_base') else bool(expr.args[1])
-            res = cls(PF_ONE, solver)
+            res = cls(PF_ONE, s)
             for e in expr.exps:
                 b = BosonOp(expr.name, is_a)
-                w_b = cls(f_dict({b: {(None,): PF_ONE}}, b_left=True), solver)
+                w_b = cls(f_dict({b: {(None,): PF_ONE}}, b_left=True), s)
                 res = res * (w_b ** int(e))
                 is_a = not is_a
             return res
@@ -383,24 +425,24 @@ class TwmWrapper:
             if not isinstance(b, BosonNum)
         ):
             if expr.is_Add:
-                res = cls.from_val(expr.args[0], solver)
+                res = cls.from_val(expr.args[0], s)
                 for arg in expr.args[1:]:
-                    res = res + cls.from_val(arg, solver)
+                    res = res + cls.from_val(arg, s)
                 return res
             if expr.is_Mul:
-                res = cls.from_val(expr.args[0], solver)
+                res = cls.from_val(expr.args[0], s)
                 for arg in expr.args[1:]:
-                    res = res * cls.from_val(arg, solver)
+                    res = res * cls.from_val(arg, s)
                 return res
             if expr.is_Pow:
-                return cls.from_val(expr.base, solver) ** expr.exp
+                return cls.from_val(expr.base, s) ** expr.exp
 
         pf = pattern_form(expr, as_dict=None)
-        return cls(pf, solver)
+        return cls(pf, s)
 
-    def to_single_mode(self) -> 'TwmWrapper':
+    def to_single_mode(self) -> 'WmWrapper':
         """Projects this wrapper's value into single-mode PF representation."""
-        return TwmWrapper(self.solver.to_single_mode(self.val), self.solver)
+        return WmWrapper(self.solver.to_single_mode(self.val), self.solver)
 
     def _to_mm_dict(self):
         v = self.val
@@ -409,46 +451,46 @@ class TwmWrapper:
         return v
 
     def __add__(self, other):
-        other = TwmWrapper.from_val(other, self.solver)
+        other = WmWrapper.from_val(other, self.solver)
         v1, v2 = self.val, other.val
         if isinstance(v1, PF) and isinstance(v2, PF):
-            return TwmWrapper(PF.add(v1, v2), self.solver)
+            return WmWrapper(PF.add(v1, v2), self.solver)
         d1 = self._to_mm_dict()
         d2 = other._to_mm_dict()
-        return TwmWrapper(self.solver.d_add(d1, d2), self.solver)
+        return WmWrapper(self.solver.d_add(d1, d2), self.solver)
 
     def __radd__(self, other):
-        return TwmWrapper.from_val(other, self.solver).__add__(self)
+        return WmWrapper.from_val(other, self.solver).__add__(self)
 
     def __neg__(self):
-        return TwmWrapper(d_apply(self.val, lambda x: -x), self.solver)
+        return WmWrapper(d_apply(self.val, lambda x: -x), self.solver)
 
     def __sub__(self, other):
-        return self.__add__(-TwmWrapper.from_val(other, self.solver))
+        return self.__add__(-WmWrapper.from_val(other, self.solver))
 
     def __rsub__(self, other):
-        return TwmWrapper.from_val(other, self.solver).__sub__(self)
+        return WmWrapper.from_val(other, self.solver).__sub__(self)
 
     def __mul__(self, other):
-        other = TwmWrapper.from_val(other, self.solver)
-        return TwmWrapper(None, self.solver, _factors=self._factors + other._factors)
+        other = WmWrapper.from_val(other, self.solver)
+        return WmWrapper(None, self.solver, _factors=self._factors + other._factors)
 
     def __rmul__(self, other):
-        return TwmWrapper.from_val(other, self.solver).__mul__(self)
+        return WmWrapper.from_val(other, self.solver).__mul__(self)
 
     def __truediv__(self, other):
-        other = TwmWrapper.from_val(other, self.solver)
+        other = WmWrapper.from_val(other, self.solver)
         if isinstance(other.val, PF) and other.val.npf == S.Zero and set(other.val.table.keys()).issubset({((), ())}):
             denom = other.val.table.get(((), ()), S.One)
             inv_pf = PF({((), ()): denom ** S.NegativeOne})
-            return self.__mul__(TwmWrapper(inv_pf, self.solver))
+            return self.__mul__(WmWrapper(inv_pf, self.solver))
         raise ValueError("Division is only supported by scalar or number-operator expressions.")
 
     def __rtruediv__(self, other):
-        return TwmWrapper.from_val(other, self.solver).__truediv__(self)
+        return WmWrapper.from_val(other, self.solver).__truediv__(self)
 
     def __pow__(self, power):
-        if isinstance(power, TwmWrapper):
+        if isinstance(power, WmWrapper):
             if isinstance(power.val, PF) and power.val.npf == S.Zero and set(power.val.table.keys()).issubset({((), ())}):
                 power = power.val.table.get(((), ()), S.Zero)
             else:
@@ -458,29 +500,29 @@ class TwmWrapper:
             pf_val = self._factors[0]
             if pf_val.npf == S.Zero and set(pf_val.table.keys()).issubset({((), ())}):
                 base_expr = pf_val.table.get(((), ()), S.Zero)
-                return TwmWrapper(PF({((), ()): base_expr ** p_sym}), self.solver)
+                return WmWrapper(PF({((), ()): base_expr ** p_sym}), self.solver)
             if p_sym.is_Integer and p_sym >= 0:
-                return TwmWrapper(pf_val.power_ind(Integer(p_sym)), self.solver)
+                return WmWrapper(pf_val.power_ind(Integer(p_sym)), self.solver)
             raise ValueError("Operator exponentiation only supports non-negative integers.")
         if p_sym.is_Integer and p_sym >= 0:
             n = int(p_sym)
             if n == 0:
-                return TwmWrapper({(None,): PF({((), ()): S.One})}, self.solver)
+                return WmWrapper({(None,): PF({((), ()): S.One})}, self.solver)
             if len(self._factors) == 1 and isinstance(self._factors[0], dict) and not isinstance(self._factors[0], f_dict):
-                return TwmWrapper(_dict_pow(self._factors[0], n, self.solver), self.solver)
+                return WmWrapper(_dict_pow(self._factors[0], n, self.solver), self.solver)
             f_list = [f for f in self._factors if isinstance(f, f_dict)]
             if not f_list:
                 base_val = self.val
                 if isinstance(base_val, PF):
-                    return TwmWrapper(base_val.power_ind(Integer(n)), self.solver)
-                return TwmWrapper(_dict_pow(base_val, n, self.solver), self.solver)
+                    return WmWrapper(base_val.power_ind(Integer(n)), self.solver)
+                return WmWrapper(_dict_pow(base_val, n, self.solver), self.solver)
             parities = [self.solver.f_dict_parity(f) for f in f_list]
             count_0 = sum(1 for p in parities if p == 0)
             count_1 = sum(1 for p in parities if p == 1)
             if count_0 == count_1:
                 base_val = self.val
-                return TwmWrapper(_dict_pow(base_val, n, self.solver), self.solver)
-            return TwmWrapper(None, self.solver, _factors=self._factors * n)
+                return WmWrapper(_dict_pow(base_val, n, self.solver), self.solver)
+            return WmWrapper(None, self.solver, _factors=self._factors * n)
         raise ValueError("Exponentiation for this operator type only supports non-negative integers.")
 
     def adjoint(self):
@@ -488,11 +530,11 @@ class TwmWrapper:
             f.adjoint(res=False) if isinstance(f, PF) else self.solver.d_adjoint(f)
             for f in reversed(self._factors)
         ]
-        return TwmWrapper(None, self.solver, _factors=adj_factors)
+        return WmWrapper(None, self.solver, _factors=adj_factors)
 
     def diff(self, *symbols, **kwargs):
         s = self.solver
-        dc = getattr(s, 'dc', True)
+        proc = _solver_process(s)
         mismatch = (getattr(s, 'pm', S.Zero) != S.Zero)
         if not symbols:
             raise ValueError("diff requires at least one variable.")
@@ -502,7 +544,7 @@ class TwmWrapper:
         is_wrt_g = False
         is_wrt_t = False
 
-        if isinstance(var, TwmWrapper):
+        if isinstance(var, WmWrapper):
             if getattr(var, '_is_g', False):
                 is_wrt_g = True
             elif getattr(var, '_is_t', False):
@@ -528,22 +570,26 @@ class TwmWrapper:
             is_wrt_g = True
 
         if is_wrt_g:
-            val_in_g = t_to_g(self.val, dc=dc, mismatch=mismatch)
+            order_n = 1
+            if rest_args and isinstance(rest_args[0], int):
+                order_n = rest_args[0]
+                rest_args = rest_args[1:]
+            var = t_
+            gc_inv_n = s.gc ** (-order_n)
             def _d_g(leaf):
                 if isinstance(leaf, PF):
                     sf = {}
                     for k, v in leaf.table.items():
-                        dv = diff(v, g_hat, *rest_args, **kwargs)
+                        dv = diff(v, var, order_n, *rest_args, **kwargs)
                         if dv != 0 and dv != S.Zero:
-                            sf[k] = dv
+                            sf[k] = s.n_simp(dv * gc_inv_n)
                     if not sf and leaf.npf == S.Zero:
                         sf = {((), ()): S.Zero}
-                    npf = diff(leaf.npf, g_hat, *rest_args, **kwargs)
+                    npf = s.n_simp(diff(leaf.npf, var, order_n, *rest_args, **kwargs) * gc_inv_n)
                     return PF(sf, npf)
-                return diff(leaf, g_hat, *rest_args, **kwargs)
-            diff_in_g = d_apply(val_in_g, _d_g)
-            diff_in_t = g_to_t(diff_in_g, dc=dc, mismatch=mismatch)
-            return TwmWrapper(diff_in_t, s)
+                return s.n_simp(diff(leaf, var, order_n, *rest_args, **kwargs) * gc_inv_n)
+            diff_val = d_apply(self.val, _d_g)
+            return WmWrapper(diff_val, s)
         elif is_wrt_t:
             var = t_
             def _d_t(leaf):
@@ -559,7 +605,7 @@ class TwmWrapper:
                     return PF(sf, npf)
                 return diff(leaf, var, *rest_args, **kwargs)
             diff_val = d_apply(self.val, _d_t)
-            return TwmWrapper(diff_val, s)
+            return WmWrapper(diff_val, s)
         else:
             def _d_gen(leaf):
                 if isinstance(leaf, PF):
@@ -574,17 +620,17 @@ class TwmWrapper:
                     return PF(sf, npf)
                 return diff(leaf, var, *rest_args, **kwargs)
             diff_val = d_apply(self.val, _d_gen)
-            return TwmWrapper(diff_val, s)
+            return WmWrapper(diff_val, s)
 
     def Derivative(self, *symbols, **kwargs):
         return self.diff(*symbols, **kwargs)
 
 
-TWM_VARIABLES: Dict[str, TwmWrapper] = {}
-LAST_EVAL_TWM: Dict[str, Any] = {}
+WM_VARIABLES: Dict[str, WmWrapper] = {}
+LAST_EVAL_WM: Dict[str, Any] = {}
 
 
-def save_twm_variable(
+def save_wm_variable(
     name: str,
     val_t: Any,
     val_g: Any = None,
@@ -592,110 +638,134 @@ def save_twm_variable(
     latex_t: Optional[str] = None,
     latex_g: Optional[str] = None,
     **kwargs
-) -> TwmWrapper:
-    s = solver if isinstance(solver, TWMSolver) else SOLVERS[bool(kwargs.get('dc', True))][0]
-    w = TwmWrapper.from_val(val_t, s)
+) -> WmWrapper:
+    proc = normalize_process(kwargs.get('process'), kwargs.get('dc'))
+    s = solver if isinstance(solver, WM_Processor) else get_wm_solver(proc, mismatch=bool(kwargs.get('mismatch', False)))
+    w = WmWrapper.from_val(val_t, s)
     w.name = name
     w.val_t = w.val
-    w.val_g = val_g if val_g is not None else t_to_g(w.val, dc=kwargs.get('dc', s.dc), mismatch=kwargs.get('mismatch', False))
+    w.val_g = val_g if val_g is not None else t_to_g(
+        w.val,
+        process=kwargs.get('process', _solver_process(s)),
+        mismatch=bool(kwargs.get('mismatch', False)),
+    )
     w.latex_t = latex_t
     w.latex_g = latex_g
     for k, v in kwargs.items():
         setattr(w, k, v)
-    TWM_VARIABLES[name] = w
+    WM_VARIABLES[name] = w
     return w
 
 
-def save_latest_twm_variable(name: str, **kwargs) -> Optional[TwmWrapper]:
-    if not LAST_EVAL_TWM:
+def save_latest_wm_variable(name: str, **kwargs) -> Optional[WmWrapper]:
+    if not LAST_EVAL_WM:
         return None
-    s = LAST_EVAL_TWM.get('solver') or SOLVERS[bool(LAST_EVAL_TWM.get('dc', True))][0]
-    return save_twm_variable(
+    proc = normalize_process(LAST_EVAL_WM.get('process'), LAST_EVAL_WM.get('dc', True))
+    s = LAST_EVAL_WM.get('solver') or get_wm_solver(proc, mismatch=bool(LAST_EVAL_WM.get('mismatch', False)))
+    return save_wm_variable(
         name,
-        LAST_EVAL_TWM['val_t'],
-        val_g=LAST_EVAL_TWM.get('val_g'),
+        LAST_EVAL_WM['val_t'],
+        val_g=LAST_EVAL_WM.get('val_g'),
         solver=s,
-        latex_t=LAST_EVAL_TWM.get('latex_t'),
-        latex_g=LAST_EVAL_TWM.get('latex_g'),
-        order=LAST_EVAL_TWM.get('order'),
-        leading_order=LAST_EVAL_TWM.get('leading_order'),
-        dc=LAST_EVAL_TWM.get('dc'),
-        single_mode=LAST_EVAL_TWM.get('single_mode'),
+        latex_t=LAST_EVAL_WM.get('latex_t'),
+        latex_g=LAST_EVAL_WM.get('latex_g'),
+        order=LAST_EVAL_WM.get('order'),
+        leading_order=LAST_EVAL_WM.get('leading_order'),
+        dc=LAST_EVAL_WM.get('dc'),
+        process=proc,
+        mismatch=LAST_EVAL_WM.get('mismatch', False),
+        single_mode=LAST_EVAL_WM.get('single_mode'),
         **kwargs
     )
 
 
-def get_twm_variable(name: str) -> Optional[TwmWrapper]:
-    return TWM_VARIABLES.get(name)
+def get_wm_variable(name: str) -> Optional[WmWrapper]:
+    return WM_VARIABLES.get(name)
 
 
-def clear_twm_variables() -> None:
-    TWM_VARIABLES.clear()
-    LAST_EVAL_TWM.clear()
+def clear_wm_variables() -> None:
+    WM_VARIABLES.clear()
+    LAST_EVAL_WM.clear()
 
 
-def compute_val_leading_order(val: Any, s: TWMSolver, dc: Optional[bool] = None) -> int:
+def _format_order_num(val) -> Union[int, float]:
+    f = float(val)
+    return int(f) if f.is_integer() else f
+
+
+def compute_val_leading_order(
+    val: Any,
+    s: WM_Processor,
+    dc: Optional[bool] = None,
+    process: Optional[str] = None,
+) -> Union[int, float]:
     """
-    Computes the leading perturbation order of a calculated TWM result value `val`.
-    Uses TWMSolver.pe which includes base assumptions and any custom symbol/operator orders.
-    Driving mode: order -1 (a_p in dc=True; a_i in dc=False).
-    Weak modes, symbols, multimode operators: order 0 (or custom order if defined).
-    Nonlinear coupling (nlc): order 1.
-    Driving photon number N_d: order -2.
+    Computes the leading perturbation order of a calculated WM result value `val`.
+    Uses s.pe which includes base assumptions (-1 for TWM strong mode, -1/2 for FWM pump)
+    and any custom symbol/operator orders.
     """
-    if dc is None:
-        dc = getattr(s, 'dc', True)
-    strong_name = a_p.name if dc else a_i.name
+    proc = normalize_process(process if process is not None else _solver_process(s), dc)
+    is_dc = process_is_dc(proc)
+    strong_name = a_p.name if is_dc else a_i.name
+    strong_ord = -S.Half if proc == 'fwm' else S.NegativeOne
     pe = getattr(s, 'pe', None)
     if pe is None:
-        pe = PE({strong_name: S.NegativeOne, nlc: S.One})
+        pe = PE({strong_name: strong_ord, nlc: S.One})
         pe.register(MultimodeNum)
         pe.register(MultimodeNum2)
         pe.register(MultimodeCOP)
 
-    orders: List[int] = []
+    orders: List[Any] = []
 
-    def _inspect_pf(p: PF, extra_ord: int = 0):
+    def _sub_t_for_order(expr_t: Expr) -> Expr:
+        if not expr_t.has(t_):
+            return expr_t
+        if proc == 'fwm' and not expr_t.has(pm):
+            return expr_t.subs({t_: _g / (nlc * s.nd)})
+        return expr_t.subs({t_: _g / s.gc})
+
+    def _inspect_pf(p: PF, extra_ord=S.Zero):
         if p.npf != 0 and p.npf is not S.Zero:
             try:
-                npf_ord = pe.leading_order(p.npf.subs({t_: _g / s.gc}))[1]
+                npf_ord = pe.leading_order(_sub_t_for_order(p.npf))[1]
                 if npf_ord is not S.Infinity:
-                    orders.append(int(npf_ord) + int(extra_ord))
+                    orders.append(npf_ord + extra_ord)
             except Exception:
                 pass
         for (bs, fs), t_expr in p.table.items():
             if t_expr == 0 or t_expr is S.Zero:
                 continue
-            bs_ord = 0
+            bs_ord = S.Zero
             for b in bs:
                 b_name = getattr(b, 'name', None)
-                if b_name == strong_name:
-                    bs_ord += -int(sum(b.exps))
-                elif b_name and b_name in pe.assumptions:
-                    bs_ord += int(pe.assumptions[b_name]) * int(sum(b.exps))
+                if b_name and b_name in pe.assumptions:
+                    bs_ord += sympify(pe.assumptions[b_name]) * int(sum(b.exps))
+                elif b_name == strong_name:
+                    bs_ord += strong_ord * int(sum(b.exps))
                 elif b and b in pe.assumptions:
-                    bs_ord += int(pe.assumptions[b]) * int(sum(b.exps))
-            fs_ord = 0
+                    bs_ord += sympify(pe.assumptions[b]) * int(sum(b.exps))
+            fs_ord = S.Zero
             for f in fs:
                 f_name = getattr(f, 'name', None)
                 if f_name and f_name in pe.assumptions:
-                    fs_ord += int(pe.assumptions[f_name]) * int(sum(f.exps))
+                    fs_ord += sympify(pe.assumptions[f_name]) * int(sum(f.exps))
                 elif f and f in pe.assumptions:
-                    fs_ord += int(pe.assumptions[f]) * int(sum(f.exps))
+                    fs_ord += sympify(pe.assumptions[f]) * int(sum(f.exps))
             try:
-                sub_t = t_expr.subs({t_: _g / s.gc})
+                sub_t = _sub_t_for_order(t_expr)
                 t_ord = pe.leading_order(sub_t)[1]
                 if t_ord is not S.Infinity:
-                    orders.append(int(t_ord) + int(bs_ord) + int(fs_ord) + int(extra_ord))
+                    orders.append(t_ord + bs_ord + fs_ord + extra_ord)
             except Exception:
                 pass
 
-    def _walk(obj, extra_ord: int = 0):
+    def _walk(obj, extra_ord=S.Zero):
         if isinstance(obj, PF):
             _inspect_pf(obj, extra_ord)
         elif isinstance(obj, f_dict):
-            for v in obj.values():
-                _walk(v, extra_ord)
+            for b, v in obj.items():
+                b_ord = pe.leading_order(b)[1]
+                _walk(v, extra_ord + b_ord)
         elif isinstance(obj, dict):
             for v in obj.values():
                 _walk(v, extra_ord)
@@ -704,33 +774,36 @@ def compute_val_leading_order(val: Any, s: TWMSolver, dc: Optional[bool] = None)
     if not orders:
         return 0
     try:
-        return int(min(orders))
+        return _format_order_num(min(orders))
     except Exception:
         return 0
-
 
 
 def analyze_expression_terms(
     expr_str: str,
     target_order: int,
-    dc: bool,
+    dc: bool = True,
     symbols: Optional[List[Dict[str, Any]]] = None,
     operators: Optional[List[Dict[str, Any]]] = None,
-    named_expressions: Optional[List[Dict[str, Any]]] = None
+    named_expressions: Optional[List[Dict[str, Any]]] = None,
+    process: Optional[str] = None,
 ) -> Tuple[int, List[Dict[str, Any]]]:
     """
     Analyzes an expression across each additive term:
-    - If a term contains estimated items (field operator evolution or named expressions)
-      multiplied by exact items (symbols, initial ops, number ops, etc.), the effective accuracy
-      of that term is min(order of estimated items) + sum(leading orders of exact items).
-    - If field operator evolutions (a_p, a_s, a_i) are multiplied by negative leading-order exact items,
-      their required accuracy is target_order - sum(leading orders of exact items).
-      Returns the maximum required order for field operator evolutions (to call s.get_sol).
-    - If a custom saved expression has a recorded order less than required, records it in
-      insufficient_named for UI warning.
+    - For a product F_1 * F_2 * ... * F_m with leading orders L_1, ..., L_m,
+      each estimated factor F_k (field operator evolution or saved named expression)
+      requires accuracy A_k >= target_order - sum_{j != k} L_j.
+    - Returns (max_evolved_needed_int, insufficient_items), where insufficient_items
+      lists any custom saved expressions (and, under FWM, evolved field operators capped at order 1)
+      whose available order is lower than required.
     """
-    strong_mode_idx = 0 if dc else 2
-    strong_names = {'a_p', 'a_0'} if dc else {'a_i', 'a_2'}
+    proc = normalize_process(process, dc)
+    is_dc = process_is_dc(proc)
+    strong_lo: float = -0.5 if proc == 'fwm' else -1.0
+    strong_nd_lo: float = 2.0 * strong_lo  # -1.0 for FWM, -2.0 for TWM
+
+    strong_mode_idx = 0 if is_dc else 2
+    strong_names = {'a_p', 'a_0'} if is_dc else {'a_i', 'a_2'}
     evolved_names = {'a_p', 'a_s', 'a_i'}
 
     if operators:
@@ -749,41 +822,43 @@ def analyze_expression_terms(
             if name:
                 named_map[name] = ne
 
-    sym_orders = {}
+    sym_orders: Dict[str, float] = {}
     if symbols:
         for s_def in symbols:
             name = (s_def.get('name') or '').strip()
             if name:
                 if name in ('nlc', 'chi', r'\chi', 'χ') or s_def.get('builtin_key') == 'nlc':
-                    sym_orders[name] = 1
+                    sym_orders[name] = 1.0
                 else:
                     try:
-                        sym_orders[name] = int(s_def.get('order', 0))
+                        sym_orders[name] = float(s_def.get('order', 0))
                     except (ValueError, TypeError):
-                        sym_orders[name] = 0
+                        sym_orders[name] = 0.0
 
-    def get_factor_info(node) -> Tuple[bool, int, str, Any]:
+    def get_factor_info(node) -> Tuple[bool, float, str, Any]:
         # (is_exact, leading_order, category, ref)
         if isinstance(node, ast.Constant):
-            return True, 0, 'exact', None
+            return True, 0.0, 'exact', None
         if isinstance(node, ast.Name):
             name = node.id
             if name in named_map:
                 ne = named_map[name]
-                lo = int(ne.get('leading_order') if ne.get('leading_order') is not None else (ne.get('leadingOrder') or 0))
-                return False, lo, 'named', ne
-            if name in TWM_VARIABLES:
-                cvar = TWM_VARIABLES[name]
-                lo = int(cvar.leading_order if cvar.leading_order is not None else 0)
+                raw_lo = ne.get('leading_order')
+                if raw_lo is None:
+                    raw_lo = ne.get('leadingOrder', 0)
+                return False, float(raw_lo or 0), 'named', ne
+            if name in WM_VARIABLES:
+                cvar = WM_VARIABLES[name]
+                lo = float(cvar.leading_order if cvar.leading_order is not None else 0)
                 return False, lo, 'named', cvar
             if name in evolved_names:
-                lo = -1 if name in strong_names else 0
+                lo = strong_lo if name in strong_names else 0.0
                 return False, lo, 'evolved', name
             if name in sym_orders:
                 return True, sym_orders[name], 'exact', name
             if name in ('nlc', 'chi', r'\chi', 'χ'):
-                return True, 1, 'exact', name
-            lo = -1 if name in strong_names else 0
+                return True, 1.0, 'exact', name
+            lo = strong_lo if name in strong_names else 0.0
             return True, lo, 'exact', name
         if isinstance(node, ast.UnaryOp):
             return get_factor_info(node.operand)
@@ -796,89 +871,139 @@ def analyze_expression_terms(
                 if node.args:
                     arg = node.args[0]
                     arg_name = arg.value if isinstance(arg, ast.Constant) and isinstance(arg.value, str) else (arg.id if isinstance(arg, ast.Name) else '')
-                    lo = -2 if arg_name in strong_names else 0
+                    lo = strong_nd_lo if arg_name in strong_names else 0.0
                     return True, lo, 'exact', None
-            return True, 0, 'exact', None
+            return True, 0.0, 'exact', None
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
             base_exact, base_lo, cat, ref = get_factor_info(node.left)
-            exp_val = 1
-            if isinstance(node.right, ast.Constant) and isinstance(node.right.value, int):
-                exp_val = node.right.value
+            exp_val = 1.0
+            if isinstance(node.right, ast.Constant) and isinstance(node.right.value, (int, float)):
+                exp_val = float(node.right.value)
             elif isinstance(node.right, ast.UnaryOp) and isinstance(node.right.op, ast.USub) and isinstance(node.right.operand, ast.Constant):
-                exp_val = -node.right.operand.value
+                exp_val = -float(node.right.operand.value)
             return base_exact, base_lo * exp_val, cat, ref
-        return True, 0, 'exact', None
+        return True, 0.0, 'exact', None
 
-    def flatten_product(node) -> List[Any]:
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
-            return flatten_product(node.left) + flatten_product(node.right)
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-            return flatten_product(node.left) + [node.right]
-        if isinstance(node, ast.UnaryOp):
-            return flatten_product(node.operand)
-        return [node]
-
-    def split_additive_terms(node) -> List[Any]:
+    def expand_additive_products(node) -> List[List[Tuple[Any, int]]]:
+        # Expand AST into additive terms of [(factor_node, sign_multiplier_for_lo)],
+        # distributing *, /, **, and dag() over parenthesized sums (capped at 64 terms).
         if isinstance(node, ast.Expression):
-            return split_additive_terms(node.body)
+            return expand_additive_products(node.body)
         if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub)):
-            return split_additive_terms(node.left) + split_additive_terms(node.right)
-        return [node]
+            return expand_additive_products(node.left) + expand_additive_products(node.right)
+        if isinstance(node, ast.UnaryOp):
+            return expand_additive_products(node.operand)
+        if isinstance(node, ast.Call):
+            func_name = node.func.id if isinstance(node.func, ast.Name) else ''
+            if func_name in ('dag', 'Dagger', 'dagger') and len(node.args) == 1:
+                inner_terms = expand_additive_products(node.args[0])
+                if len(inner_terms) > 1 or (len(inner_terms) == 1 and len(inner_terms[0]) > 1):
+                    return inner_terms
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+            left_terms = expand_additive_products(node.left)
+            right_terms = expand_additive_products(node.right)
+            if len(left_terms) * len(right_terms) <= 64:
+                return [lt + rt for lt in left_terms for rt in right_terms]
+            return [[(node.left, 1), (node.right, 1)]]
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            left_terms = expand_additive_products(node.left)
+            right_terms = expand_additive_products(node.right)
+            if len(right_terms) == 1 and len(left_terms) <= 64:
+                neg_right = [(n, -s) for n, s in right_terms[0]]
+                return [lt + neg_right for lt in left_terms]
+            return [lt + [(node.right, -1)] for lt in left_terms]
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
+            if isinstance(node.right, ast.Constant) and isinstance(node.right.value, int) and 1 < node.right.value <= 16:
+                k = int(node.right.value)
+                base_terms = expand_additive_products(node.left)
+                if len(base_terms) == 1:
+                    if len(base_terms[0]) > 1:
+                        return [base_terms[0] * k]
+                    is_ex, _, _, _ = get_factor_info(node.left)
+                    if not is_ex:
+                        return [[(node.left, 1)] * k]
+                elif len(base_terms) ** k <= 64:
+                    acc: List[List[Tuple[Any, int]]] = [[]]
+                    for _ in range(k):
+                        acc = [a + b for a in acc for b in base_terms]
+                    return acc
+        return [[(node, 1)]]
 
     try:
         tree = ast.parse(expr_str, mode='eval')
-        additive_terms = split_additive_terms(tree)
+        expanded_terms = expand_additive_products(tree)
     except Exception:
-        return target_order, []
+        return -1, []
 
-    max_evolved_needed = target_order
-    insufficient_named = []
+    max_evolved_needed: int = -1
+    insufficient_items: List[Dict[str, Any]] = []
     seen_warnings = set()
 
-    for term in additive_terms:
-        factors = flatten_product(term)
-        exact_lo_sum = 0
+    for raw_factors in expanded_terms:
+        parsed_factors = []
+        total_lo_sum = 0.0
         has_estimated = False
-        term_evolved_count = 0
-        term_named = []
 
-        for f in factors:
-            is_exact, lo, cat, ref = get_factor_info(f)
-            if is_exact:
-                exact_lo_sum += lo
-            else:
+        for f_node, sign_mult in raw_factors:
+            is_exact, lo, cat, ref = get_factor_info(f_node)
+            eff_lo = lo * sign_mult
+            total_lo_sum += eff_lo
+            if not is_exact:
                 has_estimated = True
-                if cat == 'evolved':
-                    term_evolved_count += 1
-                elif cat == 'named':
-                    term_named.append((ref, lo))
+            parsed_factors.append((is_exact, eff_lo, cat, ref))
 
         if not has_estimated:
             continue
 
-        req_order = target_order - exact_lo_sum
+        for is_exact, eff_lo, cat, ref in parsed_factors:
+            if is_exact:
+                continue
+            other_lo_sum = total_lo_sum - eff_lo
+            req_order_raw = float(target_order) - other_lo_sum
+            req_order_int = int(math.ceil(req_order_raw - 1e-12))
 
-        if term_evolved_count > 0:
-            if req_order > max_evolved_needed:
-                max_evolved_needed = req_order
+            if cat == 'evolved':
+                is_strong = (ref in strong_names)
+                if proc == 'fwm':
+                    needed_for_op = 1 if req_order_int >= 1 else (0 if req_order_int >= 0 else -1)
+                    if req_order_int > 1:
+                        name = str(ref)
+                        key = ('evolved', name, 1, req_order_int)
+                        if key not in seen_warnings:
+                            seen_warnings.add(key)
+                            insufficient_items.append({
+                                'name': name,
+                                'kind': 'evolved_op',
+                                'order': 1,
+                                'required_order': req_order_int,
+                            })
+                elif is_strong:
+                    # In TWM, strong driving modes evolve at odd orders: -1, 1, 3, 5, ...
+                    needed_for_op = -1 if req_order_int <= 0 else (req_order_int if req_order_int % 2 == 1 else req_order_int - 1)
+                else:
+                    # In TWM, weak signal/idler modes evolve at even orders: 0, 2, 4, ...
+                    needed_for_op = -1 if req_order_int < 0 else (req_order_int if req_order_int % 2 == 0 else req_order_int - 1)
 
-        for ref, lo in term_named:
-            rec_order = ref.get('order') if isinstance(ref, dict) else getattr(ref, 'order', None)
-            if rec_order is not None and rec_order < req_order:
-                name = ref.get('name') if isinstance(ref, dict) else getattr(ref, 'name', '')
-                key = (name, rec_order, req_order)
-                if key not in seen_warnings:
-                    seen_warnings.add(key)
-                    insufficient_named.append({
-                        'name': name,
-                        'order': rec_order,
-                        'required_order': req_order
-                    })
+                if needed_for_op > max_evolved_needed:
+                    max_evolved_needed = needed_for_op
+            elif cat == 'named':
+                rec_order = ref.get('order') if isinstance(ref, dict) else getattr(ref, 'order', None)
+                if rec_order is not None and float(rec_order) < req_order_raw - 1e-12:
+                    name = ref.get('name') if isinstance(ref, dict) else getattr(ref, 'name', '')
+                    key = ('named', name, rec_order, req_order_int)
+                    if key not in seen_warnings:
+                        seen_warnings.add(key)
+                        insufficient_items.append({
+                            'name': name,
+                            'kind': 'named_expr',
+                            'order': rec_order,
+                            'required_order': req_order_int,
+                        })
 
-    return max_evolved_needed, insufficient_named
+    return max_evolved_needed, insufficient_items
 
 
-def _prepare_twm_evaluation(
+def _prepare_wm_evaluation(
     text: str,
     dc: bool,
     order: int,
@@ -888,36 +1013,41 @@ def _prepare_twm_evaluation(
     named_expressions: List[Dict[str, Any]],
     mismatch: bool = False,
     single_mode: bool = False,
+    process: Optional[str] = None,
 ):
     """
-    Evaluates post-evolution operator combinations in Tab 3 (formerly Tab 4).
-    Returns: (latex_curr, expr_curr, latex_t, expr_str_t, latex_g, expr_str_g, leading_order)
+    Prepares and algebraically evaluates wave-mixing operator combinations in Tab 3.
+    Returns: (wrapper_target, solver, disp_subs, proc, is_dc)
     """
-    text = (text or '').strip()
-    if not text:
-        raise ValueError("Expression input cannot be empty.")
-
-    dc = bool(dc)
+    proc = normalize_process(process, dc)
+    is_dc = process_is_dc(proc)
     mismatch = bool(mismatch)
-    s = SOLVERS[dc][mismatch]
+    s = get_wm_solver(proc, mismatch=mismatch)
 
     # Automatically analyze required order for evolved field operators
-    # If evolved operators are multiplied by negative leading-order exact items,
-    # append get_sol until the accuracy of the evolved operators is sufficient.
     needed_evolved_order, _ = analyze_expression_terms(
         text,
         target_order=order,
-        dc=dc,
+        dc=is_dc,
         symbols=symbols,
         operators=operators,
-        named_expressions=named_expressions
+        named_expressions=named_expressions,
+        process=proc,
     )
     evolved_order = max(-1, order, needed_evolved_order)
+    if proc == 'fwm':
+        # FWMSolver supports orders -1, 0, 1; cap at 1 when user force-continues higher-order requests
+        evolved_order = min(1, evolved_order)
     sol = s.get_sol(evolved_order)
 
-    # Initial-time (t=0) mode wrappers directly from INIT_OPS[dc]
-    init_wrappers = {k: TwmWrapper(v, s) for k, v in INIT_OPS[dc].items()}
-    evolved_wrappers = [TwmWrapper(s_op, s) for s_op in sol]
+    # In Page 3 FWM mode, include outer SPM phase factor exp(-i * χ * N_0 * t) on evolved pump mode a_p
+    if proc == 'fwm' and evolved_order >= 0:
+        spm_dict = {(None,): PF({((), ()): exp(-I * nlc * s.nd * t_)})}
+        sol = (s.e_mul(sol[0], spm_dict), sol[1], sol[2])
+
+    # Initial-time (t=0) mode wrappers directly from INIT_OPS[is_dc]
+    init_wrappers = {k: WmWrapper(v, s) for k, v in INIT_OPS[is_dc].items()}
+    evolved_wrappers = [WmWrapper(s_op, s) for s_op in sol]
 
     if single_mode:
         init_wrappers = {k: w.to_single_mode() for k, w in init_wrappers.items()}
@@ -940,26 +1070,26 @@ def _prepare_twm_evaluation(
         s_name = (sym_def.get('name') or '').strip()
         if s_name and 'order' in sym_def and sym_def['order'] is not None:
             try:
-                ord_v = int(sym_def['order'])
+                ord_v = sympify(sym_def['order'])
                 custom_orders[s_name] = ord_v
                 custom_orders[Symbol(s_name)] = ord_v
-            except (ValueError, TypeError):
+            except Exception:
                 pass
     for op_def in operators:
         op_name = (op_def.get('name') or '').strip()
         if op_name and 'order' in op_def and op_def['order'] is not None:
             try:
-                ord_v = int(op_def['order'])
+                ord_v = sympify(op_def['order'])
                 custom_orders[op_name] = ord_v
                 custom_orders[Symbol(op_name)] = ord_v
-            except (ValueError, TypeError):
+            except Exception:
                 pass
 
     if hasattr(s, 'update_pe'):
         s.update_pe(custom_orders)
 
     def _resolve_mode_name(item) -> str:
-        if isinstance(item, TwmWrapper):
+        if isinstance(item, WmWrapper):
             for idx, ew in enumerate(evolved_wrappers):
                 if item.val is ew.val:
                     return f'a_{idx}'
@@ -979,22 +1109,22 @@ def _prepare_twm_evaluation(
         return op_mode_map.get(name, name)
 
     def _unwrap_scalar(x):
-        if isinstance(x, TwmWrapper):
+        if isinstance(x, WmWrapper):
             if isinstance(x.val, PF) and x.val.npf == S.Zero and set(x.val.table.keys()).issubset({((), ())}):
                 return x.val.table.get(((), ()), S.Zero)
             return x.val.expr() if isinstance(x.val, PF) else s.to_expr(x.val)
         return sympify(x)
 
     def _make_boson_num(item):
-        return TwmWrapper.from_val(BosonNum(_resolve_mode_name(item)), s)
+        return WmWrapper.from_val(BosonNum(_resolve_mode_name(item)), s)
 
     def _make_mmn(name, disp=0):
-        return TwmWrapper.from_val(MultimodeNum(_resolve_mode_name(name), _unwrap_scalar(disp)), s)
+        return WmWrapper.from_val(MultimodeNum(_resolve_mode_name(name), _unwrap_scalar(disp)), s)
 
     def _make_mmn2(disp=0):
         d_val = _unwrap_scalar(disp)
-        return TwmWrapper.from_val(
-            MultimodeNum2(a_s.name, a_i.name, 0, d_val) if dc else MultimodeNum2(a_p.name, a_s.name, 1, d_val), s
+        return WmWrapper.from_val(
+            MultimodeNum2(a_s.name, a_i.name, 0, d_val) if is_dc else MultimodeNum2(a_p.name, a_s.name, 1, d_val), s
         )
 
     def _make_pat(item, *args):
@@ -1005,8 +1135,8 @@ def _prepare_twm_evaluation(
             else:
                 raw_args.append(a if isinstance(a, bool) else _unwrap_scalar(a))
 
-        is_A = isinstance(item, TwmWrapper) and (item is init_wrappers['A'] or item.val == INIT_OPS[dc]['A'])
-        is_dagA = (isinstance(item, TwmWrapper) and isinstance(item.val, dict) and not isinstance(item.val, f_dict)
+        is_A = isinstance(item, WmWrapper) and (item is init_wrappers['A'] or item.val == INIT_OPS[is_dc]['A'])
+        is_dagA = (isinstance(item, WmWrapper) and isinstance(item.val, dict) and not isinstance(item.val, f_dict)
                    and list(item.val.keys()) == [(False, 1)] and item.val[(False, 1)].table == {((), ()): S.One})
         if is_A or is_dagA:
             is_ann = True if is_A else False
@@ -1018,9 +1148,9 @@ def _prepare_twm_evaluation(
             int_exps = [int(sympify(e)) for e in exps]
             if any(e < 0 for e in int_exps):
                 raise ValueError("Pattern exponents must be non-negative integers.")
-            return TwmWrapper({_tdz(is_ann, int_exps): PF_ONE}, s)
+            return WmWrapper({_tdz(is_ann, int_exps): PF_ONE}, s)
 
-        if isinstance(item, TwmWrapper) and isinstance(item.val, (f_dict, dict)):
+        if isinstance(item, WmWrapper) and isinstance(item.val, (f_dict, dict)):
             exps = list(raw_args)
             explicit_ann = exps.pop(0) if (exps and isinstance(exps[0], bool)) else None
             if not exps:
@@ -1032,14 +1162,14 @@ def _prepare_twm_evaluation(
             else:
                 op_ann = item
                 is_a = True if explicit_ann is None else bool(explicit_ann)
-            res = TwmWrapper(PF_ONE, s)
+            res = WmWrapper(PF_ONE, s)
             for e in exps:
                 cur = op_ann if is_a else op_ann.adjoint()
                 res = res * (cur ** int(sympify(e)))
                 is_a = not is_a
             return res
 
-        return TwmWrapper.from_val(
+        return WmWrapper.from_val(
             Pat(item, *raw_args, mode_kind_map=mode_kind_map, op_mode_map=op_mode_map), s
         )
 
@@ -1053,7 +1183,7 @@ def _prepare_twm_evaluation(
         name = item.name if hasattr(item, 'name') else str(item)
         if op_mode_map and name in op_mode_map:
             name = str(op_mode_map[name])
-        return TwmWrapper.from_val(BosonPat(name, *raw_args), s)
+        return WmWrapper.from_val(BosonPat(name, *raw_args), s)
 
     def _make_fp(item, *args):
         raw_args = []
@@ -1065,23 +1195,25 @@ def _prepare_twm_evaluation(
         name = item.name if hasattr(item, 'name') else str(item)
         if op_mode_map and name in op_mode_map:
             name = str(op_mode_map[name])
-        return TwmWrapper.from_val(FermionPat(name, *raw_args), s)
+        return WmWrapper.from_val(FermionPat(name, *raw_args), s)
 
     def _wrap_fn(fn):
         def _inner(item):
-            if isinstance(item, TwmWrapper) and isinstance(item.val, PF):
+            if isinstance(item, WmWrapper) and isinstance(item.val, PF):
                 if item.val.npf == S.Zero and set(item.val.table.keys()).issubset({((), ())}):
                     arg = item.val.table.get(((), ()), S.Zero)
-                    return TwmWrapper(PF({((), ()): fn(arg)}), s)
-            return TwmWrapper.from_val(fn(sympify(item)), s)
+                    return WmWrapper(PF({((), ()): fn(arg)}), s)
+            return WmWrapper.from_val(fn(sympify(item)), s)
         return _inner
 
-    # Represent g in terms of t_ during algebraic evaluation so NumShift on N_d works accurately
-    w_g_internal = TwmWrapper(g_to_t(PF({((), ()): g_hat}), dc=dc, mismatch=mismatch), s)
+    # Represent g in terms of s.gc * t_ during algebraic evaluation so NumShift on N_d works accurately
+    w_g_internal = WmWrapper(PF({((), ()): s.gc * t_}), s)
     w_g_internal._is_g = True
 
-    w_t = TwmWrapper.from_val(t_, s)
+    w_t = WmWrapper.from_val(t_, s)
     w_t._is_t = True
+
+    pm_internal = s.pm if proc == 'fwm' else (pm if mismatch else S.Zero)
 
     local_dict: Dict[str, Any] = {
         'i': I,
@@ -1095,9 +1227,9 @@ def _prepare_twm_evaluation(
         'cosh': _wrap_fn(cosh),
         'tanh': _wrap_fn(tanh),
         'sqrt': _wrap_fn(sqrt),
-        'dag': lambda item: TwmWrapper.from_val(item, s).adjoint(),
-        'Dagger': lambda item: TwmWrapper.from_val(item, s).adjoint(),
-        'dagger': lambda item: TwmWrapper.from_val(item, s).adjoint(),
+        'dag': lambda item: WmWrapper.from_val(item, s).adjoint(),
+        'Dagger': lambda item: WmWrapper.from_val(item, s).adjoint(),
+        'dagger': lambda item: WmWrapper.from_val(item, s).adjoint(),
         'N_': _make_boson_num,
         'BosonNum': _make_boson_num,
         'Pat': _make_pat,
@@ -1112,17 +1244,24 @@ def _prepare_twm_evaluation(
         'g': w_g_internal,
         'diff': lambda expr, *args, **kwargs: expr.diff(*args, **kwargs) if hasattr(expr, 'diff') else diff(expr, *args, **kwargs),
         'Derivative': lambda expr, *args, **kwargs: expr.diff(*args, **kwargs) if hasattr(expr, 'diff') else diff(expr, *args, **kwargs),
-        'nlc': TwmWrapper.from_val(nlc, s),
-        'pm': TwmWrapper.from_val(s.pm, s),
-        **init_wrappers,
+        'nlc': WmWrapper.from_val(nlc, s),
+        'pm': WmWrapper.from_val(pm_internal, s),
+        'n_m': WmWrapper.from_val(S.One if single_mode else _nm, s),
+        # Initial (t=0) operators & multimode presets
+        'a_0': init_wrappers['a_0'],
+        'a_1': init_wrappers['a_1'],
+        'a_2': init_wrappers['a_2'],
+        'A': init_wrappers['A'],
+        'N_t': init_wrappers['N_t'],
+        # Evolved operators at time t
         'a_p': evolved_wrappers[0],
         'a_s': evolved_wrappers[1],
         'a_i': evolved_wrappers[2],
     }
 
-    disp_subs = {}
+    disp_subs: Dict[Any, Any] = {}
 
-    # 1. Register commutative symbols from table
+    # 1. Register user symbols (including customized nlc / pm identifiers)
     for sym_def in symbols:
         s_name = (sym_def.get('name') or '').strip()
         valid, err_msg = is_valid_variable_name(s_name)
@@ -1130,18 +1269,17 @@ def _prepare_twm_evaluation(
             raise ValueError(f"Invalid symbol identifier: {err_msg}")
         d_name = (sym_def.get('display_name') or '').strip()
 
-        # Built-in parametric symbols nlc and pm keep their identity in TWMSolver formulas
         if s_name == 'nlc' or sym_def.get('builtin_key') == 'nlc':
-            local_dict[s_name] = TwmWrapper.from_val(nlc, s)
+            local_dict[s_name] = WmWrapper.from_val(nlc, s)
             if d_name and d_name not in ('nlc', r'\chi', 'χ'):
                 disp_subs[nlc] = Symbol(d_name)
             continue
         if s_name == 'pm' or sym_def.get('builtin_key') == 'pm':
             if not mismatch:
-                local_dict[s_name] = TwmWrapper.from_val(S.Zero, s)
+                local_dict[s_name] = WmWrapper.from_val(pm_internal, s)
             else:
-                local_dict[s_name] = TwmWrapper.from_val(pm, s)
-                if d_name and d_name not in ('pm', 'Δk'):
+                local_dict[s_name] = WmWrapper.from_val(pm, s)
+                if d_name and d_name not in ('pm', 'Δk', r'\Delta k'):
                     disp_subs[pm] = Symbol(d_name)
             continue
 
@@ -1151,7 +1289,7 @@ def _prepare_twm_evaluation(
         elif sym_def.get('is_integer'): kwargs['integer'] = True
         elif sym_def.get('is_real'): kwargs['real'] = True
         sym_obj = Symbol(s_name, **kwargs)
-        local_dict[s_name] = TwmWrapper.from_val(sym_obj, s)
+        local_dict[s_name] = WmWrapper.from_val(sym_obj, s)
         if d_name and d_name != s_name:
             disp_subs[sym_obj] = Symbol(d_name)
 
@@ -1169,7 +1307,7 @@ def _prepare_twm_evaluation(
             mode_kind_map[op_name] = kind
             op_mode_map[op_name] = op_name
             op_obj = BosonOp(op_name) if kind == 'boson' else FermionOp(op_name)
-            w_op = TwmWrapper.from_val(op_obj, s)
+            w_op = WmWrapper.from_val(op_obj, s)
             local_dict[op_name] = w_op
 
             d_name = (op_def.get('display_name') or '').strip()
@@ -1209,17 +1347,14 @@ def _prepare_twm_evaluation(
             raise ValueError(f"Invalid expression identifier: {err_msg}")
 
         val_obj = ne.get('val')
+        ne_proc = normalize_process(ne.get('process'), ne.get('dc', is_dc))
 
         if val_obj is not None:
-            if isinstance(val_obj, TwmWrapper):
-                w_ne = val_obj
-            else:
-                w_ne = TwmWrapper(val_obj, s)
-            w_ne = TwmWrapper(g_to_t(w_ne.val, dc=dc, mismatch=mismatch), s)
+            w_ne = val_obj if isinstance(val_obj, WmWrapper) else WmWrapper(val_obj, s)
             if single_mode:
                 w_ne = w_ne.to_single_mode()
             local_dict[ne_name] = w_ne
-            save_twm_variable(
+            save_wm_variable(
                 ne_name,
                 w_ne.val,
                 solver=s,
@@ -1227,12 +1362,14 @@ def _prepare_twm_evaluation(
                 latex_g=ne.get('latex_g'),
                 order=ne.get('order'),
                 leading_order=ne.get('leading_order'),
-                dc=dc,
+                dc=is_dc,
+                process=proc,
+                mismatch=mismatch,
                 single_mode=single_mode
             )
-        elif ne_name in TWM_VARIABLES:
-            w_ne = TWM_VARIABLES[ne_name]
-            w_ne = TwmWrapper(g_to_t(w_ne.val, dc=dc, mismatch=mismatch), s)
+        elif ne_name in WM_VARIABLES:
+            w_cached = WM_VARIABLES[ne_name]
+            w_ne = WmWrapper(w_cached.val, s)
             if single_mode:
                 w_ne = w_ne.to_single_mode()
             local_dict[ne_name] = w_ne
@@ -1242,14 +1379,11 @@ def _prepare_twm_evaluation(
                 continue
             try:
                 parsed_ne = parse_expr(ne_str, local_dict=local_dict, transformations=TRANSFORMS)
-                w_ne = TwmWrapper.from_val(parsed_ne, s)
-                # Ensure internal representation is in terms of t_ for subsequent multiplications
-                w_ne = TwmWrapper(g_to_t(w_ne.val, dc=dc, mismatch=mismatch), s)
-                # If single_mode is enabled, project any multimode named expressions into single mode (E -> P)
+                w_ne = WmWrapper.from_val(parsed_ne, s)
                 if single_mode:
                     w_ne = w_ne.to_single_mode()
                 local_dict[ne_name] = w_ne
-                save_twm_variable(
+                save_wm_variable(
                     ne_name,
                     w_ne.val,
                     solver=s,
@@ -1257,7 +1391,9 @@ def _prepare_twm_evaluation(
                     latex_g=ne.get('latex_g'),
                     order=ne.get('order'),
                     leading_order=ne.get('leading_order'),
-                    dc=dc,
+                    dc=is_dc,
+                    process=proc,
+                    mismatch=mismatch,
                     single_mode=single_mode
                 )
             except Exception as e:
@@ -1266,11 +1402,11 @@ def _prepare_twm_evaluation(
     # 5. Parse and evaluate target expression
     try:
         parsed_target = parse_expr(text, local_dict=local_dict, transformations=TRANSFORMS)
-        wrapper_target = TwmWrapper.from_val(parsed_target, s)
+        wrapper_target = WmWrapper.from_val(parsed_target, s)
     except Exception as e:
         raise ValueError(f"Calculation failed: {e}")
 
-    return wrapper_target, s, disp_subs
+    return wrapper_target, s, disp_subs, proc, is_dc
 
 
 def eval_operator_combination(
@@ -1278,16 +1414,16 @@ def eval_operator_combination(
     dc: bool,
     order: int,
     use_gain: bool,
-
     symbols: List[Dict[str, Any]],
     operators: List[Dict[str, Any]],
     mm_operators: List[Dict[str, Any]],
     named_expressions: List[Dict[str, Any]],
     mismatch: bool = False,
     single_mode: bool = False,
-) -> Tuple[str, str, str, str, str, str, int, int]:
-    wrapper_target, s, disp_subs = _prepare_twm_evaluation(
-        text, dc, order, symbols, operators, mm_operators, named_expressions, mismatch, single_mode
+    process: Optional[str] = None,
+) -> Tuple[str, str, str, str, str, str, Union[int, float], int]:
+    wrapper_target, s, disp_subs, proc, is_dc = _prepare_wm_evaluation(
+        text, dc, order, symbols, operators, mm_operators, named_expressions, mismatch, single_mode, process=process
     )
     val = wrapper_target.val
 
@@ -1304,14 +1440,18 @@ def eval_operator_combination(
 
     val = _apply_to_pfs(val, _postprocess_pf)
 
-    # 6.1 If single-mode processing is requested, convert multimode series to mode_expr with n_m = 1
+    # 6.1 If FWM + Phase Matched (FWM_zq: SPM compensated by phase mismatch), apply s._zq
+    if proc == 'fwm' and not mismatch:
+        val = s._zq(val)
+
+    # 6.2 If single-mode processing is requested, convert multimode series to mode_expr with n_m = 1
     if single_mode:
         val = s.to_single_mode(val)
 
     # 7. Compute both time (t) and gain (g) representations
-    val_t = g_to_t(val, dc=dc, mismatch=mismatch)
+    val_t = val
     expr_result_t = val_t.expr(False) if isinstance(val_t, PF) else s.to_expr(val_t)
-    expr_str_t = expr_to_code_str(expr_result_t, dc=dc)
+    expr_str_t = expr_to_code_str(expr_result_t, dc=is_dc)
     expr_disp_t = expr_result_t
     if disp_subs:
         try:
@@ -1320,9 +1460,9 @@ def eval_operator_combination(
             expr_disp_t = expr_result_t
     latex_t = latex(expr_disp_t)
 
-    val_g = t_to_g(val, dc=dc, mismatch=mismatch)
+    val_g = t_to_g(val, process=proc, mismatch=mismatch)
     expr_result_g = val_g.expr(False) if isinstance(val_g, PF) else s.to_expr(val_g)
-    expr_str_g = expr_to_code_str(expr_result_g, dc=dc)
+    expr_str_g = expr_to_code_str(expr_result_g, dc=is_dc)
     expr_disp_g = expr_result_g
     if disp_subs:
         try:
@@ -1335,14 +1475,14 @@ def eval_operator_combination(
     expr_curr = expr_str_g if use_gain else expr_str_t
 
     try:
-        leading_order = int(compute_val_leading_order(val, s, dc=dc))
+        leading_order = compute_val_leading_order(val_t, s, dc=is_dc, process=proc)
     except Exception:
         leading_order = 0
 
     sol_len = len(s.sol)
 
-    global LAST_EVAL_TWM
-    LAST_EVAL_TWM = {
+    global LAST_EVAL_WM
+    LAST_EVAL_WM = {
         'val_t': val_t,
         'val_g': val_g,
         'val': val_t,
@@ -1351,7 +1491,9 @@ def eval_operator_combination(
         'latex_g': latex_g,
         'order': order,
         'leading_order': leading_order,
-        'dc': dc,
+        'dc': is_dc,
+        'process': proc,
+        'mismatch': mismatch,
         'single_mode': single_mode,
     }
 
@@ -1363,7 +1505,6 @@ def eval_combination_assertions(
     dc: bool,
     order: int,
     use_gain: bool,
-
     symbols: List[Dict[str, Any]],
     operators: List[Dict[str, Any]],
     mm_operators: List[Dict[str, Any]],
@@ -1373,15 +1514,16 @@ def eval_combination_assertions(
     coherent_drive: bool = False,
     vacuum_signal: bool = False,
     vacuum_other_weak: bool = False,
-) -> Tuple[str, str, str, str, str, str, int, int]:
+    process: Optional[str] = None,
+) -> Tuple[str, str, str, str, str, str, Union[int, float], int]:
     """
     Evaluates operator combination under selected input-state assertions:
     - coherent_drive: strong driving field input is in coherent state |alpha>
     - vacuum_signal: signal field (a_1) input is in vacuum |0>
-    - vacuum_other_weak: remaining weak field (a_2 if dc else a_0) input is in vacuum |0>
+    - vacuum_other_weak: remaining weak field (a_2 if is_dc else a_0) input is in vacuum |0>
     """
-    wrapper_target, s, disp_subs = _prepare_twm_evaluation(
-        text, dc, order, symbols, operators, mm_operators, named_expressions, mismatch, single_mode
+    wrapper_target, s, disp_subs, proc, is_dc = _prepare_wm_evaluation(
+        text, dc, order, symbols, operators, mm_operators, named_expressions, mismatch, single_mode, process=process
     )
     val = wrapper_target.val
 
@@ -1389,7 +1531,7 @@ def eval_combination_assertions(
     if vacuum_signal:
         vac_modes.append('a_1')
     if vacuum_other_weak:
-        vac_modes.append('a_2' if dc else 'a_0')
+        vac_modes.append('a_2' if is_dc else 'a_0')
 
     if vac_modes:
         val = s.eval_vacuum(val, vac_modes, single_mode=single_mode)
@@ -1398,6 +1540,11 @@ def eval_combination_assertions(
 
     if coherent_drive:
         val_t, val_g = s.eval_coherent(val, order, return_both=True)
+        if proc == 'fwm' and not mismatch:
+            alpha_sym = Symbol('alpha_0')
+            pm_cohr = 2 * nlc * (Abs(alpha_sym) ** 2)
+            val_t = d_apply(val_t, lambda x: bottom_up(x.subs({s.pm: pm_cohr}), _ps))
+            val_g = d_apply(val_g, lambda x: bottom_up(x.subs({s.pm: pm_cohr}), _ps))
     else:
         def _postprocess_pf(p: PF) -> PF:
             if not p.table and p.npf == S.Zero:
@@ -1410,8 +1557,10 @@ def eval_combination_assertions(
             return p.n_apply(s.n_simp)
 
         val = _apply_to_pfs(val, _postprocess_pf)
-        val_t = g_to_t(val, dc=dc, mismatch=mismatch)
-        val_g = t_to_g(val, dc=dc, mismatch=mismatch)
+        if proc == 'fwm' and not mismatch:
+            val = s._zq(val)
+        val_t = val
+        val_g = t_to_g(val, process=proc, mismatch=mismatch)
 
     expr_result_t = val_t.expr(False) if isinstance(val_t, PF) else s.to_expr(val_t)
     expr_result_g = val_g.expr(False) if isinstance(val_g, PF) else s.to_expr(val_g)
@@ -1430,21 +1579,21 @@ def eval_combination_assertions(
 
     latex_t = latex(expr_disp_t)
     latex_g = latex(expr_disp_g)
-    expr_str_t = expr_to_code_str(expr_result_t, dc=dc)
-    expr_str_g = expr_to_code_str(expr_result_g, dc=dc)
+    expr_str_t = expr_to_code_str(expr_result_t, dc=is_dc)
+    expr_str_g = expr_to_code_str(expr_result_g, dc=is_dc)
 
     latex_curr = latex_g if use_gain else latex_t
     expr_curr = expr_str_g if use_gain else expr_str_t
 
     try:
-        leading_order = int(compute_val_leading_order(val_t, s, dc=dc))
+        leading_order = compute_val_leading_order(val_t, s, dc=is_dc, process=proc)
     except Exception:
         leading_order = 0
 
     sol_len = len(s.sol)
 
-    global LAST_EVAL_TWM
-    LAST_EVAL_TWM = {
+    global LAST_EVAL_WM
+    LAST_EVAL_WM = {
         'val_t': val_t,
         'val_g': val_g,
         'val': val_t,
@@ -1453,18 +1602,11 @@ def eval_combination_assertions(
         'latex_g': latex_g,
         'order': order,
         'leading_order': leading_order,
-        'dc': dc,
+        'dc': is_dc,
+        'process': proc,
+        'mismatch': mismatch,
         'single_mode': single_mode,
     }
 
     return latex_curr, expr_curr, latex_t, expr_str_t, latex_g, expr_str_g, leading_order, sol_len
 
-
-
-# Backwards compatibility aliases
-ComboWrapper = TwmWrapper
-COMBO_VARIABLES = TWM_VARIABLES
-save_combo_variable = save_twm_variable
-save_latest_combo_variable = save_latest_twm_variable
-get_combo_variable = get_twm_variable
-clear_combo_variables = clear_twm_variables

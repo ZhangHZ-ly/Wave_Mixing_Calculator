@@ -15,7 +15,7 @@ let currentTwmSourceInput = localStorage.getItem('qc_tab3_source_input') || '';
 let cachedTwmResult = null;
 
 // Cached TWMSolver.sol lengths for lazy accuracy update in Tab 3 table: { "true_false": 1, ... }
-let cachedSolverSolLens = JSON.parse(localStorage.getItem('qc_twm_solver_sol_lens') || '{}');
+let cachedSolverSolLens = JSON.parse(localStorage.getItem('qc_wm_solver_sol_lens') || '{}');
 
 // Active workspace for shared modals ('tab2' or 'tab3')
 let activeWorkspace = 'tab2';
@@ -59,7 +59,7 @@ if (!tableItems || !tableItems.length) {
   if (tableUpdated) saveTableItemsToStorage();
 }
 
-let twmTableItems = JSON.parse(localStorage.getItem('qc_twm_table_items_en') || 'null');
+let twmTableItems = JSON.parse(localStorage.getItem('qc_wm_table_items_en') || 'null');
 if (!twmTableItems || !twmTableItems.length) {
   twmTableItems = JSON.parse(JSON.stringify(DEFAULT_TWM_TABLE_ITEMS));
   saveTwmTableItemsToStorage();
@@ -649,7 +649,7 @@ function saveTableItemsToStorage() {
 }
 
 function saveTwmTableItemsToStorage() {
-  localStorage.setItem('qc_twm_table_items_en', JSON.stringify(twmTableItems));
+  localStorage.setItem('qc_wm_table_items_en', JSON.stringify(twmTableItems));
 }
 
 function escapeHtml(str) {
@@ -2808,7 +2808,7 @@ async function runTwm() {
       const prevLen = cachedSolverSolLens[solverKey] || 1;
       if (data.sol_len > prevLen) {
         cachedSolverSolLens[solverKey] = data.sol_len;
-        localStorage.setItem('qc_twm_solver_sol_lens', JSON.stringify(cachedSolverSolLens));
+        localStorage.setItem('qc_wm_solver_sol_lens', JSON.stringify(cachedSolverSolLens));
         renderTwmTable();
       }
     }
@@ -3068,7 +3068,7 @@ async function runTwmAssertions() {
       const prevLen = cachedSolverSolLens[solverKey] || 1;
       if (data.sol_len > prevLen) {
         cachedSolverSolLens[solverKey] = data.sol_len;
-        localStorage.setItem('qc_twm_solver_sol_lens', JSON.stringify(cachedSolverSolLens));
+        localStorage.setItem('qc_wm_solver_sol_lens', JSON.stringify(cachedSolverSolLens));
         renderTwmTable();
       }
     }
@@ -3204,17 +3204,4 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 
-// Backwards compatibility aliases
-window.onComboPresetChange = onTwmPresetChange;
-window.onComboSingleModeChange = onTwmSingleModeChange;
-window.onComboMismatchChange = onTwmMismatchChange;
-window.renderComboTable = renderTwmTable;
-window.toggleComboGainDisplay = toggleTwmGainDisplay;
-window.switchComboSubTab = switchTwmSubTab;
-window.runCombination = runTwm;
-window.runCombinationAssertions = runTwmAssertions;
-window.clearCombinationAssertions = clearTwmAssertions;
-window.runPatternForm = runPf;
-window.getComboMismatch = getTwmMismatch;
-window.getComboDc = getTwmDc;
-window.getComboSingleMode = getTwmSingleMode;
+

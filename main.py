@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
@@ -10,12 +10,14 @@ from calculator import (
     eval_single_mode,
     eval_pf_form,
     eval_pattern_form,
-    eval_twm_solve,
+    eval_wm_solve,
     eval_operator_combination,
     eval_combination_assertions,
     save_latest_pf_variable,
-    save_latest_twm_variable,
-    SOLVERS,
+    save_latest_wm_variable,
+    ALL_SOLVERS,
+    normalize_process,
+    process_is_dc,
 )
 
 
@@ -42,7 +44,7 @@ class SymbolDef(BaseModel):
     is_nonnegative: bool = False
     is_positive: bool = False
     builtin_key: Optional[str] = None
-    order: Optional[int] = 0
+    order: Optional[Union[int, float]] = 0
 
 
 class OperatorDef(BaseModel):
@@ -51,7 +53,7 @@ class OperatorDef(BaseModel):
     name: str
     display_name: Optional[str] = None
     mode_index: Optional[int] = 0
-    order: Optional[int] = 0
+    order: Optional[Union[int, float]] = 0
 
 
 class MMOperatorDef(BaseModel):
@@ -69,8 +71,9 @@ class NamedExprDef(BaseModel):
     latex_t: Optional[str] = None
     latex_g: Optional[str] = None
     order: Optional[int] = None
-    leading_order: Optional[int] = None
+    leading_order: Optional[Union[int, float]] = None
     dc: Optional[bool] = None
+    process: Optional[str] = None
     single_mode: Optional[bool] = None
 
 
@@ -89,8 +92,9 @@ class PatternFormRequest(BaseModel):
 
 
 class SolveRequest(BaseModel):
-    dc: bool
-    mismatch: bool
+    dc: bool = True
+    process: Optional[str] = None
+    mismatch: bool = False
     var_index: int
     order: int
     use_gain: bool = False
@@ -99,6 +103,7 @@ class SolveRequest(BaseModel):
 class CombinationRequest(BaseModel):
     text: str
     dc: bool = True
+    process: Optional[str] = None
     mismatch: bool = False
     order: int = 1
     use_gain: bool = False
@@ -113,6 +118,11 @@ class AssertionRequest(CombinationRequest):
     coherent_drive: bool = False
     vacuum_signal: bool = False
     vacuum_other_weak: bool = False
+
+
+def _format_lead_ord(val: Union[int, float]) -> Union[int, float]:
+    f = float(val)
+    return int(f) if f.is_integer() else f
 
 
 @app.get("/")
@@ -169,8 +179,14 @@ def api_pattern_form(req: PatternFormRequest):
 @app.post("/api/solve")
 def solve(req: SolveRequest):
     try:
-        latex_curr, expr_curr, latex_t, expr_t, latex_g, expr_g = eval_twm_solve(
-            req.dc, req.mismatch, req.var_index, req.order, use_gain=req.use_gain
+        proc = normalize_process(req.process, req.dc)
+        latex_curr, expr_curr, latex_t, expr_t, latex_g, expr_g = eval_wm_solve(
+            dc=process_is_dc(proc),
+            mismatch=req.mismatch,
+            var_index=req.var_index,
+            order=req.order,
+            use_gain=req.use_gain,
+            process=proc,
         )
         return {
             "latex": latex_curr,
@@ -187,9 +203,11 @@ def solve(req: SolveRequest):
 @app.post("/api/combination")
 def api_combination(req: CombinationRequest):
     try:
+        proc = normalize_process(req.process, req.dc)
+        is_dc = process_is_dc(proc)
         latex_curr, expr_curr, latex_t, expr_t, latex_g, expr_g, leading_order, sol_len = eval_operator_combination(
             req.text,
-            dc=req.dc,
+            dc=is_dc,
             mismatch=req.mismatch,
             order=req.order,
             use_gain=req.use_gain,
@@ -198,8 +216,9 @@ def api_combination(req: CombinationRequest):
             operators=[op.model_dump() for op in req.operators],
             mm_operators=[mm.model_dump() for mm in req.mm_operators],
             named_expressions=[ne.model_dump() for ne in req.named_expressions],
+            process=proc,
         )
-        lead_ord = int(leading_order)
+        lead_ord = _format_lead_ord(leading_order)
         return {
             "latex": str(latex_curr),
             "expr_str": str(expr_curr),
@@ -210,6 +229,7 @@ def api_combination(req: CombinationRequest):
             "leading_order": lead_ord,
             "order": int(req.order),
             "sol_len": int(sol_len),
+            "process": proc,
             "single_mode": bool(req.single_mode),
         }
     except Exception as e:
@@ -221,9 +241,11 @@ def api_combination(req: CombinationRequest):
 @app.post("/api/combination/assert")
 def api_combination_assert(req: AssertionRequest):
     try:
+        proc = normalize_process(req.process, req.dc)
+        is_dc = process_is_dc(proc)
         latex_curr, expr_curr, latex_t, expr_t, latex_g, expr_g, leading_order, sol_len = eval_combination_assertions(
             req.text,
-            dc=req.dc,
+            dc=is_dc,
             mismatch=req.mismatch,
             order=req.order,
             use_gain=req.use_gain,
@@ -235,8 +257,9 @@ def api_combination_assert(req: AssertionRequest):
             operators=[op.model_dump() for op in req.operators],
             mm_operators=[mm.model_dump() for mm in req.mm_operators],
             named_expressions=[ne.model_dump() for ne in req.named_expressions],
+            process=proc,
         )
-        lead_ord = int(leading_order)
+        lead_ord = _format_lead_ord(leading_order)
         return {
             "latex": str(latex_curr),
             "expr_str": str(expr_curr),
@@ -247,6 +270,7 @@ def api_combination_assert(req: AssertionRequest):
             "leading_order": lead_ord,
             "order": int(req.order),
             "sol_len": int(sol_len),
+            "process": proc,
             "single_mode": bool(req.single_mode),
         }
     except Exception as e:
@@ -259,7 +283,7 @@ def api_combination_assert(req: AssertionRequest):
 def api_save_variable(req: SaveVarRequest):
     try:
         if req.workspace in ('tab3', 'tab4'):
-            save_latest_twm_variable(req.name, notes=req.notes or "")
+            save_latest_wm_variable(req.name, notes=req.notes or "")
         else:
             save_latest_pf_variable(req.name, notes=req.notes or "")
         return {"status": "ok", "name": req.name}
@@ -270,13 +294,12 @@ def api_save_variable(req: SaveVarRequest):
 @app.post("/api/combination/reset")
 def api_reset_combination():
     try:
-        for row in SOLVERS:
-            for s in row:
-                if hasattr(s, 'reset_pe'):
-                    s.reset_pe()
-                elif hasattr(s, 'update_pe'):
-                    s.update_pe({})
-        return {"status": "success", "message": "TWMSolver PE reset to defaults"}
+        for s in ALL_SOLVERS:
+            if hasattr(s, 'reset_pe'):
+                s.reset_pe()
+            elif hasattr(s, 'update_pe'):
+                s.update_pe({})
+        return {"status": "success", "message": "WM solver PE reset to defaults"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

@@ -716,25 +716,77 @@ class WM_Processor:
         """
         Simplifies expressions involving powers of self.nd by:
         1. Extracting common factors of self.nd from Add expressions inside Mul;
-        2. Merging powers of self.nd via substitution with commutative dummy symbol _nd.
+        2. Merging powers of self.nd via substitution with commutative dummy symbol _nd;
         """
+        def is_pure_nd_power(a):
+            if a == _nd:
+                return True, S.One
+            if a.is_Pow and a.base == _nd:
+                return True, a.exp
+            return False, S.Zero
+
         def simp_mul(e):
-            if e.is_Mul:
+            if e.is_Mul and e.has(self.nd):
                 expr_sub = e.subs({self.nd: _nd})
+                if not expr_sub.is_Mul:
+                    return expr_sub.subs({_nd: self.nd})
                 args = []
                 for a in Mul.make_args(expr_sub):
                     if a.is_Add and a.has(_nd):
-                        args.extend(Mul.make_args(factor_terms(a)))
+                        args.extend(Mul.make_args(factor_terms(a, fraction=True)))
+                    elif a.is_Pow and a.base.is_Add and a.base.has(_nd):
+                        args.extend(arg** a.exp
+                                    for arg in Mul.make_args(factor_terms(a.base, fraction=True)))
                     else:
                         args.append(a)
-                n_part = []
+
+                nd_powers = []
+                add_factors = []
+                other_nd = []
                 other = []
                 for arg in args:
-                    if arg.has(_nd):
-                        n_part.append(arg)
+                    is_p, p_exp = is_pure_nd_power(arg)
+                    if is_p:
+                        nd_powers.append(p_exp)
+                    elif arg.is_Add and arg.has(_nd):
+                        add_factors.append(arg)
+                    elif arg.has(_nd):
+                        other_nd.append(arg)
                     else:
                         other.append(arg)
-                return Mul(*other, Mul(*n_part).subs({_nd: self.nd}))
+
+                total_nd_exp = Add(*nd_powers) if nd_powers else S.Zero
+                if total_nd_exp != S.Zero and add_factors:
+                    target_idx = 0
+                    if len(add_factors) > 1:
+                        for i, af in enumerate(add_factors):
+                            if total_nd_exp > 0 and any(t.has(_nd) and
+                                                        any(is_pure_nd_power(f)[0]
+                                                            and is_pure_nd_power(f)[1] < 0
+                                                            for f in Mul.make_args(t))
+                                                            for t in af.args):
+                                target_idx = i
+                                break
+                            elif total_nd_exp < 0 and any(t.has(_nd)
+                                                          and any(is_pure_nd_power(f)[0]
+                                                                  and is_pure_nd_power(f)[1] > 0
+                                                                  for f in Mul.make_args(t))
+                                                                  for t in af.args):
+                                target_idx = i
+                                break
+                    nd_factor = _nd**total_nd_exp
+                    first_add = add_factors[target_idx]
+                    new_terms = [Mul(term, nd_factor) for term in first_add.args]
+                    add_factors[target_idx] = Add(*new_terms)
+                    total_nd_exp = S.Zero
+
+                n_factors = list(other_nd)
+                if total_nd_exp != S.Zero:
+                    n_factors.append(_nd**total_nd_exp)
+                n_factors.extend(add_factors)
+
+                n_part = Mul(*n_factors).subs({_nd: self.nd})
+                return Mul(*other, n_part)
             return e
         return bottom_up(expr, simp_mul)
 
@@ -822,7 +874,7 @@ class WM_Processor:
         into single-mode boson operators (mode_expr) with n_m = 1,
         and evaluates into a unified PatternForm (PF).
 
-        :param obj: Expr, PF, dict, f_dict, or TwmWrapper.
+        :param obj: Expr, PF, dict, f_dict, or WmWrapper.
         :return: PF (PFTableProcessor)
         """
         if hasattr(obj, 'val'):
@@ -1128,9 +1180,9 @@ class WM_Processor:
             else:
                 ca_g_op = self.n_simp(ca_trunc)
 
-            expr_t = bottom_up(ca_g_op.subs({_g: self.gc * t_}).subs({self.nd: alpha_sq}), _ps)
+            expr_t = bottom_up(self.nd_simp(ca_g_op.subs({_g: self.gc * t_})).subs({self.nd: alpha_sq}), _ps)
             if return_both:
-                expr_g = bottom_up(ca_g_op.subs({_g: gain_sym, self.nd: alpha_sq}), _ps)
+                expr_g = bottom_up(self.nd_simp(ca_g_op).subs({_g: gain_sym, self.nd: alpha_sq}), _ps)
             else:
                 expr_g = S.Zero
             return (expr_t, expr_g)
@@ -1166,7 +1218,7 @@ class WM_Processor:
                     c_amp = conjugate(alpha) ** m
                     norm_tail = tail
 
-                rem_order = int(pf_order - b_ord - rest_ord)
+                rem_order = pf_order - b_ord - rest_ord
                 et, eg = _cohr_tail(norm_tail, rem_order)
                 if et != S.Zero:
                     key = (bs_rest, fs)
@@ -1205,7 +1257,7 @@ class WM_Processor:
             res_t = f_dict(b_left=fd.b_left)
             res_g = f_dict(b_left=fd.b_left)
             for b, d in fd.items():
-                b_ord = int(self.pe.leading_order(b)[1])
+                b_ord = self.pe.leading_order(b)[1]
                 dt, dg = _cohr_dict(d, fd_order - b_ord)
                 if isinstance(dt, dict) and dt:
                     res_t[b] = dt
@@ -1227,10 +1279,6 @@ class WM_Processor:
             rt, rg = _cohr_pf(pattern_form(sympify(obj), as_dict=None), order)
 
         return (rt, rg) if return_both else rt
-
-    def expand(self, pf, order):
-        """Standard expansion of an expression up to the given order."""
-        return self.pe.expand_pf(pf, order).n_apply(lambda t: t.subs({t_: _g/self.gc}))
 
 
 class TWMSolver(WM_Processor):
@@ -1273,7 +1321,7 @@ class TWMSolver(WM_Processor):
             self.sol = [({(None,): PF({((a_p,), ()): S.One})},
                          f_dict({a_s: {(None,): PF0}, Dagger(a_i): {(None,): PF0}}, b_left=False),
                          f_dict({Dagger(a_s): {(None,): PF0}, a_i: {(None,): PF0}}))]
-            self.gc = (nlc**2*self.nd-self.pm**2/4)**S.Half
+            self.gc = S.Half*(4*nlc**2*self.nd-self.pm**2)**S.Half
             self.base_assumptions = {a_p.name: S.NegativeOne, nlc: S.One}
         else:
             self.nd = BosonNum(a_i.name)
@@ -1282,7 +1330,7 @@ class TWMSolver(WM_Processor):
             self.sol = [(f_dict({a_p: {(None,): PF0}, a_s: {(None,): PF0}}),
                          f_dict({a_p: {(None,): PF0}, a_s: {(None,): PF0}}),
                          {(None,): PF({((a_i,), ()): S.One})})]
-            self.gc = (nlc**2*self.nd+self.pm**2/4)**S.Half
+            self.gc = S.Half*(4*nlc**2*self.nd+self.pm**2)**S.Half
             self.base_assumptions = {a_i.name: S.NegativeOne, nlc: S.One}
         self.pe = PE(self.base_assumptions)
         self.pe.register(MultimodeNum)
@@ -1422,7 +1470,7 @@ class FWMSolver(WM_Processor):
         self.a = (MultimodeCOP(a_s.name, a_i.name, annih1=0),
                   MultimodeCOP(a_s.name, a_i.name))
         self.hpm = -I*self.pm*S.Half + I*nlc*self.nd
-        self.gc = S.Half*(self.pm * (self.pm + 4*nlc*self.nd))**S.Half
+        self.gc = S.Half*(self.pm * (-self.pm + 4*nlc*self.nd))**S.Half
         self.base_assumptions = {a_p.name: -S.Half, nlc: S.One}
         self.pe = PE(self.base_assumptions)
         self.pe.register(MultimodeNum)
@@ -1493,12 +1541,12 @@ class FWMSolver(WM_Processor):
         the self-phase modulation of the strong field,
         and evaluates the expression accordingly.
 
-        :param obj: Expr, PF, dict, f_dict, or TwmWrapper.
+        :param obj: Expr, PF, dict, f_dict, or WmWrapper.
         """
         if hasattr(obj, 'val'):
             obj = obj.val
 
-        return d_apply(obj, lambda x: self.nd_simp(x.subs({self.nd: self.gc/nlc})))
+        return d_apply(obj, lambda x: self.nd_simp(x.subs({self.pm: 2*nlc*self.nd})))
 
 
 TWM = TWMSolver

@@ -1,12 +1,44 @@
 from __future__ import annotations
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
+
+
+PROCESS_LABELS: Dict[str, str] = {
+    'twm_dc': 'Down-conversion (TWM)',
+    'twm_fc': 'State Transfer (TWM)',
+    'fwm': 'Four-Wave Mixing (FWM)',
+}
+
+
+def normalize_process(process: Optional[str] = None, dc: Optional[bool] = None) -> str:
+    """
+    Normalize mixing process identifier to one of:
+    - 'twm_dc': Three-Wave Mixing Down-conversion
+    - 'twm_fc': Three-Wave Mixing Frequency Conversion / State Transfer
+    - 'fwm': Four-Wave Mixing
+    """
+    if isinstance(process, str):
+        p = process.strip().lower()
+        if p in ('twm_dc', 'dc', 'true'):
+            return 'twm_dc'
+        if p in ('twm_fc', 'fc', 'false'):
+            return 'twm_fc'
+        if p == 'fwm':
+            return 'fwm'
+    if dc is not None:
+        return 'twm_dc' if bool(dc) else 'twm_fc'
+    return 'twm_dc'
+
+
+def process_is_dc(process: str) -> bool:
+    """Returns True when pump mode a_0 is the strong driving field ('twm_dc' or 'fwm')."""
+    return normalize_process(process) != 'twm_fc'
 
 
 class LogicRelation(str, Enum):
     """
     Propositional logic relation between expression state (E) and calculation preset (P).
-    - XNOR: E == P (同或: absolute independence / mutually exclusive states, e.g. dc)
+    - XNOR: E == P (同或: absolute independence / mutually exclusive states, e.g. process)
     - IMPLIES: E -> P (蕴含 / 包含: expression state implies preset state, e.g. single_mode)
     """
     XNOR = "xnor"
@@ -23,8 +55,9 @@ class ConditionRule:
         key: str,
         name: str,
         relation: LogicRelation,
-        label_true: str,
-        label_false: str,
+        label_true: str = "",
+        label_false: str = "",
+        value_labels: Optional[Dict[Any, str]] = None,
         convert_method: Optional[str] = None,
         conflict_msg: str = "",
     ):
@@ -33,10 +66,11 @@ class ConditionRule:
         self.relation = relation
         self.label_true = label_true
         self.label_false = label_false
+        self.value_labels = value_labels or {}
         self.convert_method = convert_method
         self.conflict_msg = conflict_msg
 
-    def evaluate(self, preset_val: bool, expr_val: Optional[bool]) -> bool:
+    def evaluate(self, preset_val: Any, expr_val: Any) -> bool:
         """
         Evaluate propositional logic:
         - XNOR: expr_val == preset_val
@@ -44,25 +78,23 @@ class ConditionRule:
         """
         if expr_val is None:
             return True
-        p = bool(preset_val)
-        e = bool(expr_val)
         if self.relation == LogicRelation.XNOR:
-            return p == e
+            if isinstance(preset_val, str) or isinstance(expr_val, str):
+                return str(preset_val) == str(expr_val)
+            return bool(preset_val) == bool(expr_val)
         elif self.relation == LogicRelation.IMPLIES:
-            return (not e) or p
+            return (not bool(expr_val)) or bool(preset_val)
         return True
 
-    def needs_conversion(self, preset_val: bool, expr_val: Optional[bool]) -> bool:
+    def needs_conversion(self, preset_val: Any, expr_val: Any) -> bool:
         """
         Returns True if the expression condition is compatible with the preset
         via a projection/conversion step (e.g. Multimode expression used in Single Mode calculation).
         """
         if expr_val is None:
             return bool(preset_val) and bool(self.convert_method)
-        p = bool(preset_val)
-        e = bool(expr_val)
         if self.relation == LogicRelation.IMPLIES:
-            return (not e) and p
+            return (not bool(expr_val)) and bool(preset_val)
         return False
 
     def convert(self, obj: Any, solver: Any = None, dc: bool = True) -> Any:
@@ -76,13 +108,12 @@ class ConditionRule:
 
 
 CONDITION_REGISTRY: Dict[str, ConditionRule] = {
-    'dc': ConditionRule(
-        key='dc',
-        name='Mixing Process (dc)',
+    'process': ConditionRule(
+        key='process',
+        name='Mixing Process Type',
         relation=LogicRelation.XNOR,
-        label_true='Down-conversion (dc=True)',
-        label_false='State Transfer (dc=False)',
-        conflict_msg='Variables containing default operators have different algebraic definitions and subspaces across down-conversion and state transfer.'
+        value_labels=PROCESS_LABELS,
+        conflict_msg='Variables containing default operators have different algebraic definitions, driving-mode orders, and evolution laws across different wave-mixing processes.'
     ),
     'single_mode': ConditionRule(
         key='single_mode',
@@ -103,23 +134,29 @@ def register_condition_rule(rule: ConditionRule):
 
 def check_expression_compatibility(
     named_expressions: List[Dict[str, Any]],
-    presets: Dict[str, bool]
+    presets: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
     """
     Check all referenced named expressions against current calculation presets.
     Returns a list of conflict diagnostics.
     """
     conflicts = []
+    norm_presets = dict(presets)
+    if 'process' not in norm_presets and 'dc' in norm_presets:
+        norm_presets['process'] = normalize_process(None, norm_presets['dc'])
+
     for item in named_expressions:
         for key, rule in CONDITION_REGISTRY.items():
-            if key not in presets:
+            if key not in norm_presets:
                 continue
-            preset_val = presets[key]
+            preset_val = norm_presets[key]
             expr_val = item.get(key)
-            if key == 'dc':
+            if key == 'process':
                 has_default = item.get('has_default_ops', item.get('hasDefaultOps', True))
                 if not has_default:
                     continue
+                if expr_val is None and item.get('dc') is not None:
+                    expr_val = normalize_process(None, item.get('dc'))
             if not rule.evaluate(preset_val, expr_val):
                 conflicts.append({
                     'key': key,

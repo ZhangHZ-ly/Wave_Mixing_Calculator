@@ -8,11 +8,11 @@ function switchTab(tabId) {
   
   let targetId = tabId;
   if (tabId === 'tab-pattern') targetId = 'tab-pf';
-  if (tabId === 'tab-combined' || tabId === 'tab-combo') targetId = 'tab-twm';
+  if (tabId === 'tab-combined') targetId = 'tab-wm';
   const targetPanel = document.getElementById(targetId);
   if (targetPanel) targetPanel.classList.add('active');
   
-  const activeBtn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.getAttribute('onclick').includes(tabId));
+  const activeBtn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.getAttribute('onclick').includes(targetId));
   if (activeBtn) activeBtn.classList.add('active');
 }
 
@@ -485,7 +485,7 @@ window.addEventListener('click', (e) => {
 function showContextMenu(e, item, ws) {
   hideRowTooltip();
   activeWorkspace = ws || 'tab2';
-  const inputId = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4') ? 'twm-input' : 'pf-input';
+  const inputId = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4') ? 'wm-input' : 'pf-input';
   const editLabel = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4') ? 'Edit / View Details' : 'Edit';
   const menu = document.getElementById('contextMenu');
   menu.innerHTML = `

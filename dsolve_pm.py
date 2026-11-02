@@ -6,10 +6,15 @@ from sympy.functions.elementary.trigonometric import cos, sin
 from sympy.core.sympify import sympify
 from sympy.core.function import _mexpand, expand_mul
 from sympy.core.traversal import bottom_up
-from sympy.core.exprtools import gcd_terms
+from sympy.core.exprtools import gcd_terms, factor_terms
 from collections import defaultdict
 
 __all__ = ['p2s', 'dsolve_pm1', 'dsolve_pm2']
+
+def _safe_arg(arg):
+    if hasattr(arg, 'could_extract_minus_sign') and arg.could_extract_minus_sign() and (-arg).could_extract_minus_sign():
+        return factor_terms(arg, clear=True, fraction=True)
+    return arg
 
 def TR8h_selective(rv, x, first=True):
     """
@@ -50,19 +55,19 @@ def TR8h_selective(rv, x, first=True):
         for _ in range(n):
             a1 = s.pop()
             a2 = c.pop()
-            args.append((sinh(a1 + a2) + sinh(a1 - a2))/2)
+            args.append((sinh(_safe_arg(a1 + a2)) + sinh(_safe_arg(a1 - a2)))/2)
         while len(c) > 1:
             a1 = c.pop()
             a2 = c.pop()
-            args.append((cosh(a1 + a2) + cosh(a1 - a2))/2)
+            args.append((cosh(_safe_arg(a1 + a2)) + cosh(_safe_arg(a1 - a2)))/2)
         if c:
-            args.append(cosh(c.pop()))
+            args.append(cosh(_safe_arg(c.pop())))
         while len(s) > 1:
             a1 = s.pop()
             a2 = s.pop()
-            args.append((cosh(a1 + a2) - cosh(a1 - a2))/2)
+            args.append((cosh(_safe_arg(a1 + a2)) - cosh(_safe_arg(a1 - a2)))/2)
         if s:
-            args.append(sinh(s.pop()))
+            args.append(sinh(_safe_arg(s.pop())))
         return TR8h_selective(expand_mul(Mul(*args)), x)
 
     return bottom_up(rv, f)
@@ -112,19 +117,19 @@ def TR8_selective(rv, x, first=True):
         for _ in range(n):
             a1 = s.pop()
             a2 = c.pop()
-            args.append((sin(a1 + a2) + sin(a1 - a2))/2)
+            args.append((sin(_safe_arg(a1 + a2)) + sin(_safe_arg(a1 - a2)))/2)
         while len(c) > 1:
             a1 = c.pop()
             a2 = c.pop()
-            args.append((cos(a1 + a2) + cos(a1 - a2))/2)
+            args.append((cos(_safe_arg(a1 + a2)) + cos(_safe_arg(a1 - a2)))/2)
         if c:
-            args.append(cos(c.pop()))
+            args.append(cos(_safe_arg(c.pop())))
         while len(s) > 1:
             a1 = s.pop()
             a2 = s.pop()
-            args.append((-cos(a1 + a2) + cos(a1 - a2))/2)
+            args.append((-cos(_safe_arg(a1 + a2)) + cos(_safe_arg(a1 - a2)))/2)
         if s:
-            args.append(sin(s.pop()))
+            args.append(sin(_safe_arg(s.pop())))
         return TR8_selective(expand_mul(Mul(*args)), x)
 
     return bottom_up(rv, f)

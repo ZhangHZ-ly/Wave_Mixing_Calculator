@@ -49,17 +49,17 @@ function renderStaticMath(root = document.body) {
 // Initialization
 document.addEventListener('DOMContentLoaded', () => {
   renderTable();
-  const isMismatch = getTwmMismatch();
+  const isMismatch = getWmMismatch();
   if (!isMismatch) {
-    const pmIdx = twmTableItems.findIndex(x => x.builtinKey === 'pm' || (x.type === 'symbol' && x.name === 'pm'));
+    const pmIdx = wmTableItems.findIndex(x => x.builtinKey === 'pm' || (x.type === 'symbol' && x.name === 'pm'));
     if (pmIdx !== -1) {
-      twmTableItems.splice(pmIdx, 1);
-      saveTwmTableItemsToStorage();
+      wmTableItems.splice(pmIdx, 1);
+      saveWmTableItemsToStorage();
     }
   }
-  renderTwmTable();
+  renderWmTable();
   onModeTypeChange();
-  onTwmPresetChange();
+  onWmProcessChange();
   updateAssertLabels();
   renderStaticMath();
 
@@ -79,16 +79,16 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  const cachedTwmInput = localStorage.getItem('qc_tab3_source_input');
-  const twmInputEl = document.getElementById('twm-input');
-  if (cachedTwmInput && twmInputEl && !twmInputEl.value) {
-    twmInputEl.value = cachedTwmInput;
+  const cachedWmInput = localStorage.getItem('qc_tab3_source_input');
+  const wmInputEl = document.getElementById('wm-input');
+  if (cachedWmInput && wmInputEl && !wmInputEl.value) {
+    wmInputEl.value = cachedWmInput;
   }
-  if (twmInputEl) {
-    twmInputEl.addEventListener('input', () => {
-      const v = twmInputEl.value.trim();
+  if (wmInputEl) {
+    wmInputEl.addEventListener('input', () => {
+      const v = wmInputEl.value.trim();
       if (v) {
-        currentTwmSourceInput = v;
+        currentWmSourceInput = v;
         localStorage.setItem('qc_tab3_source_input', v);
       }
     });
@@ -98,7 +98,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (symOrderInput) {
     symOrderInput.addEventListener('input', function() {
       if (activeEditItem && !activeEditItem.builtinKey && !['nlc', 'pm'].includes(activeEditItem.name)) {
-        const val = parseInt(this.value);
+        const val = parseFloat(this.value);
         activeEditItem.order = isNaN(val) ? 0 : val;
         const detailsBody = document.getElementById('sym-details-body');
         if (detailsBody) {
@@ -112,7 +112,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (opOrderInput) {
     opOrderInput.addEventListener('input', function() {
       if (activeEditItem && activeEditItem.type === 'operator' && activeEditItem.kind === 'boson') {
-        const val = parseInt(this.value);
+        const val = parseFloat(this.value);
         activeEditItem.order = isNaN(val) ? 0 : val;
         const detailsBody = document.getElementById('op-details-body');
         if (detailsBody) {
@@ -122,4 +122,3 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 });
-

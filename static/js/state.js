@@ -10,19 +10,33 @@ let currentPfResidueLatex = '';
 let currentPfResidueExpr = '';
 // Separately cached source formula text for Page 2 and Page 3
 let currentPfSourceInput = localStorage.getItem('qc_tab2_source_input') || '';
-let currentTwmLatex = '';
-let currentTwmExpr = '';
-let currentTwmSourceInput = localStorage.getItem('qc_tab3_source_input') || '';
+let currentWmLatex = '';
+let currentWmExpr = '';
+let currentWmSourceInput = localStorage.getItem('qc_tab3_source_input') || '';
 
 // Cached multi-representation results (time and parametric gain)
-let cachedTwmResult = null;
+let cachedWmResult = null;
 
-// Cached TWMSolver.sol lengths for lazy accuracy update in Tab 3 table: { "true_false": 1, ... }
-let cachedSolverSolLens = JSON.parse(localStorage.getItem('qc_twm_solver_sol_lens') || localStorage.getItem('qc_twm_solver_sol_lens') || '{}');
+// Cached WM solver lengths for lazy accuracy update in Tab 3 table: { "twm_dc_false": 1, ... }
+let cachedSolverSolLens = JSON.parse(
+  localStorage.getItem('qc_wm_solver_sol_lens') || '{}'
+);
 
 // Active workspace for shared modals ('tab2' or 'tab3')
 let activeWorkspace = 'tab2';
 let activeEditItem = null;
+
+const PROCESS_LABELS = {
+  twm_dc: 'Down-conversion',
+  twm_fc: 'State Transfer',
+  fwm: 'Four-Wave Mixing'
+};
+
+function normalizeWmProcess(proc, dc) {
+  if (proc === 'twm_dc' || proc === 'twm_fc' || proc === 'fwm') return proc;
+  if (typeof dc === 'boolean') return dc ? 'twm_dc' : 'twm_fc';
+  return 'twm_dc';
+}
 
 // Default interactive table entries for Tab 2
 const DEFAULT_TABLE_ITEMS = [
@@ -32,7 +46,7 @@ const DEFAULT_TABLE_ITEMS = [
 ];
 
 // Default interactive table entries for Tab 3 (from parametric.py)
-const DEFAULT_TWM_TABLE_ITEMS = [
+const DEFAULT_WM_TABLE_ITEMS = [
   { id: 'c1', type: 'symbol', builtinKey: 'nlc', name: 'nlc', displayName: '\\chi', isReal: true, isInteger: false, isNonnegative: true, isPositive: false, notes: 'Nonlinear coupling coefficient' },
   { id: 'c2', type: 'symbol', builtinKey: 'pm', name: 'pm', displayName: '\\Delta k', isReal: true, isInteger: false, isNonnegative: false, isPositive: false, notes: 'Phase mismatch' },
   { id: 'c3', type: 'evolved_op', modeIndex: 0, name: 'a_p', displayName: 'a_0', notes: 'Evolved pump operator at time t' },
@@ -62,38 +76,49 @@ if (!tableItems || !tableItems.length) {
   if (tableUpdated) saveTableItemsToStorage();
 }
 
-let twmTableItems = JSON.parse(localStorage.getItem('qc_twm_table_items_en') || localStorage.getItem('qc_twm_table_items_en') || localStorage.getItem('my_twm_items_v1') || localStorage.getItem('my_combo_items_v1') || 'null');
-if (!twmTableItems || !twmTableItems.length) {
-  twmTableItems = JSON.parse(JSON.stringify(DEFAULT_TWM_TABLE_ITEMS));
-  saveTwmTableItemsToStorage();
+let wmTableItems = JSON.parse(
+  localStorage.getItem('qc_wm_table_items_en') || 'null'
+);
+if (!wmTableItems || !wmTableItems.length) {
+  wmTableItems = JSON.parse(JSON.stringify(DEFAULT_WM_TABLE_ITEMS));
+  saveWmTableItemsToStorage();
 } else {
-  let twmUpdated = false;
-  twmTableItems.forEach(item => {
-    if (item.type === 'named_expr' && !item.sourceInput && currentTwmSourceInput) {
-      item.sourceInput = currentTwmSourceInput;
-      twmUpdated = true;
+  let wmUpdated = false;
+  wmTableItems.forEach(item => {
+    if (item.type === 'named_expr') {
+      if (!item.sourceInput && currentWmSourceInput) {
+        item.sourceInput = currentWmSourceInput;
+        wmUpdated = true;
+      }
+      if (!item.process && typeof item.dc === 'boolean') {
+        item.process = item.dc ? 'twm_dc' : 'twm_fc';
+        wmUpdated = true;
+      }
     }
   });
-  if (twmUpdated) saveTwmTableItemsToStorage();
+  if (wmUpdated) saveWmTableItemsToStorage();
 }
 
 // Propositional logic condition rules between calculation presets (P) and expression states (E):
-// - 'xnor': E == P (同或: absolute independence / mutually exclusive states, e.g. dc)
+// - 'xnor': E == P (同或: absolute independence / mutually exclusive states, e.g. process)
 // - 'implies': E -> P (蕴含 / 包含关系: expression state implies preset state, e.g. single_mode)
 const CONDITION_RULES = {
-  dc: {
-    key: 'dc',
-    name: 'Mixing Process (dc)',
+  process: {
+    key: 'process',
+    name: 'Mixing Process',
     relation: 'xnor',
-    labelTrue: 'Down-conversion',
-    labelFalse: 'State Transfer',
-    conflictBadge: 'dc conflict',
-    conflictTitle: 'Process Mode (dc) Inconsistency Warning',
-    conflictMsg: 'Variables containing default operators have different algebraic definitions and subspaces across down-conversion and state transfer.',
+    conflictBadge: 'process conflict',
+    conflictTitle: 'Mixing Process Inconsistency Warning',
+    conflictMsg: 'Variables containing default operators have different algebraic definitions, Hamiltonians, and subspaces across down-conversion, state transfer, and four-wave mixing.',
     checkApplies: (item, allItems) => {
       return (typeof item.hasDefaultOps === 'boolean')
         ? item.hasDefaultOps
         : exprContainsDefaultOperators(item.latex_t || item.latex_g || item.latex || '', allItems);
+    },
+    getExprVal: (item) => {
+      if (item.process) return item.process;
+      if (typeof item.dc === 'boolean') return item.dc ? 'twm_dc' : 'twm_fc';
+      return null;
     }
   },
   single_mode: {
@@ -107,27 +132,29 @@ const CONDITION_RULES = {
     conflictMsg: 'Expressions created under Single Mode cannot be used in Multimode calculations because multimode summation and mode degeneracy details were collapsed.',
     checkApplies: (item) => {
       return item.single_mode === true;
-    }
+    },
+    getExprVal: (item) => item.single_mode
   }
 };
 
 function evaluateConditionCompatibility(rule, presetVal, exprVal) {
   if (exprVal === null || exprVal === undefined) return true;
-  const p = Boolean(presetVal);
-  const e = Boolean(exprVal);
   if (rule.relation === 'xnor') {
-    return p === e;
+    if (typeof presetVal === 'string' || typeof exprVal === 'string') {
+      return String(presetVal) === String(exprVal);
+    }
+    return Boolean(presetVal) === Boolean(exprVal);
   } else if (rule.relation === 'implies') {
     // Propositional logic: E -> P (equivalent to !E || P)
-    return (!e) || p;
+    return (!Boolean(exprVal)) || Boolean(presetVal);
   }
   return true;
 }
 
 // Unified definition extractor for backend evaluation endpoints
 function extractWorkspaceDefinitions(ws) {
-  const isTwm = (ws === 'tab3' || ws === 'tab4');
-  const items = isTwm ? twmTableItems : tableItems;
+  const isWm = (ws === 'tab3' || ws === 'tab4');
+  const items = isWm ? wmTableItems : tableItems;
 
   const symbols = items.filter(x => x.type === 'symbol').map(s => ({
     name: s.name,
@@ -160,52 +187,61 @@ function extractWorkspaceDefinitions(ws) {
     }
   });
 
-  const mmOperators = isTwm ? items.filter(x => x.type === 'mm_op').map(mm => ({
+  const mmOperators = isWm ? items.filter(x => x.type === 'mm_op').map(mm => ({
     name: mm.name,
     mm_kind: mm.mmKind
   })) : [];
 
-  const namedExprs = items.filter(x => x.type === 'named_expr').map(ne => ({
-    name: ne.name,
-    expr_str: ne.exprStr || ne.exprStr_t || '',
-    expr_str_t: ne.exprStr_t || ne.exprStr || '',
-    expr_str_g: ne.exprStr_g || ne.exprStr || '',
-    source_input: ne.sourceInput || '',
-    latex: ne.latex || null,
-    latex_t: ne.latex_t || null,
-    latex_g: ne.latex_g || null,
-    order: ne.order,
-    leading_order: typeof ne.leadingOrder === 'number' ? ne.leadingOrder : (ne.leading_order ?? 0),
-    dc: typeof ne.dc === 'boolean' ? ne.dc : null,
-    single_mode: typeof ne.single_mode === 'boolean' ? ne.single_mode : null
-  }));
+  const namedExprs = items.filter(x => x.type === 'named_expr').map(ne => {
+    const neProc = ne.process || (typeof ne.dc === 'boolean' ? (ne.dc ? 'twm_dc' : 'twm_fc') : null);
+    const neDc = typeof ne.dc === 'boolean' ? ne.dc : (neProc ? (neProc !== 'twm_fc') : null);
+    return {
+      name: ne.name,
+      expr_str: ne.exprStr || ne.exprStr_t || '',
+      expr_str_t: ne.exprStr_t || ne.exprStr || '',
+      expr_str_g: ne.exprStr_g || ne.exprStr || '',
+      source_input: ne.sourceInput || '',
+      latex: ne.latex || null,
+      latex_t: ne.latex_t || null,
+      latex_g: ne.latex_g || null,
+      order: ne.order,
+      leading_order: typeof ne.leadingOrder === 'number' ? ne.leadingOrder : (ne.leading_order ?? 0),
+      dc: neDc,
+      process: neProc,
+      single_mode: typeof ne.single_mode === 'boolean' ? ne.single_mode : null
+    };
+  });
 
   return { symbols, operators, mmOperators, namedExprs };
 }
 
-function getTwmMismatch() {
-  const el = document.getElementById('twm-mismatch');
+function getWmProcess() {
+  const el = document.getElementById('wm-process');
+  return el ? normalizeWmProcess(el.value, true) : 'twm_dc';
+}
+
+function getWmMismatch() {
+  const el = document.getElementById('wm-mismatch');
   return el ? (el.value === 'true') : false;
 }
 
-function getTwmDc() {
-  const el = document.getElementById('twm-dc');
-  return el ? (el.value === 'true') : true;
+function getWmDc() {
+  return getWmProcess() !== 'twm_fc';
 }
 
-function getTwmSingleMode() {
-  const el = document.getElementById('twm-single-mode');
+function getWmSingleMode() {
+  const el = document.getElementById('wm-single-mode');
   return el ? el.checked : false;
 }
 
 function getWorkspaceArray(ws) {
-  return (ws === 'tab3' || ws === 'tab4') ? twmTableItems : tableItems;
+  return (ws === 'tab3' || ws === 'tab4') ? wmTableItems : tableItems;
 }
 
 function saveWorkspaceToStorage(ws) {
   if (ws === 'tab3' || ws === 'tab4') {
-    saveTwmTableItemsToStorage();
-    renderTwmTable();
+    saveWmTableItemsToStorage();
+    renderWmTable();
   } else {
     saveTableItemsToStorage();
     renderTable();
@@ -215,14 +251,14 @@ function saveWorkspaceToStorage(ws) {
 function resetTableDefaults(ws) {
   if (ws === 'tab3' || ws === 'tab4') {
     if (!confirm('Reset Tab 3 table to default parametric symbols and operators?')) return;
-    const isMismatch = getTwmMismatch();
-    let defaults = JSON.parse(JSON.stringify(DEFAULT_TWM_TABLE_ITEMS));
+    const isMismatch = getWmMismatch();
+    let defaults = JSON.parse(JSON.stringify(DEFAULT_WM_TABLE_ITEMS));
     if (!isMismatch) {
       defaults = defaults.filter(x => x.builtinKey !== 'pm' && x.name !== 'pm');
     }
-    twmTableItems = defaults;
-    saveTwmTableItemsToStorage();
-    renderTwmTable();
+    wmTableItems = defaults;
+    saveWmTableItemsToStorage();
+    renderWmTable();
     showToast('Tab 3 table reset to defaults.');
   } else {
     if (!confirm('Reset Tab 2 table to default symbols and operators?')) return;
@@ -240,7 +276,7 @@ let currentConflictBaseOpName = '';
 function getSuggestedUniqueName(baseName) {
   let candidate = `${baseName}_saved`;
   let counter = 1;
-  while (twmTableItems.some(x => x.name === candidate)) {
+  while (wmTableItems.some(x => x.name === candidate)) {
     candidate = `${baseName}_saved_${counter}`;
     counter++;
   }
@@ -327,7 +363,7 @@ function handleRestoreRenameClick() {
     return;
   }
 
-  if (twmTableItems.some(x => x.id !== currentConflictOccupyingItem.id && x.name === newName)) {
+  if (wmTableItems.some(x => x.id !== currentConflictOccupyingItem.id && x.name === newName)) {
     errDiv.textContent = `Identifier '${newName}' already exists in the table. Please choose a different name.`;
     errDiv.style.display = 'block';
     return;
@@ -347,23 +383,23 @@ function resolveRestoreConflict(action, newName) {
   }
 }
 
-function insertPmIntoTwmTable(defaultPm) {
-  if (twmTableItems.some(x => x.builtinKey === 'pm' || x.name === defaultPm.name)) return;
+function insertPmIntoWmTable(defaultPm) {
+  if (wmTableItems.some(x => x.builtinKey === 'pm' || x.name === defaultPm.name)) return;
   const itemToInsert = JSON.parse(JSON.stringify(defaultPm));
-  const nlcIdx = twmTableItems.findIndex(x => x.builtinKey === 'nlc' || x.name === 'nlc');
+  const nlcIdx = wmTableItems.findIndex(x => x.builtinKey === 'nlc' || x.name === 'nlc');
   if (nlcIdx !== -1) {
-    twmTableItems.splice(nlcIdx + 1, 0, itemToInsert);
+    wmTableItems.splice(nlcIdx + 1, 0, itemToInsert);
   } else {
-    twmTableItems.unshift(itemToInsert);
+    wmTableItems.unshift(itemToInsert);
   }
 }
 
-async function onTwmMismatchChange() {
-  const mismatchSelect = document.getElementById('twm-mismatch');
+async function onWmMismatchChange() {
+  const mismatchSelect = document.getElementById('wm-mismatch');
   const isMismatch = mismatchSelect ? (mismatchSelect.value === 'true') : false;
 
   if (isMismatch) {
-    const defaultPm = DEFAULT_TWM_TABLE_ITEMS.find(x => x.builtinKey === 'pm') || {
+    const defaultPm = DEFAULT_WM_TABLE_ITEMS.find(x => x.builtinKey === 'pm') || {
       id: 'c2',
       type: 'symbol',
       builtinKey: 'pm',
@@ -376,55 +412,55 @@ async function onTwmMismatchChange() {
       notes: 'Phase mismatch parameter (Δk)'
     };
 
-    const occupyingIndex = twmTableItems.findIndex(x => x.name === defaultPm.name);
+    const occupyingIndex = wmTableItems.findIndex(x => x.name === defaultPm.name);
     if (occupyingIndex !== -1) {
-      const occupyingItem = twmTableItems[occupyingIndex];
+      const occupyingItem = wmTableItems[occupyingIndex];
       if (occupyingItem.builtinKey === 'pm' || (occupyingItem.type === 'symbol' && occupyingItem.name === 'pm' && occupyingItem.displayName === '\\Delta k')) {
         occupyingItem.builtinKey = 'pm';
       } else {
         const resolution = await promptRestoreConflict(defaultPm, occupyingItem, 'parameter');
         if (resolution.action === 'cancel') {
           mismatchSelect.value = 'false';
-          onTwmPresetChange();
+          onWmPresetChange();
           return;
         } else if (resolution.action === 'delete') {
-          const delIdx = twmTableItems.findIndex(x => x.id === occupyingItem.id);
+          const delIdx = wmTableItems.findIndex(x => x.id === occupyingItem.id);
           if (delIdx !== -1) {
-            twmTableItems.splice(delIdx, 1);
+            wmTableItems.splice(delIdx, 1);
           }
-          insertPmIntoTwmTable(defaultPm);
+          insertPmIntoWmTable(defaultPm);
         } else if (resolution.action === 'rename') {
           occupyingItem.name = resolution.newName;
-          insertPmIntoTwmTable(defaultPm);
+          insertPmIntoWmTable(defaultPm);
         }
       }
     } else {
-      insertPmIntoTwmTable(defaultPm);
+      insertPmIntoWmTable(defaultPm);
     }
-    showToast("Phase Unmatched: 'pm' (Δk) added to variables table.");
+    showToast("Phase Mismatched: 'pm' (Δk) added to variables table.");
   } else {
-    const pmIdx = twmTableItems.findIndex(x => x.builtinKey === 'pm' || (x.type === 'symbol' && x.name === 'pm'));
+    const pmIdx = wmTableItems.findIndex(x => x.builtinKey === 'pm' || (x.type === 'symbol' && x.name === 'pm'));
     if (pmIdx !== -1) {
-      twmTableItems.splice(pmIdx, 1);
+      wmTableItems.splice(pmIdx, 1);
       showToast("Phase Matched: 'pm' removed from variables table.");
     }
   }
 
-  saveTwmTableItemsToStorage();
-  onTwmPresetChange();
+  saveWmTableItemsToStorage();
+  onWmPresetChange();
 }
 
 async function restoreBaseOperators(ws) {
   activeWorkspace = ws || 'tab3';
-  const baseEvolvedOps = DEFAULT_TWM_TABLE_ITEMS.filter(x => x.type === 'evolved_op');
+  const baseEvolvedOps = DEFAULT_WM_TABLE_ITEMS.filter(x => x.type === 'evolved_op');
   let restoredCount = 0;
 
   for (const baseOp of baseEvolvedOps) {
-    // Check if an item in twmTableItems currently occupies baseOp.name
-    const occupyingIndex = twmTableItems.findIndex(x => x.name === baseOp.name);
+    // Check if an item in wmTableItems currently occupies baseOp.name
+    const occupyingIndex = wmTableItems.findIndex(x => x.name === baseOp.name);
 
     if (occupyingIndex !== -1) {
-      const occupyingItem = twmTableItems[occupyingIndex];
+      const occupyingItem = wmTableItems[occupyingIndex];
       // If it is already the evolved_op for this modeIndex, no conflict
       if (occupyingItem.type === 'evolved_op' && occupyingItem.modeIndex === baseOp.modeIndex) {
         if (occupyingItem.displayName !== baseOp.displayName) {
@@ -440,9 +476,9 @@ async function restoreBaseOperators(ws) {
         // User cancelled restoring this base operator, skip it
         continue;
       } else if (resolution.action === 'delete') {
-        const delIdx = twmTableItems.findIndex(x => x.id === occupyingItem.id);
+        const delIdx = wmTableItems.findIndex(x => x.id === occupyingItem.id);
         if (delIdx !== -1) {
-          twmTableItems.splice(delIdx, 1);
+          wmTableItems.splice(delIdx, 1);
         }
       } else if (resolution.action === 'rename') {
         occupyingItem.name = resolution.newName;
@@ -451,17 +487,17 @@ async function restoreBaseOperators(ws) {
 
     // Now baseOp.name is free.
     // Check if the evolved operator for this modeIndex exists under another name:
-    const opIdx = twmTableItems.findIndex(
+    const opIdx = wmTableItems.findIndex(
       x => x.type === 'evolved_op' && x.modeIndex === baseOp.modeIndex
     );
 
     if (opIdx === -1) {
       // Operator was previously deleted, recreate it from baseOp
-      twmTableItems.push(JSON.parse(JSON.stringify(baseOp)));
+      wmTableItems.push(JSON.parse(JSON.stringify(baseOp)));
       restoredCount++;
     } else {
       // Operator was previously renamed or modified, restore its canonical name and displayName
-      const cur = twmTableItems[opIdx];
+      const cur = wmTableItems[opIdx];
       if (cur.name !== baseOp.name || cur.displayName !== baseOp.displayName) {
         cur.name = baseOp.name;
         cur.displayName = baseOp.displayName;
@@ -470,8 +506,8 @@ async function restoreBaseOperators(ws) {
     }
   }
 
-  saveTwmTableItemsToStorage();
-  renderTwmTable();
+  saveWmTableItemsToStorage();
+  renderWmTable();
   if (restoredCount > 0) {
     showToast(`Base operator solutions restored (${restoredCount} updated/recovered).`);
   } else {
@@ -531,15 +567,7 @@ function saveTableItemsToStorage() {
   localStorage.setItem('qc_table_items_en', JSON.stringify(tableItems));
 }
 
-function saveTwmTableItemsToStorage() {
-  localStorage.setItem('qc_twm_table_items_en', JSON.stringify(twmTableItems));
+function saveWmTableItemsToStorage() {
+  localStorage.setItem('qc_wm_table_items_en', JSON.stringify(wmTableItems));
 }
 
-
-
-// Backwards compatibility aliases
-window.getComboMismatch = getTwmMismatch;
-window.getComboDc = getTwmDc;
-window.getComboSingleMode = getTwmSingleMode;
-window.onComboMismatchChange = onTwmMismatchChange;
-window.saveComboTableItemsToStorage = saveTwmTableItemsToStorage;
