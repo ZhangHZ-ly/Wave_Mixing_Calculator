@@ -308,14 +308,14 @@
     justify-content: flex-start;
   }
   .output-content .katex-display,
-  .residue-content .katex-display,
+  .remainder-content .katex-display,
   .modal-preview .katex-display {
     margin: 0;
     text-align: left;
     width: auto;
   }
   .output-content .katex-display > .katex,
-  .residue-content .katex-display > .katex,
+  .remainder-content .katex-display > .katex,
   .modal-preview .katex-display > .katex {
     text-align: left;
   }
@@ -341,15 +341,15 @@
     gap: 0.5rem;
   }
 
-  /* Residue Box */
-  .residue-box {
+  /* Remainder Box */
+  .remainder-box {
     margin-top: 1rem;
     border: 1px dashed #cbd5e1;
     border-radius: 6px;
     background: #fffbeb;
     padding: 1rem;
   }
-  .residue-header {
+  .remainder-header {
     font-size: 0.85rem;
     font-weight: 600;
     color: #b45309;
@@ -358,7 +358,7 @@
     justify-content: space-between;
     align-items: center;
   }
-  .residue-content {
+  .remainder-content {
     font-size: 1.15rem;
     overflow-x: auto;
     overflow-y: hidden;

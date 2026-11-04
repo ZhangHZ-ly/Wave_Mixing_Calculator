@@ -15,7 +15,8 @@ from calculator import (
     eval_combination_assertions,
     save_latest_pf_variable,
     save_latest_wm_variable,
-    ALL_SOLVERS,
+    TWM_SOLVERS,
+    FWM_SOLVER,
     normalize_process,
     process_is_dc,
 )
@@ -88,7 +89,7 @@ class PatternFormRequest(BaseModel):
     symbols: List[SymbolDef] = []
     operators: List[OperatorDef] = []
     named_expressions: List[NamedExprDef] = []
-    use_res: bool = False
+    use_rem: bool = False
 
 
 class SolveRequest(BaseModel):
@@ -159,18 +160,19 @@ def api_single_mode(req: SingleModeRequest):
 @app.post("/api/pattern_form")
 def api_pattern_form(req: PatternFormRequest):
     try:
-        latex_str, expr_str, res_latex, res_str = eval_pattern_form(
+        use_rem = req.use_rem
+        latex_str, expr_str, rem_latex, rem_str = eval_pattern_form(
             req.text,
             [s.model_dump() for s in req.symbols],
             [op.model_dump() for op in req.operators],
             [ne.model_dump() for ne in req.named_expressions],
-            use_res=req.use_res
+            use_rem=use_rem
         )
         return {
             "latex": latex_str,
             "expr_str": expr_str,
-            "residue_latex": res_latex,
-            "residue_str": res_str,
+            "remainder_latex": rem_latex,
+            "remainder_str": rem_str,
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -294,7 +296,7 @@ def api_save_variable(req: SaveVarRequest):
 @app.post("/api/combination/reset")
 def api_reset_combination():
     try:
-        for s in ALL_SOLVERS:
+        for s in (*TWM_SOLVERS[0], *TWM_SOLVERS[1], FWM_SOLVER):
             if hasattr(s, 'reset_pe'):
                 s.reset_pe()
             elif hasattr(s, 'update_pe'):

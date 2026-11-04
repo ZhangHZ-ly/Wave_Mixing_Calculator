@@ -3,8 +3,8 @@ let currentSingleModeLatex = '';
 let currentSingleModeExprStr = '';
 let currentPfLatex = '';
 let currentPfExpr = '';
-let currentPfResidueLatex = '';
-let currentPfResidueExpr = '';
+let currentPfRemainderLatex = '';
+let currentPfRemainderExpr = '';
 // Separately cached source formula text for Page 2 and Page 3
 let currentPfSourceInput = localStorage.getItem('qc_tab2_source_input') || '';
 let currentTwmLatex = '';
@@ -1870,7 +1870,7 @@ function renderModalFormulaWithTabs(containerEl, tabGroupEl, tabTBtn, tabGBtn, l
         resBlock.style.borderTop = '1px dashed #cbd5e1';
         resBlock.style.marginTop = '0.45rem';
         resBlock.style.paddingTop = '0.45rem';
-        resBlock.innerHTML = '<div style="font-size: 0.75rem; font-weight: 600; color: #475569; margin-bottom: 0.2rem;">Residue:</div>';
+        resBlock.innerHTML = '<div style="font-size: 0.75rem; font-weight: 600; color: #475569; margin-bottom: 0.2rem;">Remainder:</div>';
         const mathRes = document.createElement('div');
         katex.render(resLatex, mathRes, { displayMode: true, throwOnError: false });
         resBlock.appendChild(mathRes);
@@ -1961,7 +1961,7 @@ function openSaveAnswerModal(ws) {
       null,
       null,
       currentPfLatex,
-      currentPfResidueLatex || null,
+      currentPfRemainderLatex || null,
       't'
     );
     document.getElementById('saveAnswerModal').classList.add('active');
@@ -2127,7 +2127,7 @@ async function saveAnswerExpression() {
       sourceInput: currentInputText || (arr[dupIndex] ? arr[dupIndex].sourceInput : '') || '',
       exprStr: currentPfExpr || (arr[dupIndex] ? arr[dupIndex].exprStr : '') || '',
       latex: currentPfLatex || null,
-      residue_latex: currentPfResidueLatex || null,
+      remainder_latex: currentPfRemainderLatex || null,
       notes: notes
     };
     saveWorkspaceToStorage(activeWorkspace);
@@ -2144,7 +2144,7 @@ async function saveAnswerExpression() {
     sourceInput: currentInputText,
     exprStr: currentPfExpr || '',
     latex: currentPfLatex || null,
-    residue_latex: currentPfResidueLatex || null,
+    remainder_latex: currentPfRemainderLatex || null,
     notes: notes
   });
 
@@ -2205,7 +2205,7 @@ function openRenameModal(itemId, ws) {
           null,
           null,
           item.latex || '',
-          item.residue_latex || null,
+          item.remainder_latex || null,
           't'
         );
       }
@@ -2299,12 +2299,12 @@ function deleteItem(id, ws) {
 // ----------------------------------------------------
 // TAB 2: Run Pattern Form
 // ----------------------------------------------------
-async function runPf(useRes) {
+async function runPf(useRem) {
   const input = document.getElementById('pf-input').value.trim();
   const output = document.getElementById('pf-output');
   const modeTag = document.getElementById('pf-mode-tag');
-  const residueContainer = document.getElementById('pf-residue-container');
-  const residueOutput = document.getElementById('pf-residue-output');
+  const remainderContainer = document.getElementById('pf-remainder-container');
+  const remainderOutput = document.getElementById('pf-remainder-output');
   
   output.classList.remove('error');
   if (!input) {
@@ -2317,8 +2317,8 @@ async function runPf(useRes) {
   localStorage.setItem('qc_tab2_source_input', input);
 
   output.innerHTML = '<span style="color: var(--text-secondary);">Calculating PF...</span>';
-  modeTag.className = useRes ? 'badge badge-warning' : 'badge badge-gray';
-  modeTag.textContent = useRes ? '_res method (with residue)' : '_ind method';
+  modeTag.className = useRem ? 'badge badge-warning' : 'badge badge-gray';
+  modeTag.textContent = useRem ? '_rem method (with remainder)' : '_ind method';
 
   const { symbols, operators, namedExprs } = extractWorkspaceDefinitions('tab2');
 
@@ -2331,7 +2331,7 @@ async function runPf(useRes) {
         symbols: symbols,
         operators: operators,
         named_expressions: namedExprs,
-        use_res: useRes
+        use_rem: useRem
       })
     });
     const data = await res.json();
@@ -2343,21 +2343,23 @@ async function runPf(useRes) {
     output.innerHTML = '';
     katex.render(data.latex, output, { displayMode: true, throwOnError: false });
 
-    if (useRes && data.residue_latex !== null && data.residue_latex !== undefined) {
-      currentPfResidueLatex = data.residue_latex;
-      currentPfResidueExpr = data.residue_str || '';
-      residueContainer.style.display = 'block';
-      residueOutput.innerHTML = '';
-      katex.render(data.residue_latex, residueOutput, { displayMode: true, throwOnError: false });
+    const remLatex = data.remainder_latex;
+    const remStr = data.remainder_str;
+    if (useRem && remLatex !== null && remLatex !== undefined) {
+      currentPfRemainderLatex = remLatex;
+      currentPfRemainderExpr = remStr || '';
+      remainderContainer.style.display = 'block';
+      remainderOutput.innerHTML = '';
+      katex.render(remLatex, remainderOutput, { displayMode: true, throwOnError: false });
     } else {
-      residueContainer.style.display = 'none';
-      currentPfResidueLatex = '';
-      currentPfResidueExpr = '';
+      remainderContainer.style.display = 'none';
+      currentPfRemainderLatex = '';
+      currentPfRemainderExpr = '';
     }
   } catch (err) {
     output.classList.add('error');
     output.textContent = err.message;
-    residueContainer.style.display = 'none';
+    remainderContainer.style.display = 'none';
   }
 }
 

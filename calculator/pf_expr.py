@@ -5,6 +5,7 @@ from op_patterns import BosonNum, BosonPat, FermionPat
 from perturb_eval import pattern_form, PFTableProcessor, Pat
 from sympy.core.function import diff
 from sympy.core.numbers import I, Integer, pi
+from sympy.core.power import Pow
 from sympy.core.singleton import S
 from sympy.core.symbol import Symbol
 from sympy.core.sympify import sympify
@@ -23,65 +24,68 @@ from .common import TRANSFORMS, is_valid_variable_name, expr_to_code_str
 class PFWrapper:
     """
     Wrapper around PFTableProcessor to support operator algebra expressions
-    via PFTableProcessor's add, mul_ind/mul_res, and power_ind/power_res methods.
+    via PFTableProcessor's add, mul_ind/mul_rem, and power_ind/power_rem methods.
     """
-    def __init__(self, pf: PFTableProcessor, res=S.Zero, use_res: bool = False):
+    def __init__(self, pf: PFTableProcessor, rem=None, use_rem: bool = False):
+        if rem is None:
+            rem = S.Zero
+
         self.pf = pf
-        self.res = res
-        self.use_res = use_res
+        self.rem = rem
+        self.use_rem = use_rem
         self.name: str = ""
         self.latex_str: Optional[str] = None
-        self.residue_latex: Optional[str] = None
+        self.remainder_latex: Optional[str] = None
         self.notes: str = ""
 
     @classmethod
-    def from_val(cls, val, use_res: bool = False):
+    def from_val(cls, val, use_rem: bool = False):
         if isinstance(val, PFWrapper):
-            val.use_res = use_res
+            val.use_rem = use_rem
             return val
         if isinstance(val, PFTableProcessor):
-            return cls(val, use_res=use_res)
+            return cls(val, use_rem=use_rem)
         expr = sympify(val)
         if getattr(expr, 'is_commutative', True) or not expr.has(BosonOp, BosonPat, FermionOp, FermionPat):
-            return cls(PFTableProcessor({((), ()): expr}), use_res=use_res)
+            return cls(PFTableProcessor({((), ()): expr}), use_rem=use_rem)
         pf = pattern_form(expr, as_dict=None)
-        return cls(pf, use_res=use_res)
+        return cls(pf, use_rem=use_rem)
 
     def __add__(self, other):
-        other = PFWrapper.from_val(other, self.use_res)
+        other = PFWrapper.from_val(other, self.use_rem)
         new_pf = PFTableProcessor.add(self.pf, other.pf)
-        return PFWrapper(new_pf, self.res + other.res, self.use_res)
+        return PFWrapper(new_pf, self.rem + other.rem, self.use_rem)
 
     def __radd__(self, other):
         return self.__add__(other)
 
     def __sub__(self, other):
-        other = PFWrapper.from_val(other, self.use_res)
+        other = PFWrapper.from_val(other, self.use_rem)
         neg_table = {k: -v for k, v in other.pf.table.items()}
-        neg_pf = PFTableProcessor(neg_table, -other.pf.npf, other.pf._res_cache)
+        neg_pf = PFTableProcessor(neg_table, -other.pf.npf, other.pf._rem_cache)
         new_pf = PFTableProcessor.add(self.pf, neg_pf)
-        return PFWrapper(new_pf, self.res - other.res, self.use_res)
+        return PFWrapper(new_pf, self.rem - other.rem, self.use_rem)
 
     def __rsub__(self, other):
-        return PFWrapper.from_val(other, self.use_res).__sub__(self)
+        return PFWrapper.from_val(other, self.use_rem).__sub__(self)
 
     def __neg__(self):
         neg_table = {k: -v for k, v in self.pf.table.items()}
-        neg_pf = PFTableProcessor(neg_table, -self.pf.npf, self.pf._res_cache)
-        return PFWrapper(neg_pf, -self.res, self.use_res)
+        neg_pf = PFTableProcessor(neg_table, -self.pf.npf, self.pf._rem_cache)
+        return PFWrapper(neg_pf, -self.rem, self.use_rem)
 
     def __mul__(self, other):
-        other = PFWrapper.from_val(other, self.use_res)
-        if self.use_res or other.use_res:
-            new_pf, r = self.pf.mul_res(other.pf)
-            total_res = self.res + other.res + r
-            return PFWrapper(new_pf, total_res, True)
+        other = PFWrapper.from_val(other, self.use_rem)
+        if self.use_rem or other.use_rem:
+            new_pf, r = self.pf.mul_rem(other.pf)
+            total_rem = self.rem + other.rem + r
+            return PFWrapper(new_pf, total_rem, True)
         else:
             new_pf = self.pf.mul_ind(other.pf)
             return PFWrapper(new_pf, S.Zero, False)
 
     def __rmul__(self, other):
-        other = PFWrapper.from_val(other, self.use_res)
+        other = PFWrapper.from_val(other, self.use_rem)
         return other.__mul__(self)
 
     def __pow__(self, power):
@@ -89,35 +93,39 @@ class PFWrapper:
             if power.pf.npf == S.Zero and set(power.pf.table.keys()).issubset({((), ())}):
                 power = power.pf.table.get(((), ()), S.Zero)
             else:
-                raise ValueError("Exponent must be a scalar or number-operator expression.")
+                exp_expr = power.pf.expr()
+                return PFWrapper(PFTableProcessor(npf=Pow(self.pf.expr(), exp_expr)), S.Zero, self.use_rem)
         p_sym = sympify(power)
         if self.pf.npf == S.Zero and set(self.pf.table.keys()).issubset({((), ())}):
             base_expr = self.pf.table.get(((), ()), S.Zero)
-            return PFWrapper(PFTableProcessor({((), ()): base_expr ** p_sym}), self.res, self.use_res)
-        if p_sym.is_Integer and p_sym >= 0:
+            return PFWrapper(PFTableProcessor({((), ()): base_expr ** p_sym}), self.rem, self.use_rem)
+        if getattr(p_sym, 'is_Integer', False) and p_sym >= 0:
             exp_int = int(p_sym)
-            if self.use_res:
-                new_pf, r = self.pf.power_res(exp_int, self.res)
-                return PFWrapper(new_pf, r, True)
-            else:
-                new_pf = self.pf.power_ind(exp_int)
-                return PFWrapper(new_pf, S.Zero, False)
-        raise ValueError("Operator exponentiation only supports non-negative integers.")
+            try:
+                if self.use_rem:
+                    new_pf, r = self.pf.power_rem(exp_int, self.rem)
+                    return PFWrapper(new_pf, r, True)
+                else:
+                    new_pf = self.pf.power_ind(exp_int)
+                    return PFWrapper(new_pf, S.Zero, False)
+            except Exception:
+                return PFWrapper(PFTableProcessor(npf=Pow(self.pf.expr(), p_sym)), S.Zero, self.use_rem)
+        return PFWrapper(PFTableProcessor(npf=Pow(self.pf.expr(), p_sym)), S.Zero, self.use_rem)
 
     def __truediv__(self, other):
         if isinstance(other, PFWrapper):
             if other.pf.npf == S.Zero and set(other.pf.table.keys()).issubset({((), ())}):
                 val = other.pf.table.get(((), ()), S.One)
-                return self.__mul__(PFWrapper.from_val(val ** S.NegativeOne, self.use_res))
+                return self.__mul__(PFWrapper.from_val(val ** S.NegativeOne, self.use_rem))
             raise ValueError("Division is only supported by scalar or number-operator expressions.")
-        return self.__mul__(PFWrapper.from_val(sympify(other) ** S.NegativeOne, self.use_res))
+        return self.__mul__(PFWrapper.from_val(sympify(other) ** S.NegativeOne, self.use_rem))
 
     def __rtruediv__(self, other):
-        return PFWrapper.from_val(other, self.use_res).__truediv__(self)
+        return PFWrapper.from_val(other, self.use_rem).__truediv__(self)
 
     def adjoint(self):
-        new_pf = self.pf.adjoint(res=self.use_res)
-        return PFWrapper(new_pf, self.res, self.use_res)
+        new_pf = self.pf.adjoint(rem=self.use_rem)
+        return PFWrapper(new_pf, self.rem, self.use_rem)
 
     def diff(self, *symbols, **kwargs):
         resolved = []
@@ -140,8 +148,8 @@ class PFWrapper:
         if not new_table and self.pf.npf == S.Zero:
             new_table = {((), ()): S.Zero}
         new_npf = diff(self.pf.npf, *resolved, **kwargs)
-        new_res = diff(self.res, *resolved, **kwargs) if self.res != S.Zero else S.Zero
-        return PFWrapper(PFTableProcessor(new_table, new_npf), new_res, self.use_res)
+        new_rem = diff(self.rem, *resolved, **kwargs) if self.rem != S.Zero else S.Zero
+        return PFWrapper(PFTableProcessor(new_table, new_npf), new_rem, self.use_rem)
 
     def Derivative(self, *symbols, **kwargs):
         return self.diff(*symbols, **kwargs)
@@ -154,9 +162,11 @@ PF_VARIABLES: Dict[str, PFWrapper] = {}
 LAST_EVAL_PF: Dict[str, Any] = {}
 
 
-def save_pf_variable(name: str, pf: Any, res: Any = S.Zero, use_res: bool = False, **kwargs) -> PFWrapper:
-    w = PFWrapper.from_val(pf, use_res=use_res)
-    w.res = res
+def save_pf_variable(name: str, pf: Any, rem: Any = None, use_rem: bool = False, res: Any = None, **kwargs) -> PFWrapper:
+    val_rem = rem if rem is not None else (res if res is not None else S.Zero)
+    w = PFWrapper.from_val(pf, use_rem=use_rem)
+    w.rem = val_rem
+    w.res = val_rem
     w.name = name
     for k, v in kwargs.items():
         setattr(w, k, v)
@@ -170,9 +180,9 @@ def save_latest_pf_variable(name: str, **kwargs) -> Optional[PFWrapper]:
     return save_pf_variable(
         name,
         LAST_EVAL_PF['pf'],
-        res=LAST_EVAL_PF.get('res', S.Zero),
+        rem=LAST_EVAL_PF.get('rem', LAST_EVAL_PF.get('res', S.Zero)),
         latex_str=LAST_EVAL_PF.get('latex_str'),
-        residue_latex=LAST_EVAL_PF.get('residue_latex'),
+        remainder_latex=LAST_EVAL_PF.get('remainder_latex'),
         **kwargs
     )
 
@@ -191,11 +201,11 @@ def eval_pf_form(
     symbols: List[Dict[str, Any]],
     operators: List[Dict[str, Any]],
     named_expressions: List[Dict[str, Any]],
-    use_res: bool = False
+    use_rem: bool = False
 ) -> Tuple[str, str, Optional[str], Optional[str]]:
     """
     Evaluates quantum expressions using PFTableProcessor add/mul/power arithmetic.
-    Returns: (latex_result, expr_str, residue_latex, residue_str)
+    Returns: (latex_result, expr_str, remainder_latex, remainder_str)
     """
     text = (text or '').strip()
     if not text:
@@ -208,7 +218,7 @@ def eval_pf_form(
             name = str(item.name)
         else:
             name = str(item)
-        return PFWrapper.from_val(BosonNum(name), use_res)
+        return PFWrapper.from_val(BosonNum(name), use_rem)
 
     mode_kind_map = {op.get('name', '').strip(): op.get('kind', 'boson') for op in operators if op.get('name')}
     op_mode_map = {
@@ -221,9 +231,9 @@ def eval_pf_form(
             if isinstance(item, PFWrapper):
                 if item.pf.npf == S.Zero and set(item.pf.table.keys()).issubset({((), ())}):
                     arg = item.pf.table.get(((), ()), S.Zero)
-                    return PFWrapper(PFTableProcessor({((), ()): fn(arg)}), item.res, use_res)
-                return PFWrapper.from_val(fn(item.pf.expr()), use_res)
-            return PFWrapper.from_val(fn(sympify(item)), use_res)
+                    return PFWrapper(PFTableProcessor({((), ()): sympify(fn(arg))}), item.rem, use_rem)
+                return PFWrapper.from_val(fn(item.pf.expr()), use_rem)
+            return PFWrapper.from_val(fn(sympify(item)), use_rem)
         return _inner
 
     def _make_bp(item, *args):
@@ -236,7 +246,7 @@ def eval_pf_form(
         name = item.name if hasattr(item, 'name') else str(item)
         if op_mode_map and name in op_mode_map:
             name = str(op_mode_map[name])
-        return PFWrapper.from_val(BosonPat(name, *raw_args), use_res)
+        return PFWrapper.from_val(BosonPat(name, *raw_args), use_rem)
 
     def _make_fp(item, *args):
         raw_args = []
@@ -248,7 +258,7 @@ def eval_pf_form(
         name = item.name if hasattr(item, 'name') else str(item)
         if op_mode_map and name in op_mode_map:
             name = str(op_mode_map[name])
-        return PFWrapper.from_val(FermionPat(name, *raw_args), use_res)
+        return PFWrapper.from_val(FermionPat(name, *raw_args), use_rem)
 
     local_dict: Dict[str, Any] = {
         'i': I,
@@ -262,21 +272,23 @@ def eval_pf_form(
         'cosh': _wrap_fn(cosh),
         'tanh': _wrap_fn(tanh),
         'sqrt': _wrap_fn(sqrt),
-        'dag': lambda item: PFWrapper.from_val(item, use_res).adjoint(),
-        'Dagger': lambda item: PFWrapper.from_val(item, use_res).adjoint(),
-        'dagger': lambda item: PFWrapper.from_val(item, use_res).adjoint(),
+        'dag': lambda item: PFWrapper.from_val(item, use_rem).adjoint(),
+        'Dagger': lambda item: PFWrapper.from_val(item, use_rem).adjoint(),
+        'dagger': lambda item: PFWrapper.from_val(item, use_rem).adjoint(),
         'N_': _make_boson_num,
         'BosonNum': _make_boson_num,
         'Pat': lambda item, *args: PFWrapper.from_val(
-            Pat(item, *args, mode_kind_map=mode_kind_map, op_mode_map=op_mode_map), use_res
+            Pat(item, *args, mode_kind_map=mode_kind_map, op_mode_map=op_mode_map), use_rem
         ),
         'pattern': lambda item, *args: PFWrapper.from_val(
-            Pat(item, *args, mode_kind_map=mode_kind_map, op_mode_map=op_mode_map), use_res
+            Pat(item, *args, mode_kind_map=mode_kind_map, op_mode_map=op_mode_map), use_rem
         ),
         'BP': _make_bp,
         'BosonPat': _make_bp,
         'FP': _make_fp,
         'FermionPat': _make_fp,
+        'Pow': lambda b, e: (b ** e) if isinstance(b, PFWrapper) else ((PFWrapper.from_val(b, use_rem)) ** e),
+        'pow': lambda b, e: (b ** e) if isinstance(b, PFWrapper) else ((PFWrapper.from_val(b, use_rem)) ** e),
         'diff': lambda expr, *args, **kwargs: expr.diff(*args, **kwargs) if hasattr(expr, 'diff') else diff(expr, *args, **kwargs),
         'Derivative': lambda expr, *args, **kwargs: expr.diff(*args, **kwargs) if hasattr(expr, 'diff') else diff(expr, *args, **kwargs),
     }
@@ -295,7 +307,7 @@ def eval_pf_form(
         elif s.get('is_integer'): kwargs['integer'] = True
         elif s.get('is_real'): kwargs['real'] = True
         sym_obj = Symbol(s_name, **kwargs)
-        local_dict[s_name] = PFWrapper.from_val(sym_obj, use_res)
+        local_dict[s_name] = PFWrapper.from_val(sym_obj, use_rem)
 
         d_name = (s.get('display_name') or '').strip()
         if d_name and d_name != s_name:
@@ -309,7 +321,7 @@ def eval_pf_form(
             raise ValueError(f"Invalid operator identifier: {err_msg}")
         kind = op.get('kind', 'boson')
         op_obj = BosonOp(op_name) if kind == 'boson' else FermionOp(op_name)
-        w_op = PFWrapper.from_val(op_obj, use_res)
+        w_op = PFWrapper.from_val(op_obj, use_rem)
 
         local_dict[op_name] = w_op
 
@@ -329,13 +341,13 @@ def eval_pf_form(
             if isinstance(val_obj, PFWrapper):
                 w_ne = val_obj
             elif isinstance(val_obj, PFTableProcessor):
-                w_ne = PFWrapper(val_obj, res=ne.get('res', S.Zero), use_res=use_res)
+                w_ne = PFWrapper(val_obj, rem=ne.get('rem', S.Zero), use_rem=use_rem)
             elif isinstance(val_obj, tuple):
-                w_ne = PFWrapper(val_obj[0], res=val_obj[1], use_res=use_res)
+                w_ne = PFWrapper(val_obj[0], rem=val_obj[1], use_rem=use_rem)
             else:
-                w_ne = PFWrapper.from_val(val_obj, use_res)
+                w_ne = PFWrapper.from_val(val_obj, use_rem)
             local_dict[ne_name] = w_ne
-            save_pf_variable(ne_name, w_ne.pf, res=w_ne.res, latex_str=ne.get('latex'))
+            save_pf_variable(ne_name, w_ne.pf, rem=w_ne.rem, latex_str=ne.get('latex'))
         elif ne_name in PF_VARIABLES:
             local_dict[ne_name] = PF_VARIABLES[ne_name]
         else:
@@ -344,15 +356,15 @@ def eval_pf_form(
                 continue
             try:
                 parsed_ne = parse_expr(ne_str, local_dict=local_dict, transformations=TRANSFORMS)
-                w_ne = PFWrapper.from_val(parsed_ne, use_res)
+                w_ne = PFWrapper.from_val(parsed_ne, use_rem)
                 local_dict[ne_name] = w_ne
-                save_pf_variable(ne_name, w_ne.pf, res=w_ne.res, latex_str=ne.get('latex'))
+                save_pf_variable(ne_name, w_ne.pf, rem=w_ne.rem, latex_str=ne.get('latex'))
             except Exception as e:
                 raise ValueError(f"Failed to evaluate named expression '{ne_name}': {e}")
 
     try:
         parsed_target = parse_expr(text, local_dict=local_dict, transformations=TRANSFORMS)
-        wrapper_target = PFWrapper.from_val(parsed_target, use_res)
+        wrapper_target = PFWrapper.from_val(parsed_target, use_rem)
     except Exception as e:
         raise ValueError(f"Calculation failed: {e}")
 
@@ -370,28 +382,29 @@ def eval_pf_form(
     latex_str = latex(expr_disp)
     expr_str = expr_to_code_str(expr_result)
 
-    residue_expr = wrapper_target.res if use_res else S.Zero
-    res_latex = None
-    res_str = None
-    if use_res:
-        res_disp = residue_expr
+    remainder_expr = wrapper_target.rem if use_rem else S.Zero
+    rem_latex = None
+    rem_str = None
+    if use_rem:
+        rem_disp = remainder_expr
         if disp_subs:
             try:
-                res_disp = residue_expr.subs(disp_subs)
+                rem_disp = remainder_expr.subs(disp_subs)
             except Exception:
-                res_disp = residue_expr
-        res_latex = latex(res_disp)
-        res_str = expr_to_code_str(residue_expr)
+                rem_disp = remainder_expr
+        rem_latex = latex(rem_disp)
+        rem_str = expr_to_code_str(remainder_expr)
 
     global LAST_EVAL_PF
     LAST_EVAL_PF = {
         'pf': pf_result,
-        'res': residue_expr,
+        'rem': remainder_expr,
+        'res': remainder_expr,
         'latex_str': latex_str,
-        'residue_latex': res_latex,
+        'remainder_latex': rem_latex,
     }
 
-    return latex_str, expr_str, res_latex, res_str
+    return latex_str, expr_str, rem_latex, rem_str
 
 
 

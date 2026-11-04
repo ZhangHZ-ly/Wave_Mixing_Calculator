@@ -3,16 +3,13 @@ from typing import Optional
 
 from op_patterns import BosonNum
 from parametric import (
-    f_dict, d_apply, t_, _g, _nd, _ps, nlc, pm, a_p, a_i
+    f_dict, d_apply, t_, _g, _ps, nlc, pm, a_p, a_i, nd_simp
 )
 from perturb_eval import PF
-from sympy.core.add import Add
-from sympy.core.expr import Expr
-from sympy.core.exprtools import factor_terms
-from sympy.core.mul import Mul
-from sympy.core.power import Pow
 from sympy.core.singleton import S
+from sympy.core.symbol import Symbol
 from sympy.core.traversal import bottom_up
+from sympy.functions.elementary.complexes import Abs
 
 from .common import g_hat
 from .conditions import normalize_process
@@ -41,88 +38,68 @@ def _resolve_nd_and_gc(
     return nd, gc
 
 
-def _is_pure_nd_power(a, nd_sym):
-    if a == nd_sym:
-        return True, S.One
-    if a.is_Pow and a.base == nd_sym:
-        return True, a.exp
-    return False, S.Zero
-
-
 def t_to_g(
     obj,
     process: Optional[str] = None,
     mismatch: bool = False,
     dc: Optional[bool] = None,
+    coherent: bool = False,
+    gain_sym=None,
+    alpha=None,
+    solver=None,
 ):
     r"""
-    Convert time variable t_ to parametric gain operator \hat{g} / gc
-    and simplify commutative number-operator expressions.
+    Convert time variable t_ to parametric gain (operator \hat{g} / gc or scalar g / gc)
+    and simplify expressions involving the driving field.
     Supports Three-Wave Mixing ('twm_dc', 'twm_fc') and Four-Wave Mixing ('fwm').
     """
-    nd, gc = _resolve_nd_and_gc(process=process, mismatch=mismatch, dc=dc)
+    if hasattr(obj, 'val'):
+        obj = obj.val
 
-    def _simp_n(expr):
-        if not isinstance(expr, Expr):
+    if process is not None and not isinstance(process, str):
+        solver = process
+        process = None
+
+    if process is not None:
+        proc = normalize_process(process, dc)
+    elif isinstance(solver, str):
+        proc = normalize_process(solver, dc)
+    elif solver is not None and getattr(solver, '__class__', None).__name__ == 'FWMSolver':
+        proc = 'fwm'
+    elif solver is not None and hasattr(solver, 'dc'):
+        proc = 'twm_dc' if solver.dc else 'twm_fc'
+    else:
+        proc = normalize_process(None, dc)
+
+    is_dc = (proc != 'twm_fc')
+    nd, gc = _resolve_nd_and_gc(process=proc, mismatch=mismatch, dc=is_dc)
+
+    if coherent:
+        gain = Symbol('g', real=True) if gain_sym is None else gain_sym
+        if alpha is None:
+            alpha = Symbol('alpha_0') if is_dc else Symbol('alpha_2')
+        nd_drive = Abs(alpha) ** 2
+        gc = gc.subs({nd: nd_drive})
+        if proc != 'fwm' and not mismatch:
+            gc = _ps(gc)
+        inv_gc = bottom_up(1 / gc, _ps)
+        sub_dict = {t_: gain * inv_gc, _g: gain, nd: nd_drive}
+    else:
+        gain = g_hat if gain_sym is None else gain_sym
+        nd_drive = nd
+        inv_gc = bottom_up(1 / gc, _ps)
+        sub_dict = {t_: gain * inv_gc, _g: gain}
+
+    def _simp_single(expr):
+        if not hasattr(expr, 'subs'):
             return expr
-        expr = expr.subs({t_: g_hat / gc, _g: g_hat})
-
-        def _combine(e):
-            if e.is_Mul:
-                args = []
-                for a in Mul.make_args(e.subs({nd: _nd, g_hat: _g})):
-                    if a.is_Add and a.has(_nd):
-                        args.extend(Mul.make_args(factor_terms(a, clear=True)))
-                    elif a.is_Pow and a.base.is_Add and a.base.has(_nd):
-                        args.extend(arg**a.exp for arg in Mul.make_args(factor_terms(a.base, clear=True)))
-                    else:
-                        args.append(a)
-
-                nd_powers = []
-                add_factors = []
-                other_nd = []
-                other = []
-                for arg in args:
-                    is_p, p_exp = _is_pure_nd_power(arg, _nd)
-                    if is_p:
-                        nd_powers.append(p_exp)
-                    elif arg.is_Add and arg.has(_nd):
-                        add_factors.append(arg)
-                    elif arg.has(_nd, _g):
-                        other_nd.append(arg)
-                    else:
-                        other.append(arg)
-
-                total_nd_exp = Add(*nd_powers) if nd_powers else S.Zero
-                if total_nd_exp != S.Zero and add_factors:
-                    target_idx = 0
-                    if len(add_factors) > 1:
-                        for i, af in enumerate(add_factors):
-                            if total_nd_exp > 0 and any(t.has(_nd) and any(_is_pure_nd_power(f, _nd)[0] and _is_pure_nd_power(f, _nd)[1] < 0 for f in Mul.make_args(t)) for t in af.args):
-                                target_idx = i
-                                break
-                            elif total_nd_exp < 0 and any(t.has(_nd) and any(_is_pure_nd_power(f, _nd)[0] and _is_pure_nd_power(f, _nd)[1] > 0 for f in Mul.make_args(t)) for t in af.args):
-                                target_idx = i
-                                break
-                    nd_factor = _nd**total_nd_exp
-                    first_add = add_factors[target_idx]
-                    new_terms = [Mul(term, nd_factor) for term in first_add.args]
-                    add_factors[target_idx] = Add(*new_terms)
-                    total_nd_exp = S.Zero
-
-                n_factors = list(other_nd)
-                if total_nd_exp != S.Zero:
-                    n_factors.append(_nd**total_nd_exp)
-                n_factors.extend(add_factors)
-
-                n_part = _ps(Mul(*n_factors)).subs({_nd: nd, _g: g_hat}) if n_factors else S.One
-                e = Mul(*other, n_part)
-            return _ps(e)
-
-        return bottom_up(expr, _combine)
+        expr = bottom_up(expr.subs(sub_dict), _ps)
+        expr = nd_simp(expr, nd_drive)
+        return _ps(expr)
 
     if isinstance(obj, (PF, dict, f_dict)):
-        return d_apply(obj, _simp_n)
-    return _simp_n(obj)
+        return d_apply(obj, _simp_single)
+    return _simp_single(obj)
 
 
+cohr_t_to_g = lambda obj, *args, **kwargs: t_to_g(obj, *args, coherent=True, **kwargs)

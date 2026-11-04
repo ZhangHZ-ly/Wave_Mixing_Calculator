@@ -1,4 +1,5 @@
 from sympy.core.singleton import S
+from sympy.core.sympify import sympify
 from sympy.core.expr import Expr
 from sympy.core.numbers import Integer
 from sympy.core.add import Add
@@ -30,36 +31,36 @@ def key(a):
             return k
     return None
 
-_res_to_del = dict()
-def _res_cache_update(cache, new):
+_rem_to_del = dict()
+def _rem_cache_update(cache, new):
     if cache is new:
         return
     for b in new:
         if b in cache:
-            if b in _res_to_del:
-                for n in _res_to_del[b]:
+            if b in _rem_to_del:
+                for n in _rem_to_del[b]:
                     cache[b].pop(n, None)
-                del _res_to_del[b]
+                del _rem_to_del[b]
             cache[b].update(new[b])
         else:
             cache[b] = dict(new[b]) if isinstance(new[b], dict) else new[b]
-    for b in _res_to_del:
-        for n in _res_to_del[b]:
+    for b in _rem_to_del:
+        for n in _rem_to_del[b]:
             cache[b].pop(n, None)
-    _res_to_del.clear()
+    _rem_to_del.clear()
 
 class BosonSortContext():
     """
     Sort context for a tuple/list of BosonPats or number-operator functions
     """
-    __slots__ = ('pats', 'result', 'tail', 'residue',
-                 '_res_cache', 'pat_sorted', 'tail_pat', 'residue_pat')
+    __slots__ = ('pats', 'result', 'tail', 'remainder',
+                 '_rem_cache', 'pat_sorted', 'tail_pat', 'remainder_pat')
 
     def __init__(self, pats):
         if not pats:
             self.result = self.pat_sorted = tuple(pats)
             self.tail = self.tail_pat = S.One
-            self.residue = self.residue_pat = S.Zero
+            self.remainder = self.remainder_pat = S.Zero
         elif len(pats) == 1:
             if isinstance(pats[0], BosonPat):
                 self.pat_sorted = tuple(pats)
@@ -67,11 +68,11 @@ class BosonSortContext():
             else:
                 self.result = self.pat_sorted = ()
                 self.tail = self.tail_pat = pats[0]
-                self._res_cache = dict()
-            self.residue = self.residue_pat = S.Zero
+                self._rem_cache = dict()
+            self.remainder = self.remainder_pat = S.Zero
         else:
             self.pats = tuple(pats)
-            self._res_cache = dict()
+            self._rem_cache = dict()
 
     def expr(self) -> Expr:
         if hasattr(self, 'pats'):
@@ -133,29 +134,29 @@ class BosonSortContext():
                 j += 1
         return (*new, *L[i:], *R[j:]), Mul(*reversed(tail))
 
-    def _b_res(self, e_N: Expr, b: BosonOp) -> Expr:
+    def _b_rem(self, e_N: Expr, b: BosonOp) -> Expr:
         """
-        Calculates the residue after reordering
+        Calculates the remainder after reordering
         e_N\\*b into b\\*NumShift(e_N, b).
 
-        The global _res_to_del may change,
+        The global _rem_to_del may change,
         so please do not forget the corresponding cache management.
         """
         if e_N.is_commutative:
             return S.Zero
-        if e_N in self._res_cache.get(b, ()):
-            if b in _res_to_del:
-                _res_to_del[b].add(e_N)
+        if e_N in self._rem_cache.get(b, ()):
+            if b in _rem_to_del:
+                _rem_to_del[b].add(e_N)
             else:
-                _res_to_del[b] = {e_N}
-            return self._res_cache[b][e_N]
+                _rem_to_del[b] = {e_N}
+            return self._rem_cache[b][e_N]
         if isinstance(e_N, NumShift):
-            f_res = self._b_res(e_N.function, b)
-            return NumShift(f_res, e_N.direction, e_N.shift, scan_dict=False)
+            f_rem = self._b_rem(e_N.function, b)
+            return NumShift(f_rem, e_N.direction, e_N.shift, scan_dict=False)
         if isinstance(e_N, ExprWithLimits):
-            return e_N.func(self._b_res(e_N.function, b), *e_N.limits)
+            return e_N.func(self._b_rem(e_N.function, b), *e_N.limits)
         if isinstance(e_N, Add):
-            return Add(*[self._b_res(arg, b) for arg in e_N.args])
+            return Add(*[self._b_rem(arg, b) for arg in e_N.args])
         if isinstance(e_N, Mul):
             prev, res = 0, []
             for i, arg in enumerate(e_N.args):
@@ -166,7 +167,7 @@ class BosonSortContext():
                                     Commutator(Mul(*e_N.args[prev:i]), b),
                                     *e_N.args[i+1:]))
                     prev = i + 1
-                    new = self._b_res(arg, b)
+                    new = self._b_rem(arg, b)
                     if new is not S.Zero:
                         res.append(Mul(*e_N.args[:i], new, *e_N.args[prev:]))
             if prev != len(e_N.args):
@@ -178,20 +179,20 @@ class BosonSortContext():
             if b in modes:
                 return S.Zero
         return Commutator(e_N, b)
-    def merge_res_pat(self, R, reserve_unshifted=False):
+    def merge_rem_pat(self, R, reserve_unshifted=False):
         """
         Merges a new tuple/list of sorted BosonPat
         to the right side of the sorted result
-        and calculates the total residue.
+        and calculates the total remainder.
         
-        The global _res_to_del may change,
+        The global _rem_to_del may change,
         so please do not forget the corresponding cache management.
 
         The parameter 'reserve_unshifted' is
         for avoiding removal of cache about the tail itself,
         which is essential for the treatment of integer powers.
         """
-        L, T, rd = self.sort_res_pat()
+        L, T, rd = self.sort_rem_pat()
         new = []
         res = []
         if rd is not S.Zero:
@@ -205,13 +206,13 @@ class BosonSortContext():
             tail = [NumShift(T, 1, R).doit(deep=False)]
             for n, b in enumerate(R):
                 bb = BosonOp(b.name)
-                rn = self._b_res(T, bb)
-                if bb in self._res_cache:
-                    self._res_cache[bb].update({tail[0]: NumShift(rn, 1, R).doit(deep=False)})
-                    if bb in _res_to_del:
-                        _res_to_del[bb].discard(tail[0])
+                rn = self._b_rem(T, bb)
+                if bb in self._rem_cache:
+                    self._rem_cache[bb].update({tail[0]: NumShift(rn, 1, R).doit(deep=False)})
+                    if bb in _rem_to_del:
+                        _rem_to_del[bb].discard(tail[0])
                         if reserve_unshifted:
-                            _res_to_del[bb].discard(T)
+                            _rem_to_del[bb].discard(T)
                 if rn is not S.Zero:
                     rrt.append(Mul(*R[:n], rn.xreplace({bb: b}), *R[n+1:]))
             if rrt:
@@ -245,22 +246,22 @@ class BosonSortContext():
                             Mul(*R[j_prev:j], evaluate=False))
             res.append(Mul(*new[:j_prev-j], c, *R[j:], *tail))
         return (*new, *L[i:], *R[j:]), Mul(*reversed(tail)), Add(*res)
-    def sort_res_pat(self):
-        if not hasattr(self, 'residue_pat'):
+    def sort_rem_pat(self):
+        if not hasattr(self, 'remainder_pat'):
             mid = len(self.pats)//2
             L = BosonSortContext(tuple(self.pats[:mid]))
             R = BosonSortContext(tuple(self.pats[mid:]))
-            lsp, ltp, lrp = L.sort_res_pat()
-            rsp, rtp, rrp = R.sort_res_pat()
-            self.pat_sorted, t, res = L.merge_res_pat(rsp)
-            _res_cache_update(self._res_cache, getattr(R, '_res_cache', ()))
+            lsp, ltp, lrp = L.sort_rem_pat()
+            rsp, rtp, rrp = R.sort_rem_pat()
+            self.pat_sorted, t, res = L.merge_rem_pat(rsp)
+            _rem_cache_update(self._rem_cache, getattr(R, '_rem_cache', ()))
             self.tail_pat = t * rtp
-            self.residue_pat = Add(Mul(res, rtp),
+            self.remainder_pat = Add(Mul(res, rtp),
                             Mul(Mul(*lsp, ltp) + lrp, rrp))
-        return self.pat_sorted, self.tail_pat, self.residue_pat
-    def result_res(self):
-        if not hasattr(self, 'residue'):
-            ps, tp, rp = self.sort_res_pat()
+        return self.pat_sorted, self.tail_pat, self.remainder_pat
+    def result_rem(self):
+        if not hasattr(self, 'remainder'):
+            ps, tp, rp = self.sort_rem_pat()
             new = []
             tail = []
             res = []
@@ -275,16 +276,16 @@ class BosonSortContext():
                     tail.append(n)
             self.result = tuple(new)
             self.tail = Mul(*tail, tp)
-            self.residue = Mul(Add(*res), tp) + rp
+            self.remainder = Mul(Add(*res), tp) + rp
         elif not hasattr(self, 'result'):
-            return *self.result_ind(), self.residue
-        return self.result, self.tail, self.residue
+            return *self.result_ind(), self.remainder
+        return self.result, self.tail, self.remainder
 
 class FermionSortContext:
     """
     sort context for a tuple/list of FermionPats
     """
-    __slots__ = ('pats', 'result', 'tail', 'residue')
+    __slots__ = ('pats', 'result', 'tail', 'remainder')
 
     def __init__(self, pats):
         if not pats:
@@ -294,15 +295,15 @@ class FermionSortContext:
             else:
                 self.result = tuple(pats)
                 self.tail = S.One
-            self.residue = S.Zero
+            self.remainder = S.Zero
         else:
             if len(pats) == 1:
                 self.result = tuple(pats)
                 self.tail = S.One
-                self.residue = S.Zero
+                self.remainder = S.Zero
             else:
                 self.pats = tuple(pats)
-                self._res_cache = dict()
+                self._rem_cache = dict()
 
     def expr(self) -> Expr:
         if hasattr(self, 'pats'):
@@ -322,7 +323,7 @@ class FermionSortContext:
                 self.result = None
                 self.tail = S.Zero
                 if rs is None:
-                    self.residue = S.Zero
+                    self.remainder = S.Zero
             elif R.result is None:
                 self.result = None
                 self.tail = S.Zero
@@ -370,8 +371,8 @@ class FermionSortContext:
                                          for p in R[j_prev:j])))
         return (*new, *L[i:], *R[j:]), Pow(S.NegativeOne, Add(*tail_args))
 
-    def merge_res(self, R):
-        L, T, r = self.result_res()
+    def merge_rem(self, R):
+        L, T, r = self.result_rem()
         if L is None or R is None:
             return None, S.Zero, S.Zero
         new = []
@@ -421,44 +422,47 @@ class FermionSortContext:
         if j_prev != j:
             record()
         return (*new, *L[i:], *R[j:]), Mul(*reversed(tail)), Add(*res)
-    def result_res(self):
-        if not hasattr(self, 'residue'):
+    def result_rem(self):
+        if not hasattr(self, 'remainder'):
             mid = len(self.pats)//2
             L = FermionSortContext(tuple(self.pats[:mid]))
             R = FermionSortContext(tuple(self.pats[mid:]))
-            ls, lt, lr = L.result_res()
-            rs, rt, rr = R.result_res()
+            ls, lt, lr = L.result_rem()
+            rs, rt, rr = R.result_rem()
             if ls is None:
                 self.result = None
                 self.tail = S.Zero
                 if rs is None:
-                    self.residue = S.Zero
+                    self.remainder = S.Zero
                 else:
-                    self.residue = Mul(lr, *rs, R.tail)
+                    self.remainder = Mul(lr, *rs, R.tail)
             elif R.result is None:
                 self.result = None
                 self.tail = S.Zero
-                self.residue = Mul(*ls, lt, rr)
+                self.remainder = Mul(*ls, lt, rr)
             else:
-                self.result, t, res = L.merge_res(rs)
+                self.result, t, res = L.merge_rem(rs)
                 self.tail = Pow(S.NegativeOne, m1_base(t) + m1_base(rt))
-                self.residue = Add(Mul(res, rt),
+                self.remainder = Add(Mul(res, rt),
                                 Mul(Mul(*ls, lt) + lr, rr))
-        return self.result, self.tail, self.residue
+        return self.result, self.tail, self.remainder
 
 class PFTableProcessor:
     """
     Final representation of pattern form
     """
-    __slots__ = ('table', 'npf', '_res_cache')
+    __slots__ = ('table', 'npf', '_rem_cache')
 
-    def __init__(self, table: dict = dict(), npf=S.Zero, cache=None):
-        self.table = table
-        self.npf = npf
-        if cache is None:
-            self._res_cache = dict()
+    def __init__(self, table: dict = None, npf=S.Zero, cache=None):
+        if table is None:
+            self.table = dict()
         else:
-            self._res_cache = cache
+            self.table = table
+        self.npf = sympify(npf)
+        if cache is None:
+            self._rem_cache = dict()
+        else:
+            self._rem_cache = cache
 
     def __repr__(self):
         return f"PatternForm({self.table}, {self.npf})"
@@ -471,7 +475,7 @@ class PFTableProcessor:
 
     def result_ind(self):
         return self
-    def result_res(self):
+    def result_rem(self):
         return self, S.Zero
     
     @classmethod
@@ -488,7 +492,7 @@ class PFTableProcessor:
                     result[p].append(f)
                 else:
                     result[p] = [f]
-            _res_cache_update(cache, pf._res_cache)
+            _rem_cache_update(cache, pf._rem_cache)
         for p, f in result.items():
             result[p] = Add(*f)
         return cls(result, Add(*(pf.npf for pf in pfs if pf.npf is not S.Zero)), cache)
@@ -498,12 +502,12 @@ class PFTableProcessor:
             bsc = object.__new__(BosonSortContext)
             bsc.result = bsc.pat_sorted = bs
             bsc.tail = bsc.tail_pat = n
-            bsc.residue = bsc.residue_pat = S.Zero
-            bsc._res_cache = self._res_cache
+            bsc.remainder = bsc.remainder_pat = S.Zero
+            bsc._rem_cache = self._rem_cache
             fsc = object.__new__(FermionSortContext)
             fsc.result = fs
             fsc.tail = S.One
-            fsc.residue = S.Zero
+            fsc.remainder = S.Zero
             yield bsc, fsc
 
     def mul_ind(self, other):
@@ -518,25 +522,25 @@ class PFTableProcessor:
         return PFTableProcessor(sf, Add(Mul(self.expr(), other.npf),
                                         Mul(self.npf, other.expr(False))))
 
-    def mul_res(self, other, reserve_unshifted=False):
+    def mul_rem(self, other, reserve_unshifted=False):
         sf, res = dict(), []
         for bsc, fsc in self.make_contexts():
             for (bs, fs), t in other.table.items():
                 nbsc = object.__new__(BosonSortContext)
                 (nbsc.pat_sorted,
                  nbsc.tail_pat,
-                 nbsc.residue_pat) = bsc.merge_res_pat(bs, reserve_unshifted)
-                bp, bt, br = nbsc.result_res()
-                fp, ft, fr = fsc.merge_res(fs)
+                 nbsc.remainder_pat) = bsc.merge_rem_pat(bs, reserve_unshifted)
+                bp, bt, br = nbsc.result_rem()
+                fp, ft, fr = fsc.merge_rem(fs)
                 if fp is not None:
                     a = (bp, fp)
                     sf[a] = sf.get(a, 0) + Mul(ft, bt, t)
                     res.append(Mul(br, t, *fs))
                 res.append(Mul(Mul(*bp, bt) + br, t, fr))
-        _res_cache_update(self._res_cache, other._res_cache)
+        _rem_cache_update(self._rem_cache, other._rem_cache)
         return PFTableProcessor(sf, Add(Mul(self.expr(), other.npf),
                                         Mul(self.npf, other.expr(False))),
-                                self._res_cache), Add(*res)
+                                self._rem_cache), Add(*res)
 
     def power_ind(self, exp: Integer):
         if exp == 1:
@@ -551,50 +555,50 @@ class PFTableProcessor:
             return sf_2k
         return self.mul_ind(sf_2k)
 
-    def power_res(self, exp: Integer, base_rd):
+    def power_rem(self, exp: Integer, base_rd):
         if exp == 1:
             return self, base_rd
         if exp < 0:
             raise ValueError('Exponent must be nonnegative')
         if exp == 0:
             return PFTableProcessor({((), ()): S.One}), S.Zero
-        sf_k, rd_k = self.power_res(exp >> 1, base_rd)
-        sf_2k, r_sf2k = sf_k.mul_res(sf_k, True)
+        sf_k, rd_k = self.power_rem(exp >> 1, base_rd)
+        sf_2k, r_sf2k = sf_k.mul_rem(sf_k, True)
         rd_2k = Add(r_sf2k, Mul(sf_k.expr(), rd_k),
                     Mul(rd_k, sf_k.expr()), Mul(rd_k, rd_k))
         if exp & 1 == 0:
             return sf_2k, rd_2k
-        sf, r_sf = self.mul_res(sf_2k, True)
+        sf, r_sf = self.mul_rem(sf_2k, True)
         rd = Add(r_sf, Mul(self.expr(), rd_2k),
                  Mul(base_rd, sf_2k.expr() + rd_2k))
         return sf, rd
     
-    def adjoint(self, res=False):
+    def adjoint(self, rem=False):
         sf = dict()
-        if res:
-            new_res = dict()
-            d_res = dict()
+        if rem:
+            new_rem = dict()
+            d_rem = dict()
             res = []
             for (bs, fs), t in self.table.items():
                 td = NumShift(t, -1, bs).doit(deep=False)._eval_adjoint()
                 bd = tuple(b._eval_adjoint() for b in reversed(bs))
                 bsc = BosonSortContext(bd)
-                bsc._res_cache = self._res_cache
-                br = bsc.sort_res_pat()[2]
+                bsc._rem_cache = self._rem_cache
+                br = bsc.sort_rem_pat()[2]
                 r = []
                 for i, b in enumerate(bd):
                     bb = BosonOp(b.name)
-                    rb = bsc._b_res(t, bb)
+                    rb = bsc._b_rem(t, bb)
                     rd = NumShift(rb, -1, bs).doit(deep=False)
-                    new_res[bb] = {t: rb}
+                    new_rem[bb] = {t: rb}
                     r.append(Mul(*bd[i:], rd.xreplace({bb: bs[-(i+1)]})._eval_adjoint(), *bd[:i+1]))
-                    d_res[bb] = {td: rd._eval_adjoint().xreplace({bb._eval_adjoint(): bb})}
+                    d_rem[bb] = {td: rd._eval_adjoint().xreplace({bb._eval_adjoint(): bb})}
                 fp, ft, fr = FermionSortContext(tuple(f._eval_adjoint()
-                                                      for f in reversed(fs))).result_res()
+                                                      for f in reversed(fs))).result_rem()
                 res.append(Mul(ft, Add(*r, -br*td), *fp) + Mul(*bd, td, fr))
                 sf[(bd, fp)] = ft * td
-            _res_cache_update(self._res_cache, new_res)
-            return PFTableProcessor(sf, self.npf.adjoint(), d_res)
+            _rem_cache_update(self._rem_cache, new_rem)
+            return PFTableProcessor(sf, self.npf.adjoint(), d_rem)
         for (bs, fs), t in self.table.items():
             new_bs = tuple(b._eval_adjoint() for b in bs)
             new_fs = tuple(f._eval_adjoint() for f in fs)
@@ -616,4 +620,4 @@ class PFTableProcessor:
 
 def clear_cache():
     _k_cache.clear()
-    _res_to_del.clear
+    _rem_to_del.clear()

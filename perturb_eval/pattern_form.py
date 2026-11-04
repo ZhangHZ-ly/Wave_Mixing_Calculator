@@ -237,7 +237,7 @@ class PFTreeNode:
                 base = next(rs).result_ind()
                 exp = next(rs).result_ind()
                 if base.npf is not S.Zero:
-                    return PFTableProcessor(npf=self.ls_apply(Pow(base.expr(), expr.expr())))
+                    return PFTableProcessor(npf=self.ls_apply(Pow(base.expr(), exp.expr())))
                 if exp.npf is not S.Zero or not set(exp.table.keys()).issubset({((), ())}):
                     return PFTableProcessor(npf=self.ls_apply(Pow(base.expr(), exp.expr())))
                 if set(base.table.keys()).issubset({((), ())}):
@@ -263,9 +263,9 @@ class PFTreeNode:
                 pf.npf = self.ls_apply(pf.npf)
         return pf
 
-    def result_res(self) -> tuple[PFTableProcessor, Expr]:
+    def result_rem(self) -> tuple[PFTableProcessor, Expr]:
         """
-        Pattern-formed result with residue due to non-commutativity among modes,
+        Pattern-formed result with remainder due to non-commutativity among modes,
         operators reordered canonically
 
         Non-num_only args of Pow/Function will not be treated further;
@@ -280,7 +280,7 @@ class PFTreeNode:
         if isinstance(self.expr, Add):
             pfs, rds = [], []
             for r in self.recur():
-                pf, rd = r.result_res()
+                pf, rd = r.result_rem()
                 pfs.append(pf)
                 rds.append(rd)
             pf, res = PFTableProcessor.add(*pfs), Add(*rds)
@@ -288,7 +288,7 @@ class PFTreeNode:
             exp = self.expr.exp
             if not check_num(exp, self._cn_cache):
                 return PFTableProcessor(npf=self.ls_apply()), S.Zero
-            base_pf, base_rd = next(self.recur()).result_res()
+            base_pf, base_rd = next(self.recur()).result_rem()
             if base_pf.npf is not S.Zero:
                 return PFTableProcessor(npf=self.ls_apply()), S.Zero
             if not (exp.is_Integer and exp > 1):
@@ -297,17 +297,16 @@ class PFTreeNode:
                     return PFTableProcessor({((), ()): Pow(base_pf[((), ())], exp)
                                                         * self.ls_apply(S.One).doit()}), S.Zero
                 return PFTableProcessor(npf=self.ls_apply()), S.Zero
-            pf, res = base_pf.power_res(exp, base_rd)
+            pf, rem = base_pf.power_rem(exp, base_rd)
         elif isinstance(self.expr, Mul):
-            pf, res = PFTableProcessor({((), ()): S.One}), S.Zero
+            pf, rem = PFTableProcessor({((), ()): S.One}), S.Zero
             for r in self.recur():
-                new, rd = r.result_res()
-                if rd is not S.Zero:
-                    new_res = Mul(pf.expr(), rd)
-                pf, mr = pf.mul_res(new)
-                res = Add(Mul(res, Add(new.expr(), mr)), mr, new_res)
+                new, rd = r.result_rem()
+                new_rem = Mul(pf.expr(), rd) if rd is not S.Zero else S.Zero
+                pf, mr = pf.mul_rem(new)
+                rem = Add(Mul(rem, Add(new.expr(), mr)), mr, new_rem)
         else:
-            pf, res = next(self.recur()).result_res()
+            pf, rem = next(self.recur()).result_rem()
         if hasattr(self, 'limits'):
             if pf.table:
                 c = self.ls_apply(S.One).doit()
@@ -316,9 +315,9 @@ class PFTreeNode:
                         pf.table[p] = c * n
             if pf.npf is not S.Zero:
                 pf.npf = self.ls_apply(pf.npf)
-            if res is not S.Zero:
-                res = self.ls_apply(res)
-        return pf, res
+            if rem is not S.Zero:
+                rem = self.ls_apply(rem)
+        return pf, rem
 
 class PFLeaf:
     __slots__ = ('bsc', 'fsc')
@@ -333,35 +332,38 @@ class PFLeaf:
             return PFTableProcessor(dict())
         return PFTableProcessor({(bp, fp): bt * ft})
         
-    def result_res(self):
-        bp, bt, br = self.bsc.result_res()
-        fp, ft, fr = self.fsc.result_res()
+    def result_rem(self):
+        bp, bt, br = self.bsc.result_rem()
+        fp, ft, fr = self.fsc.result_rem()
         if fp is None:
             return PFTableProcessor(dict()), (Mul(*bp, bt) + br) * fr
         table = {(bp, fp): bt * ft}
-        residue = Add(Mul(*bp, bt, fr), Mul(*fp, ft, br), Mul(br, fr))
-        return PFTableProcessor(table, cache=getattr(self.bsc, '_res_cache', None)), residue
+        remainder = Add(Mul(*bp, bt, fr), Mul(*fp, ft, br), Mul(br, fr))
+        return PFTableProcessor(table, cache=getattr(self.bsc, '_rem_cache', None)), remainder
 
-def pattern_form(expr, as_dict=False, res=False, ignore=(), _s=True):
+def pattern_form(expr, as_dict=False, rem=False, ignore=(), _s=True, res=None):
     """
     Returns the pattern-form result of the expr.
     
     :param as_dict: Whether to present the result as a dict (True),
     PFTableProcessor (None) or Expr (False)
-    :param res: Whether to consider the non-independency among the operators
-    and include the commutator residue
+    :param rem: Whether to consider the non-independency among the operators
+    and include the commutator remainder
+    :param res: Alias for rem (backward compatibility)
     :param ignore: Uncommtable types to be processed as if they are BosonNums
     :param _s: Whether to symplify the expression before reordering
     """
+    if res is not None:
+        rem = res
     pftn = PFTreeNode(expr, ignore=ignore, _s=_s)
-    if res:
-        result, residue = pftn.result_res()
+    if rem:
+        result, remainder = pftn.result_rem()
         clear_cache()
         if as_dict is None:
-            return result, residue
+            return result, remainder
         if as_dict:
-            return result.table, result.npf, residue
-        return result.expr(), residue
+            return result.table, result.npf, remainder
+        return result.expr(), remainder
     if as_dict is None:
         return pftn.result_ind()
     if as_dict:
@@ -457,3 +459,4 @@ def Pat(item, *args, mode_kind_map=None, op_mode_map=None):
 
 
 pattern = Pat
+

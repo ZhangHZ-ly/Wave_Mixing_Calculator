@@ -3,6 +3,7 @@ from sympy.core.expr import Expr
 from sympy.core.add import Add
 from sympy.core.mul import Mul
 from sympy.core.power import Pow
+from sympy.functions.elementary.complexes import Abs, conjugate
 from sympy.core.function import Function, Derivative, diff, Subs, UndefinedFunction
 from sympy.core.relational import Relational
 from sympy.core.numbers import Integer
@@ -14,13 +15,14 @@ from sympy.core.sympify import sympify
 from sympy.physics.quantum.anticommutator import AntiCommutator
 from sympy.physics.quantum.commutator import Commutator
 from op_patterns import *
-from op_patterns.boson_pattern import fac
+from op_patterns.boson_pattern import fac, BosonNum, NumShift
 from .pattern_form import PFTableProcessor
 from sortedcontainers import SortedDict
 from functools import lru_cache, cached_property
+from itertools import product
 import warnings
 
-__all__ = ['PerturbExpander']
+__all__ = ['PerturbExpander', 'R_coeff', 'DerivFactorCache']
 
 warnings.simplefilter("once", FutureWarning)
 class DerivCache:
@@ -80,6 +82,65 @@ class DerivCache:
         for j in range(i, self.dim):
             for n in range(1, orders[j]+1):
                 pos = (*orders[:j], n, *orders[j+1:])
+                if pos in self.cache:
+                    del self.cache[pos]
+
+@lru_cache(maxsize=None)
+def R_coeff(l: int, k: int) -> int:
+    """
+    Calculates flipped OEIS-A035342
+    i.e. the (l, l-k+1) element of the array
+    """
+    if l == 0:
+        return 1 if k == 0 else 0
+    if k <= 0 or l < k:
+        return 0
+    return k * R_coeff(l - 1, k) + (k + l - 1) * R_coeff(l - 1, k - 1)
+
+class DerivFactorCache:
+    """
+    Cache for (diff(f)/factorial) per variable.
+    Automatically handles one-variable-at-a-time growth along 'grow_index'.
+    """
+    def __init__(self, f, Ns, lim=None):
+        self.f = f
+        self.Ns = tuple(Ns)
+        self.dim = len(Ns)
+        self.lim = lim
+        self.cache = {(0,) * self.dim: f}
+
+    def get(self, orders, i=None, **kwargs):
+        if len(orders) != self.dim:
+            raise ValueError('Wrong input dimension, expected %s' % self.dim)
+        if any(n < 0 for n in orders):
+            raise ValueError('The order must be nonnegative')
+        if self.lim is not None and sum(orders) > self.lim:
+            raise ValueError('Exceeds the maximal order limit')
+        if orders in self.cache:
+            expr = self.cache[orders]
+        elif i is None:
+            for idx, n in enumerate(orders):
+                if n > 0:
+                    expr = self.get(orders[:idx] + (n,) + (0,) * (self.dim - idx - 1), idx, **kwargs)
+        else:
+            if i < 0:
+                i = self.dim + i
+            n = orders[i]
+            if n == 0:
+                return self.get(orders)
+            prev_orders = orders[:i] + (n - 1,) + orders[i + 1:]
+            expr = diff(self.get(prev_orders, i, **kwargs), self.Ns[i], **kwargs) / n
+            self.cache[orders] = expr
+        return expr
+
+    def release(self, orders, i):
+        if len(orders) != self.dim:
+            raise ValueError('Wrong input dimension, expected %s' % self.dim)
+        if i < 0:
+            i = self.dim + i
+        for j in range(i, self.dim):
+            for n in range(1, orders[j] + 1):
+                pos = orders[:j] + (n,) + orders[j + 1:]
                 if pos in self.cache:
                     del self.cache[pos]
 @lru_cache()
@@ -249,6 +310,20 @@ class PerturbExpander:
             case 'p':
                 self.rp[t] = (id, fh)
 
+    def copy(self, cache=False):
+        """
+        Returns a copy of the current instance.
+        If cache == True, also copies the cache of leading order.
+        """
+        new = PerturbExpander(self.assumptions)
+        new.rc = self.rc.copy()
+        new.rs = self.rs.copy()
+        new.rp = self.rp.copy()
+        if cache:
+            new._lo_cache = self._lo_cache.copy()
+            new._subs_cache = self._subs_cache.copy()
+        return new
+
     def leading_order(self, expr):
         """
         Returns the leading order of the expr:
@@ -262,6 +337,9 @@ class PerturbExpander:
             return S.Zero, S.Infinity
         if expr.is_number:
             return expr, S.Zero
+        if isinstance(expr, (Abs, conjugate)):
+            le, oe = self.leading_order(expr.args[0])
+            return expr.func(le), oe
         if isinstance(expr, tuple(self.rc)):
             return expr, S.Zero
         if isinstance(expr, tuple(self.rs)):
@@ -278,8 +356,11 @@ class PerturbExpander:
         if isinstance(expr, tuple(self.rp)):
             id, fh = self.rp[next(t for t in self.rp if isinstance(expr, t))]
             eid = getattr(expr, id)
-            if (eid in self.assumptions and self.assumptions[eid] != 0):
-                return expr, fh(expr) * self.assumptions[eid]
+            if eid in self.assumptions and self.assumptions[eid] != 0:
+                return expr, fh(expr) * sympify(self.assumptions[eid])
+            name = getattr(eid, 'name', str(eid))
+            if name in self.assumptions and self.assumptions[name] != 0:
+                return expr, fh(expr) * sympify(self.assumptions[name])
             return expr, S.Zero
         if expr in self._lo_cache:
             return self._lo_cache[expr]
@@ -404,6 +485,10 @@ class PerturbExpander:
             self._subs_cache = dict(zip(expr.variables, expr.point))
             yield from self.expand_expr(expr.expr, n, **kwargs)
             self._subs_cache.clear()
+        elif isinstance(expr, (Abs, conjugate)):
+            le, oe = self.leading_order(expr)
+            if oe is not S.Infinity and oe.is_number and oe <= n:
+                yield le, oe
         elif isinstance(expr, (Integral, Sum)):
             # assume that the integral is always finite and irrelevant to the order
             yield from ((expr.func(t, *expr.limits), o)
@@ -589,10 +674,14 @@ class PerturbExpander:
                         return Mul(*cs, nf), current_sum
             else:
                 ne = expr.doit(**kwargs)
-                if ne == expr:
+                if ne != expr:
                     yield from self.expand_expr(ne, n, **kwargs)
                     return
                 warnings.warn('Failed to deal with the expression', FutureWarning)
+                o = self.leading_order(expr)[1]
+                if o is not S.Infinity and o <= n:
+                    yield expr, o
+                return
             def rec(i, remaining, prefix, deriv_orders, current_sum, last_nz):
                 if i == dim:
                     result = term(remaining, prefix, deriv_orders, current_sum, last_nz)
@@ -632,3 +721,178 @@ class PerturbExpander:
             nb = Add(*(self.leading_order(b)[1] for b in bs))
             new_t[(bs, fs)] = Add(*(e[0] for e in self.expand_expr(t, n-nb, **kwargs)))
         return PFTableProcessor(new_t, Add(*(e[0] for e in self.expand_expr(pf.npf, n, **kwargs))))
+
+    def cohr_avr(self, expr, cohr_dict, order=0, **kwargs):
+        """
+        Yields perturbative expansion terms of the expectation value of expr
+        under coherent state(s) for specified mode(s), up to the given order.
+
+        :param expr: Expr or operator expression.
+        :param cohr_dict: Mapping mode identifiers to coherent amplitudes alpha.
+        :param order: Perturbative order cutoff.
+        """
+        expr = sympify(expr)
+        if expr is S.Zero:
+            return
+
+        order = sympify(order)
+        pe_cohr = self.copy(cache=False)
+        assump = dict(pe_cohr.assumptions)
+        norm_cohr = {}
+        for k, v in cohr_dict.items():
+            if hasattr(k, 'name'):
+                k = k.name
+            k = sympify(k)
+            if expr.has(BosonNum(k)) or expr.has(k):
+                default_order = assump.get(k, S.Zero)
+                target_order = default_order if default_order < 0 else S.NegativeOne
+                assump[k] = target_order
+                norm_cohr[k] = sympify(v)
+        pe_cohr.assumptions = Dict(assump)
+
+        if not norm_cohr:
+            yield from pe_cohr.expand_expr(expr, order, **kwargs)
+            return
+
+        mode_ops = []
+        subs_dict = {}
+        weights = []
+        for m, alpha in norm_cohr.items():
+            bn = BosonNum(m)
+            op = bn if expr.has(bn) else m
+            mode_ops.append(op)
+            subs_dict[op] = Abs(alpha) ** 2
+            m_ord = assump.get(m, S.NegativeOne)
+            w = int(abs(2 * m_ord))
+            weights.append(w if w > 0 else 1)
+
+        Ns = tuple(mode_ops)
+        dim = len(Ns)
+        lo_base = pe_cohr.leading_order(expr)[1]
+        if lo_base is S.Infinity:
+            return
+
+        rem_budget = order - lo_base
+        if rem_budget < 0:
+            return
+
+        lim_deriv = 2 * max(1, max(rem_budget // w for w in weights))
+        dfc = DerivFactorCache(expr, Ns, lim=lim_deriv)
+        min_w = min(weights)
+
+        def rec(i, remaining, prefix, last_nz):
+            if i == dim:
+                l = tuple(prefix)
+                for k in product(*[(0,) if li == 0 else range(1, li + 1) for li in l]):
+                    coeff = 1
+                    lk = []
+                    grow_index = -1
+                    k_prev = [0 for _ in range(dim)]
+
+                    for j, (lj, kj) in enumerate(zip(l, k)):
+                        lk.append(lj + kj)
+                        Ri = R_coeff(lj, kj)
+                        coeff *= Ri * (Ns[j] ** kj)
+                        if k[j] > k_prev[j]:
+                            grow_index = j
+                        k_prev[j] = k[j]
+
+                    cat = coeff * dfc.get(tuple(lk), grow_index, **kwargs)
+                    for t, ot in pe_cohr.expand_expr(cat, order, **kwargs):
+                        t_sub = t.subs(subs_dict)
+                        yield t_sub, ot
+
+                if remaining < min_w and last_nz is not None:
+                    dfc.release(l, last_nz)
+                return
+
+            w = weights[i]
+            max_count = remaining // w
+            for x in range(max_count + 1):
+                prefix.append(x)
+                next_last = i if x != 0 else last_nz
+                yield from rec(i + 1, remaining - x * w, prefix, next_last)
+                del prefix[-1]
+
+        yield from rec(0, rem_budget, [], 0)
+
+    def cohr_pf(self, p: PFTableProcessor, cohr_dict: dict, order: int) -> PFTableProcessor:
+        """
+        Evaluates a PatternForm object under coherent state assertion for specified modes,
+        expanded perturbatively up to order.
+
+        :param p: Input PatternForm object.
+        :param cohr_dict: Dict mapping mode identifier (or symbol) to coherent amplitude alpha.
+        :param order: Perturbative expansion order cutoff.
+        :return: Evaluated and expanded PatternForm.
+        """
+        if not p.table and p.npf == S.Zero:
+            return PFTableProcessor()
+
+        order = sympify(order)
+        pe_cohr = self.copy(cache=False)
+        assump = dict(pe_cohr.assumptions)
+        norm_cohr = {}
+        for k, v in cohr_dict.items():
+            if hasattr(k, 'name'):
+                k = k.name
+            k = sympify(k)
+            nk = BosonNum(k)
+            if (any(any(b.name == k for b in bf[0]) or tail.has(nk)
+                   for bf, tail in p.table.items())
+                   or p.npf.has(nk)):
+                default_order = assump.get(k, S.Zero)
+                target_order = default_order if default_order < 0 else S.NegativeOne
+                assump[k] = target_order
+                norm_cohr[k] = sympify(v)
+        pe_cohr.assumptions = Dict(assump)
+
+        new_table = {}
+        for (bs, fs), tail in p.table.items():
+            b_cohr_list = []
+            bs_rest_list = []
+            for b in bs:
+                if b.name in norm_cohr:
+                    b_cohr_list.append(b)
+                else:
+                    bs_rest_list.append(b)
+            bs_rest = tuple(bs_rest_list)
+
+            norm_tail = tail
+            c_amp = S.One
+            c_amp_ord = S.Zero
+
+            for b in b_cohr_list:
+                alpha = norm_cohr[b.name]
+                m = b.exps[0] if hasattr(b, 'exps') else 1
+                b_ord = pe_cohr.leading_order(b)[1]
+                if b_ord is S.Infinity:
+                    c_amp_ord = S.Infinity
+                    break
+                c_amp_ord += b_ord
+                if b.left_base.is_annihilation:
+                    c_amp *= alpha ** m
+                    norm_tail = NumShift(norm_tail, -1, b).doit()
+                else:
+                    c_amp *= conjugate(alpha) ** m
+
+            if norm_tail == S.Zero or c_amp_ord is S.Infinity:
+                continue
+
+            rem_order = order - c_amp_ord
+
+            expr_t_terms = [t for t, o in pe_cohr.cohr_avr(norm_tail, cohr_dict, order=rem_order)]
+            if expr_t_terms:
+                exp_term = c_amp * Add(*expr_t_terms)
+                if exp_term != S.Zero:
+                    key = (bs_rest, fs)
+                    new_table[key] = new_table.get(key, S.Zero) + exp_term
+
+        new_npf = S.Zero
+        if p.npf != S.Zero:
+            npf_terms = [t for t, o in pe_cohr.cohr_avr(p.npf, cohr_dict, order=order)]
+            if npf_terms:
+                new_npf = Add(*npf_terms)
+
+        clean_table = {k: v for k, v in new_table.items() if v != S.Zero}
+        return PFTableProcessor(clean_table, new_npf) if (clean_table or new_npf != S.Zero) else PFTableProcessor()

@@ -736,7 +736,7 @@ function renderModalFormulaWithTabs(containerEl, tabGroupEl, tabTBtn, tabGBtn, l
         resBlock.style.borderTop = '1px dashed #cbd5e1';
         resBlock.style.marginTop = '0.45rem';
         resBlock.style.paddingTop = '0.45rem';
-        resBlock.innerHTML = '<div style="font-size: 0.75rem; font-weight: 600; color: #475569; margin-bottom: 0.2rem;">Residue:</div>';
+        resBlock.innerHTML = '<div style="font-size: 0.75rem; font-weight: 600; color: #475569; margin-bottom: 0.2rem;">Remainder:</div>';
         const mathRes = document.createElement('div');
         katex.render(resLatex, mathRes, { displayMode: true, throwOnError: false });
         resBlock.appendChild(mathRes);
@@ -829,7 +829,7 @@ function openSaveAnswerModal(ws) {
       null,
       null,
       currentPfLatex,
-      currentPfResidueLatex || null,
+      currentPfRemainderLatex || null,
       't'
     );
     document.getElementById('saveAnswerModal').classList.add('active');
@@ -999,7 +999,7 @@ async function saveAnswerExpression() {
       sourceInput: currentInputText || (arr[dupIndex] ? arr[dupIndex].sourceInput : '') || '',
       exprStr: currentPfExpr || (arr[dupIndex] ? arr[dupIndex].exprStr : '') || '',
       latex: currentPfLatex || null,
-      residue_latex: currentPfResidueLatex || null,
+      remainder_latex: currentPfRemainderLatex || null,
       notes: notes
     };
     saveWorkspaceToStorage(activeWorkspace);
@@ -1016,7 +1016,7 @@ async function saveAnswerExpression() {
     sourceInput: currentInputText,
     exprStr: currentPfExpr || '',
     latex: currentPfLatex || null,
-    residue_latex: currentPfResidueLatex || null,
+    remainder_latex: currentPfRemainderLatex || null,
     notes: notes
   });
 
@@ -1077,7 +1077,7 @@ function openRenameModal(itemId, ws) {
           null,
           null,
           item.latex || '',
-          item.residue_latex || null,
+          item.remainder_latex || null,
           't'
         );
       }

@@ -12,16 +12,18 @@ from sympy.concrete.summations import Sum
 from sympy.physics.quantum.operator import Operator, HermitianOperator
 from sympy.core.traversal import bottom_up
 from sympy.core.exprtools import factor_terms
+from sympy.polys.polytools import cancel
 from sympy.core.containers import Dict
-from sympy.functions.elementary.complexes import Abs, conjugate
-from op_patterns.boson_pattern import BosonNum, NumShift
+from op_patterns.boson_pattern import BosonNum, NumShift, fac
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.dagger import Dagger
-from perturb_eval import PF, PE, bsc, pattern_form, cohr_avr
-from dsolve_pm import group_terms, dsd1, dsd2, d_p2s, _ps
+from perturb_eval import PF, PE, bsc, pattern_form
+from perturb_eval.perturb_expander import gperm
+from dsolve_pm import group_terms, dsd1, dsd2, _ps
 from collections import defaultdict
 from itertools import product
 from functools import cached_property, cache, lru_cache
+from sympy.functions.combinatorial.factorials import factorial, binomial
 import warnings
 
 warnings.simplefilter("once", UserWarning)
@@ -39,6 +41,31 @@ def mm_comm_dummy(order: int = 0):
         # wrapp the factors in a binary number
         r[i | (1 << (order-1))] = Sum(c*s, (s, 0, n-1)).doit()
     return r
+
+@lru_cache(64)
+def _weak_cop_p(m: int, p: int, n1, n2):
+    """
+    Polynomial P_{m, p}(N_1, N_2) generated from normal-ordering single-mode
+    operators when commuting (a_1 a_2)^m with (A†)^N or (a_1† a_2†)^m with A^N.
+    """
+    delta = p - m
+    terms = []
+    N1 = BosonNum(n1)
+    N2 = BosonNum(n2)
+    for k_term in range(max(0, p - m), min(m, p) + 1):
+        j_term = p - k_term
+        c_comb = binomial(m, k_term) * binomial(m, j_term)
+        u_term, v_term = m - j_term, k_term
+        if delta >= 0:
+            f1 = Mul(*[N1 + r for r in range(1, u_term + 1)]) if u_term > 0 else S.One
+            f2 = Mul(*[N2 - r for r in range(m - k_term)]) if (m - k_term) > 0 else S.One
+            terms.append(c_comb * f1 * f2)
+        else:
+            d_term = -delta
+            f1 = Mul(*[N1 - d_term + r for r in range(1, v_term + 1)]) if v_term > 0 else S.One
+            f2 = Mul(*[N2 - r for r in range(j_term)]) if j_term > 0 else S.One
+            terms.append(c_comb * f1 * f2)
+    return Add(*terms)
 
 class MultimodeCOP(Operator):
     """
@@ -231,7 +258,7 @@ class MultimodeNum2(HermitianOperator):
 
     Note: For the degenerate mode with parity=0, the displacement should be doubled,
     so the exact expression for the sum is in fact
-    Σ(N_1 + N_2 + 1) + displacement * (n_modes + 1).
+    Σ(N_1 + N_2 + displacement + 1)  + displacement.
     """
 
     boson_num_only = True
@@ -246,7 +273,8 @@ class MultimodeNum2(HermitianOperator):
             raise ValueError('The two operators must be in different modes')
         parity = bool(parity)
         if name2 is None or name1 is not None and name1.compare(name2) == 1:
-            return (-1)**parity*HermitianOperator.__new__(cls, name2, name1, parity, displacement)
+            return (-1)**parity*HermitianOperator.__new__(cls, name2, name1,
+                                                          parity, displacement)
         return HermitianOperator.__new__(cls, name1, name2, parity, displacement)
     
     @property
@@ -306,7 +334,14 @@ def mmn_shift(e, mmop: MultimodeCOP, pd):
                     else MultimodeNum2(*e.names, e.parity, e.displacement-2*pd))
     return e
 
-def bpswap(a: BosonOp, p: PF, s, to_left=True):
+def bp_swap(a: BosonOp, p: PF, s, to_left=True):
+    """
+    Swaps the single-mode boson operator (a)
+    and given PF (p) with Multimode operators
+
+    :param s: the sign factor for the swap, either 1 or -1
+    :param to_left: whether the operator is swapped to the left of the PF
+    """
     def mmn_shift(*args):
         if args[0] == a.name:
             if a.is_annihilation ^ to_left:
@@ -324,8 +359,39 @@ def bpswap(a: BosonOp, p: PF, s, to_left=True):
                 return MultimodeNum2(*args)-1
             return MultimodeNum2(*args)+1
         return MultimodeNum2(*args)
-    return p.n_apply(lambda e: s*e.replace(MultimodeNum, mmn_shift)
-                                  .replace(MultimodeNum2, mmn2_shift))
+    def shift_e(e):
+        res = NumShift(e.replace(MultimodeNum, mmn_shift)
+                       .replace(MultimodeNum2, mmn2_shift),
+                       1 if to_left else -1, a).doit()
+        return s * res
+
+    weak_names = {a_s.name, a_i.name, 'a_1', 'a_2'}
+    new_table = defaultdict(lambda: S.Zero)
+    new_npf = shift_e(p.npf) if p.npf != S.Zero else S.Zero
+    pf_a = PF({((a,), ()): S.One})
+
+    for (bs, fs), tail in p.table.items():
+        has_weak = any(getattr(b, 'name', None) in weak_names for b in bs)
+        if not has_weak:
+            new_table[(bs, fs)] = Add(new_table[(bs, fs)], shift_e(tail))
+        else:
+            pf_bs = PF({(bs, fs): S.One})
+            if to_left:
+                prod = pf_bs.mul_ind(pf_a)
+                base_tail = shift_e(tail)
+            else:
+                prod = pf_a.mul_ind(pf_bs)
+                base_tail = s * tail
+
+            for (new_bs, new_fs), factor in prod.table.items():
+                new_table[(new_bs, new_fs)] = Add(new_table[(new_bs, new_fs)],
+                                                  factor * base_tail)
+
+            if prod.npf != S.Zero:
+                new_npf = Add(new_npf, prod.npf * base_tail)
+
+    clean_table = {k: v for k, v in new_table.items() if v != S.Zero}
+    return PF(clean_table, new_npf)
 
 def _tdz(i, exps):
     lz=False
@@ -384,10 +450,46 @@ def d_apply(e, f):
         return {k: d_apply(v, f) for k, v in e.items()}
     if isinstance(e, PF):
         try:
-            return e.n_apply(f)
+            return e.n_apply(f, on_npf=True)
         except (TypeError, AttributeError):
             pass
     return f(e)
+
+def _collapse_boson_num(expr, vac_names):
+    if not isinstance(expr, Expr) or expr.is_number:
+        return expr
+    return expr.replace(
+        lambda x: isinstance(x, BosonNum),
+        lambda x: S.Zero if (x.name in vac_names or str(x.name) in vac_names) else x
+    )
+
+def vac_pf(p: PF, vac_mode) -> PF:
+    """
+    Evaluates the vacuum projection of a PatternForm (PF) for given mode(s).
+
+    :param p: Input PatternForm object.
+    :param vac_mode: Mode name, Symbol, or iterable of mode names asserted to be in vacuum.
+    :return: Collapsed PatternForm.
+    """
+    if not p.table and p.npf == S.Zero:
+        return PF0
+
+    if isinstance(vac_mode, (str, Symbol)) or not hasattr(vac_mode, '__iter__'):
+        vac_set = {vac_mode.name if hasattr(vac_mode, 'name') else vac_mode}
+    else:
+        vac_set = {m.name if hasattr(m, 'name') else m for m in vac_mode}
+    vac_names = {sympify(m) for m in vac_set} | {str(m) for m in vac_set}
+
+    new_table = {}
+    for (bs, fs), tail in p.table.items():
+        if any((b.name in vac_names or str(b.name) in vac_names) for b in bs):
+            continue
+        c_tail = _collapse_boson_num(tail, vac_names)
+        if c_tail != S.Zero:
+            new_table[(bs, fs)] = c_tail
+
+    new_npf = _collapse_boson_num(p.npf, vac_names)
+    return PF(new_table, new_npf) if (new_table or new_npf != S.Zero) else PF0
 
 # Dummy symbols for:
 # the MultimodeNum of the signal field
@@ -428,18 +530,71 @@ INIT_OPS = {
         'a_1': f_dict({a_s: {(None,): PF_ONE}}, b_left=True),
         'a_2': f_dict({a_i: {(None,): PF_ONE}}, b_left=True),
         'A': {(True, 1): PF_ONE},
-        'N_t': PF({((), ()): MultimodeNum2(a_s.name, a_i.name, 0)}),
+        'N_t': PF({((), ()): MultimodeNum2(a_s.name, a_i.name, S.Zero)}),
     },
     False: {
         'a_0': f_dict({a_p: {(None,): PF_ONE}}, b_left=True),
         'a_1': f_dict({a_s: {(None,): PF_ONE}}, b_left=True),
         'a_2': PF({((a_i,), ()): S.One}),
         'A': {(True, 1): PF_ONE},
-        'N_t': PF({((), ()): MultimodeNum2(a_p.name, a_s.name, 1)}),
+        'N_t': PF({((), ()): MultimodeNum2(a_p.name, a_s.name, S.One)}),
     },
 }
 
-class WM_Processor:
+def nd_simp(expr, nd):
+    """
+    Simplifies expressions involving powers of nd (such as BosonNum,
+    Symbol, or Abs(alpha)**2) by:
+    1. Extracting common factors of nd from Add expressions inside Mul;
+    2. Merging powers of nd (using dummy commutative substitution if nd is non-commutative or composite);
+    """
+    if isinstance(expr, (PF, dict, f_dict)):
+        return d_apply(expr, lambda x: nd_simp(x, nd))
+    target_sym = nd.base if nd.is_Pow else nd
+    if not isinstance(expr, Expr) or not expr.has(target_sym):
+        return expr
+
+    need_dummy = not (nd.is_commutative and nd.is_Symbol)
+    nd_sym = _nd if need_dummy else nd
+
+    def simp_mul(e):
+        if e.is_Mul and e.has(target_sym):
+            expr_sub = e.subs({nd: nd_sym}) if need_dummy else e
+            if not expr_sub.has(nd_sym):
+                return e
+            if not expr_sub.is_Mul:
+                return expr_sub.subs({nd_sym: nd}) if need_dummy else expr_sub
+
+            args = []
+            for a in Mul.make_args(expr_sub):
+                if a.is_Add and a.has(nd_sym):
+                    args.extend(Mul.make_args(factor_terms(a, clear=True, fraction=True)))
+                elif a.is_Pow and a.base.is_Add and a.base.has(nd_sym):
+                    args.extend(
+                        arg**a.exp
+                        for arg in Mul.make_args(factor_terms(a.base, clear=True, fraction=True))
+                    )
+                else:
+                    args.append(a)
+
+            n_factors = []
+            other = []
+            for arg in args:
+                if arg.has(nd_sym):
+                    n_factors.append(arg)
+                else:
+                    other.append(arg)
+
+            n_part = _ps(Mul(*n_factors)) if n_factors else S.One
+            if need_dummy:
+                n_part = n_part.subs({nd_sym: nd})
+            return Mul(*other, n_part)
+        return e
+
+    return bottom_up(expr, simp_mul)
+
+
+class WMProcessor:
     """
     Base processor for quantum multimode parametric wave-mixing processes (TWM, FWM).
 
@@ -454,22 +609,35 @@ class WM_Processor:
 
     def __init__(self, dc=True, mismatch=False):
         self.dc = bool(dc)
+        self.nd = BosonNum(a_p.name) if dc else BosonNum(a_i.name)
+        self.a = ((MultimodeCOP(a_s.name, a_i.name, annih1=0),
+                   MultimodeCOP(a_s.name, a_i.name))
+                  if dc else (MultimodeCOP(a_p.name, a_s.name, 1, 0),
+                              MultimodeCOP(a_p.name, a_s.name, 1)))
         if isinstance(mismatch, (Expr, Symbol)):
             self.pm = mismatch
         else:
             self.pm = pm if mismatch else S.Zero
         self.sol = []
+        self.pe = PE({nlc: S.One})
+        self.pe.register(MultimodeNum)
+        self.pe.register(MultimodeNum2)
+        self.pe.register(MultimodeCOP)
 
     def update_pe(self, orders: dict = None):
         """Update self.pe assumptions with custom symbol/mode orders."""
-        assumptions = dict(self.base_assumptions)
+        assumptions = dict(self.pe.assumptions)
+        clr = False
         if orders:
             for k, v in orders.items():
                 if v is not None:
+                    if assumptions.get(k, v) != sympify(v):
+                        clr = True
                     assumptions[k] = sympify(v)
         self.pe.assumptions = Dict(assumptions)
-        self.pe._lo_cache.clear()
-        self.pe._subs_cache.clear()
+        if clr:
+            self.pe._lo_cache.clear()
+            self.pe._subs_cache.clear()
 
     def to_expr(self, x):
         """
@@ -566,6 +734,7 @@ class WM_Processor:
         """
         Adds multiple dicts together, collecting the same keys
         """
+        ds = [d for d in ds if d]
         if not ds:
             return dict()
         if len(ds) == 1:
@@ -583,7 +752,7 @@ class WM_Processor:
                         result[k].append(v)
                 if d.b_left != b_left:
                     for k, v in d.items():
-                        for nk, nv in self.bdswap(k, v, to_left=b_left).items():
+                        for nk, nv in self.bd_swap(k, v, to_left=b_left).items():
                             result[nk].append(nv)
             return f_dict({k: self.d_add(*vs) for k, vs in result.items()}, b_left=b_left)
         if any(isinstance(d, f_dict) for d in ds):
@@ -595,28 +764,103 @@ class WM_Processor:
         return {k: PF.add(*vs) for k, vs in result.items()}
 
     def d_mul(self, d0, d1, d2, mid=None):
-        if isinstance(mid, MultimodeNum):
-            for (k2, e2) in d2.items():
-                pd = _pd(k2)
-                for (k1, e1) in d1.items():
-                    k = t_mul(k1, k2)
-                    new = e1.n_apply(lambda t: mmn_shift(mid*t, self.a[0], pd))
-                    if k in d0:
-                        d0[k] = PF.add(d0[k], new.mul_ind(e2))
-                    else:
-                        d0[k] = new.mul_ind(e2)
-        else:
-            for (k2, e2) in d2.items():
-                pd = _pd(k2)
-                for (k1, e1) in d1.items():
-                    k = t_mul(k1, k2, mid)
-                    new = e1.n_apply(lambda t: mmn_shift(t, self.a[0], pd))
-                    if k in d0:
-                        d0[k] = PF.add(d0[k], new.mul_ind(e2))
-                    else:
-                        d0[k] = new.mul_ind(e2)
+        if not d1 or not d2:
+            return
+        weak_names = set(self.a[0].names)
+        n1, n2 = self.a[0].names
+        parity = self.a[0].parity
 
-    def e_mul(self, p1: dict, p2: dict):
+        def shift_num_ops(expr, pd):
+            if not pd:
+                return expr
+            expr = mmn_shift(expr, self.a[0], pd)
+            bn1 = BosonNum(n1)
+            bn2 = BosonNum(n2)
+            sub = {}
+            if expr.has(bn1):
+                sub[bn1] = bn1 + pd
+            if expr.has(bn2):
+                shift2 = -pd if parity else pd
+                sub[bn2] = bn2 + shift2
+            if sub:
+                expr = expr.subs(sub)
+            return expr
+
+        for (k2, e2) in d2.items():
+            pd = _pd(k2)
+            for (k1, e1) in d1.items():
+                has_weak_pair = False
+                if e1.table:
+                    for bs, fs in e1.table.keys():
+                        bw = tuple(b for b in bs if b.name in weak_names)
+                        if bw:
+                            if (self._match_cop(self.a[1], bw) is not None
+                                or self._match_cop(self.a[0], bw) is not None):
+                                has_weak_pair = True
+                                break
+
+                if not has_weak_pair:
+                    k = t_mul(k1, k2) if isinstance(mid, MultimodeNum) else t_mul(k1, k2, mid)
+                    factor_mid = lambda t: shift_num_ops(mid * t if isinstance(mid, MultimodeNum) else t, pd)
+                    new = e1.n_apply(factor_mid)
+                    term_prod = new.mul_ind(e2)
+                    if k in d0:
+                        d0[k] = PF.add(d0[k], term_prod)
+                    else:
+                        d0[k] = term_prod
+                else:
+                    if e1.npf != S.Zero:
+                        k = t_mul(k1, k2) if isinstance(mid, MultimodeNum) else t_mul(k1, k2, mid)
+                        c_npf = shift_num_ops(mid * e1.npf if isinstance(mid, MultimodeNum) else e1.npf, pd)
+                        p_npf = PF({}, c_npf).mul_ind(e2)
+                        if k in d0:
+                            d0[k] = PF.add(d0[k], p_npf)
+                        else:
+                            d0[k] = p_npf
+
+                    for (bs, fs), tail in e1.table.items():
+                        bw = tuple(b for b in bs if b.name in weak_names)
+                        bs_strong = tuple(b for b in bs if b.name not in weak_names)
+
+                        m_ann = self._match_cop(self.a[1], bw) if bw else None
+                        m_cre = self._match_cop(self.a[0], bw) if bw else None
+
+                        if m_ann is None and m_cre is None:
+                            k = t_mul(k1, k2) if isinstance(mid, MultimodeNum) else t_mul(k1, k2, mid)
+                            c_tail = shift_num_ops(mid * tail if isinstance(mid, MultimodeNum) else tail, pd)
+                            p_term = PF({(bs, fs): c_tail}, S.Zero).mul_ind(e2)
+                            if k in d0:
+                                d0[k] = PF.add(d0[k], p_term)
+                            else:
+                                d0[k] = p_term
+                        else:
+                            cop_idx = 1 if m_ann is not None else 0
+                            m = m_ann if m_ann is not None else m_cre
+                            c_tail = shift_num_ops(mid * tail if isinstance(mid, MultimodeNum) else tail, pd)
+
+                            for s, k_sub, bw_info, P_num in self.swap_tuple_weak_cop(cop_idx, m, k2):
+                                k_tot = t_mul(k1, k_sub) if isinstance(mid, MultimodeNum) else t_mul(k1, k_sub, mid)
+                                if bw_info is None:
+                                    new_bw = ()
+                                else:
+                                    new_cop_idx, new_m = bw_info
+                                    cop_tgt = self.a[new_cop_idx]
+                                    op1 = BosonOp(cop_tgt.names[0], cop_tgt.annih1)
+                                    op2 = BosonOp(cop_tgt.names[1], cop_tgt.annih2)
+                                    if new_m == 1:
+                                        new_bw = (op1, op2)
+                                    else:
+                                        new_bw = (op1**new_m, op2**new_m)
+
+                                new_bs = bs_strong + new_bw
+                                final_tail = s * c_tail * P_num
+                                p_term = PF({(new_bs, fs): final_tail}, S.Zero).mul_ind(e2)
+                                if k_tot in d0:
+                                    d0[k_tot] = PF.add(d0[k_tot], p_term)
+                                else:
+                                    d0[k_tot] = p_term
+
+    def e_mul(self, e1: dict, e2: dict):
         """
         Multiplies two dict representations of operators.
         
@@ -628,167 +872,238 @@ class WM_Processor:
         to be trapped in the middle, bdswap is automatically invoked
         to swap it to the correct boundary.
         """
-        if not p1 or not p2:
+        if not e1 or not e2:
             return dict()
-        is_f1 = isinstance(p1, f_dict)
-        is_f2 = isinstance(p2, f_dict)
+        is_f1 = isinstance(e1, f_dict)
+        is_f2 = isinstance(e2, f_dict)
         result = dict()
         if is_f1 and is_f2:
-            if self.f_dict_parity(p1) == self.f_dict_parity(p2):
-                raise ValueError('Cannot use multimode operators to represent the product')
-            if p1.b_left:
+            if self.f_dict_parity(e1) == self.f_dict_parity(e2):
+                raise ValueError('Solution parity unbalanced')
+            if e1.b_left:
                 new_p1 = f_dict(b_left=False)
-                for b, d in p1.items():
-                    for nb, nd in self.bdswap(b, d, to_left=False).items():
+                for b, d in e1.items():
+                    for nb, nd in self.bd_swap(b, d, to_left=False).items():
                         if nd: new_p1[nb] = self.d_add(new_p1.get(nb, dict()), nd)
-                p1 = new_p1
-            if not p2.b_left:
+                e1 = new_p1
+            if not e2.b_left:
                 new_p2 = f_dict(b_left=True)
-                for b, d in p2.items():
-                    for nb, nd in self.bdswap(b, d, to_left=True).items():
+                for b, d in e2.items():
+                    for nb, nd in self.bd_swap(b, d, to_left=True).items():
                         if nd: new_p2[nb] = self.d_add(new_p2.get(nb, dict()), nd)
-                p2 = new_p2
-            for (b1, d1), (b2, d2) in product(p1.items(), p2.items()):
+                e2 = new_p2
+            for (b1, d1), (b2, d2) in product(e1.items(), e2.items()):
                 if b1 == Dagger(b2):
-                    mn = (MultimodeNum(b1.name, 1) if b1.is_annihilation else MultimodeNum(b1.name))
+                    mn = (MultimodeNum(b1.name, S.One) if b1.is_annihilation
+                          else MultimodeNum(b1.name))
                     self.d_mul(result, d1, d2, mn)
                 elif b1.compare(b2) == 1:
                     self.d_mul(result, d1, d2, b2.is_annihilation)
                 else:
                     self.d_mul(result, d1, d2, b1.is_annihilation)
         elif is_f1:
-            if p1.b_left:
+            if e1.b_left:
                 result = f_dict(b_left=True)
-                for b, d in p1.items():
+                for b, d in e1.items():
                     result[b] = dict()
-                    self.d_mul(result[b], d, p2)
+                    self.d_mul(result[b], d, e2)
             else:
                 result = f_dict(b_left=False)
-                for b, d1 in p1.items():
-                    for nb, p2_prime in self.bdswap(b, p2, to_left=False).items():
+                for b, d1 in e1.items():
+                    for nb, p2_prime in self.bd_swap(b, e2, to_left=False).items():
                         self.d_mul(result.setdefault(nb, dict()), d1, p2_prime)
         elif is_f2:
-            if not p2.b_left:
+            if not e2.b_left:
                 result = f_dict(b_left=False)
-                for b, d in p2.items():
+                for b, d in e2.items():
                     result[b] = dict()
-                    self.d_mul(result[b], p1, d)
+                    self.d_mul(result[b], e1, d)
             else:
                 result = f_dict(b_left=True)
-                for b, d2 in p2.items():
-                    for nb, p1_prime in self.bdswap(b, p1, to_left=True).items():
+                for b, d2 in e2.items():
+                    for nb, p1_prime in self.bd_swap(b, e1, to_left=True).items():
                         self.d_mul(result.setdefault(nb, dict()), p1_prime, d2)
         else:
-            self.d_mul(result, p1, p2)
+            self.d_mul(result, e1, e2)
 
         return result
+    
+    def f_to_dict(self, fd: f_dict) -> dict:
+        """
+        Moves the key (BosonOp) into between tuple_key and PF,
+        converting an f_dict into a dict with PF-values.
 
-    def bdswap(self, a: BosonOp, d, to_left=True):
+        - If fd.b_left is True: b is to the left of t * p;
+        swaps b past t to the right using bt_swap.
+
+        - If fd.b_left is False: b is to the right of t * p;
+        swaps b past p to the left using bp_swap.
+        """
+        res = dict()
+        if fd.b_left:
+            for b, d in fd.items():
+                for t, p in d.items():
+                    i, *exps = t
+                    for s, nb, nes in self.bt_swap(b, i, exps, to_left=False):
+                        key = _tdz(i, nes)
+                        pf_nb = pattern_form(nb, as_dict=None)
+                        val = (pf_nb.mul_ind(p) if s == 1
+                               else pf_nb.mul_ind(p).n_apply(lambda x: s * x, on_npf=True))
+                        if key in res:
+                            res[key] = PF.add(res[key], val)
+                        else:
+                            res[key] = val
+        else:
+            for b, d in fd.items():
+                for t, p in d.items():
+                    p_prime = bp_swap(b, p, 1, to_left=True)
+                    pf_b = pattern_form(b, as_dict=None)
+                    val = pf_b.mul_ind(p_prime)
+                    if t in res:
+                        res[t] = PF.add(res[t], val)
+                    else:
+                        res[t] = val
+        return res
+
+    def f_mul(self, e1, e2):
+        if not e1 or not e2:
+            return dict()
+        if not isinstance(e1, f_dict) or not isinstance(e2, f_dict):
+            return self.e_mul(e1, e2)
+        if self.f_dict_parity(e1) == self.f_dict_parity(e2):
+            raise ValueError('Solution parity unbalanced')
+        d1 = self.f_to_dict(e1)
+        d2 = self.f_to_dict(e2)
+        result = dict()
+        self.d_mul(result, d1, d2)
+        return result
+
+    def bt_swap(self, a: BosonOp, i, exps, to_left=False):
+        yield S.One, a, exps
+        if to_left:
+            for j, e in enumerate(exps):
+                if i ^ (j & 1) ^ (not self.dc and a.name==a_s.name) != a.is_annihilation:
+                    for s, b, nes in self.bt_swap(self._od(a), i, exps[:j], True):
+                        yield (S.NegativeOne**int(a.is_annihilation)*s*e,
+                               b, (*nes, e-1, *exps[j+1:]))
+        else:
+            for j, e in enumerate(exps):
+                ic = i ^ (j & 1)
+                if ic ^ (not self.dc and a.name==a_s.name) != a.is_annihilation:
+                    for s, b, nes in self.bt_swap(self._od(a), not ic, exps[j+1:], False):
+                        yield (S.NegativeOne**int(not a.is_annihilation)*s*e,
+                               b, (*exps[:j], e-1, *nes))
+
+    def bd_swap(self, a: BosonOp, d, to_left=True):
         """
         Swaps the order of the operator a and the dict d
         The direction of the swap (for a) is determined by the to_left parameter.
         """
-        def btswap(a: BosonOp, i, exps):
-            yield S.One, a, exps
-            if to_left:
-                for j, e in enumerate(exps):
-                    if i ^ (j & 1) ^ (not self.dc and a.name==a_s.name) != a.is_annihilation:
-                        for s, b, nes in btswap(self._od(a), i, exps[:j]):
-                            yield S.NegativeOne**int(a.is_annihilation)*s*e, b, (*nes, e-1, *exps[j+1:])
-            else:
-                for j, e in enumerate(exps):
-                    ic = i ^ (j & 1)
-                    if ic ^ (not self.dc and a.name==a_s.name) != a.is_annihilation:
-                        for s, b, nes in btswap(self._od(a), not ic, exps[j+1:]):
-                            yield S.NegativeOne**int(not a.is_annihilation)*s*e, b, (*exps[:j], e-1, *nes)
         new_dict = f_dict({a: dict(), self._od(a): dict()}, b_left=to_left)
         for t, p in d.items():
             i, *exps = t
-            for s, b, nes in btswap(a, i, exps):
+            for s, b, nes in self.bt_swap(a, i, exps, to_left=to_left):
                 key = _tdz(i, nes)
                 if key in new_dict[b]:
-                    new_dict[b][_tdz(i, nes)] = PF.add(new_dict[b][_tdz(i, nes)], bpswap(b, p, s, to_left))
+                    new_dict[b][_tdz(i, nes)] = PF.add(new_dict[b][_tdz(i, nes)],
+                                                       bp_swap(b, p, s, to_left))
                 else:
-                    new_dict[b][_tdz(i, nes)] = bpswap(b, p, s, to_left)
+                    new_dict[b][_tdz(i, nes)] = bp_swap(b, p, s, to_left)
         return new_dict
 
+    def _match_cop(self, cop, bw):
+        """
+        Matches a tuple of weak-field boson operators bw with a MultimodeCOP cop.
+        Returns the common exponent m if matched, otherwise None.
+        """
+        if len(bw) != 2:
+            return None
+        b1, b2 = bw
+        m1, m2 = b1.exps[0], b2.exps[0]
+        if m1 != m2:
+            return None
+        base1, base2 = b1.left_base, b2.left_base
+        n1, n2 = cop.names
+        a1, a2 = cop.annih1, cop.annih2
+        if base1.name == n1 and base2.name == n2:
+            if base1.is_annihilation == a1 and base2.is_annihilation == a2:
+                return m1
+        elif base1.name == n2 and base2.name == n1:
+            if base1.is_annihilation == a2 and base2.is_annihilation == a1:
+                return m1
+        return None
+
+    def swap_tuple_weak_cop(self, cop_idx: int, m: int, k: tuple):
+        """
+        Swaps a single-mode weak-field COP pair power (cop_idx, m)
+        with a multimode tuple key k = (i, *exps).
+
+        Yields (s, k_sub, bw_info, P_num):
+        - s: scalar combinatorial multiplier
+        - k_sub: resulting tuple key
+        - bw_info: None (if ladder operators eliminate) or (new_cop_idx, new_m)
+        - P_num: single-mode number operator polynomial in BosonNum
+        """
+        if not k or k == (None,) or len(k) == 1:
+            yield S.One, (None,), (cop_idx, m), S.One
+            return
+
+        i, *exps = k
+        if not exps:
+            yield S.One, (None,), (cop_idx, m), S.One
+            return
+
+        e_0 = exps[0]
+        exps_rest = exps[1:]
+        block_idx = int(bool(i))
+        k_rest = _tdz(not i, exps_rest) if exps_rest else (None,)
+
+        if block_idx == cop_idx:
+            # Same kind, commutes trivially
+            for s_r, sub_k, bw_r, P_r in self.swap_tuple_weak_cop(cop_idx, m, k_rest):
+                new_k = t_mul((i, e_0), sub_k)
+                yield s_r, new_k, bw_r, P_r
+            return
+
+        # Opposite kind, non-trivial swap
+        sigma = 1 if cop_idx == 1 else -1
+        n1, n2 = self.a[0].names
+        parity = self.a[0].parity
+        N1 = BosonNum(n1)
+        N2 = BosonNum(n2)
+
+        max_p = min(2 * m, e_0)
+        for p in range(max_p + 1):
+            c_p = (sigma**p) * (factorial(e_0) // factorial(e_0 - p))
+            e_0_prime = e_0 - p
+            delta = p - m
+            P_p = _weak_cop_p(m, p, n1, n2)
+
+            prefix_k = (i, e_0_prime) if e_0_prime > 0 else (None,)
+
+            if k_rest == (None,):
+                bw_info = (cop_idx if delta <= 0
+                           else 1 - cop_idx, abs(delta)) if delta != 0 else None
+                yield c_p, prefix_k, bw_info, P_p
+            else:
+                pd_rest = _pd(k_rest)
+                shift2 = -pd_rest if parity else pd_rest
+                P_p_shifted = P_p.subs({N1: N1 + pd_rest, N2: N2 + shift2})
+
+                if delta == 0:
+                    new_k = t_mul(prefix_k, k_rest)
+                    yield c_p, new_k, None, P_p_shifted
+                else:
+                    next_cop_idx = cop_idx if delta < 0 else 1 - cop_idx
+                    next_m = abs(delta)
+                    for s_r, sub_k, bw_r, P_r in self.swap_tuple_weak_cop(next_cop_idx,
+                                                                          next_m, k_rest):
+                        new_k = t_mul(prefix_k, sub_k)
+                        yield c_p * s_r, new_k, bw_r, P_p_shifted * P_r
+
+
     def nd_simp(self, expr):
-        """
-        Simplifies expressions involving powers of self.nd by:
-        1. Extracting common factors of self.nd from Add expressions inside Mul;
-        2. Merging powers of self.nd via substitution with commutative dummy symbol _nd;
-        """
-        def is_pure_nd_power(a):
-            if a == _nd:
-                return True, S.One
-            if a.is_Pow and a.base == _nd:
-                return True, a.exp
-            return False, S.Zero
-
-        def simp_mul(e):
-            if e.is_Mul and e.has(self.nd):
-                expr_sub = e.subs({self.nd: _nd})
-                if not expr_sub.is_Mul:
-                    return expr_sub.subs({_nd: self.nd})
-                args = []
-                for a in Mul.make_args(expr_sub):
-                    if a.is_Add and a.has(_nd):
-                        args.extend(Mul.make_args(factor_terms(a, fraction=True)))
-                    elif a.is_Pow and a.base.is_Add and a.base.has(_nd):
-                        args.extend(arg** a.exp
-                                    for arg in Mul.make_args(factor_terms(a.base, fraction=True)))
-                    else:
-                        args.append(a)
-
-                nd_powers = []
-                add_factors = []
-                other_nd = []
-                other = []
-                for arg in args:
-                    is_p, p_exp = is_pure_nd_power(arg)
-                    if is_p:
-                        nd_powers.append(p_exp)
-                    elif arg.is_Add and arg.has(_nd):
-                        add_factors.append(arg)
-                    elif arg.has(_nd):
-                        other_nd.append(arg)
-                    else:
-                        other.append(arg)
-
-                total_nd_exp = Add(*nd_powers) if nd_powers else S.Zero
-                if total_nd_exp != S.Zero and add_factors:
-                    target_idx = 0
-                    if len(add_factors) > 1:
-                        for i, af in enumerate(add_factors):
-                            if total_nd_exp > 0 and any(t.has(_nd) and
-                                                        any(is_pure_nd_power(f)[0]
-                                                            and is_pure_nd_power(f)[1] < 0
-                                                            for f in Mul.make_args(t))
-                                                            for t in af.args):
-                                target_idx = i
-                                break
-                            elif total_nd_exp < 0 and any(t.has(_nd)
-                                                          and any(is_pure_nd_power(f)[0]
-                                                                  and is_pure_nd_power(f)[1] > 0
-                                                                  for f in Mul.make_args(t))
-                                                                  for t in af.args):
-                                target_idx = i
-                                break
-                    nd_factor = _nd**total_nd_exp
-                    first_add = add_factors[target_idx]
-                    new_terms = [Mul(term, nd_factor) for term in first_add.args]
-                    add_factors[target_idx] = Add(*new_terms)
-                    total_nd_exp = S.Zero
-
-                n_factors = list(other_nd)
-                if total_nd_exp != S.Zero:
-                    n_factors.append(_nd**total_nd_exp)
-                n_factors.extend(add_factors)
-
-                n_part = Mul(*n_factors).subs({_nd: self.nd})
-                return Mul(*other, n_part)
-            return e
-        return bottom_up(expr, simp_mul)
+        return nd_simp(expr, self.nd)
 
     def n_simp(self, expr):
         n1, n2 = self.a[0].names
@@ -812,11 +1127,12 @@ class WM_Processor:
                 d =(_mexpand((c_m - c) / _nm) / c_n2).doit()
                 if d.is_number and d.is_real is not False:
                     expr = (c_n2 * _n2 + c).factor().subs({_n1: MultimodeNum(a_s.name),
-                                                           _n2: MultimodeNum2(n1, n2, not self.dc, d)})
+                                                           _n2: MultimodeNum2(n1, n2,
+                                                                              not self.dc, d)})
                 else:
-                    warnings.warn('Failed to combine the weak-field multimode number operators')
+                    warnings.warn('Failed to combine weak-field multimode number operators')
             if expr.is_Mul:
-                expr = self.nd_simp(expr)
+                expr = nd_simp(expr, self.nd)
             expr = _ps(expr)
             return expr
         return bottom_up(expr, combine_n)
@@ -846,7 +1162,7 @@ class WM_Processor:
             lambda x: isinstance(x, (MultimodeNum, MultimodeNum2, MultimodeCOP)),
             lambda x: x.mode_expr
         ).subs({_nm: 1, Symbol('n_m'): S.One})
-        return self.nd_simp(expr)
+        return nd_simp(expr, self.nd)
 
     def _smk(self, k):
         """Single mode key"""
@@ -877,104 +1193,141 @@ class WM_Processor:
         :param obj: Expr, PF, dict, f_dict, or WmWrapper.
         :return: PF (PFTableProcessor)
         """
+
         if hasattr(obj, 'val'):
             obj = obj.val
 
         if isinstance(obj, (dict, f_dict)):
             b_left = getattr(obj, 'b_left', True)
             if b_left:
-                res = PF.add(*(self._smk(k).mul_ind(self.to_single_mode(v)) for k, v in obj.items()))
+                res = PF.add(*(self._smk(k).mul_ind(self.to_single_mode(v))
+                               for k, v in obj.items()))
             else:
-                res = PF.add(*(self.to_single_mode(v).mul_ind(self._smk(k)) for k, v in obj.items()))
-            return res.n_apply(self.nd_simp)
+                res = PF.add(*(self.to_single_mode(v).mul_ind(self._smk(k))
+                               for k, v in obj.items()))
+            return res.n_apply(lambda x: nd_simp(x, self.nd), on_npf=True)
         elif isinstance(obj, PF):
-            return obj.n_apply(lambda t: self._sm_expr(t))
+            return obj.n_apply(lambda t: self._sm_expr(t), on_npf=True)
         elif isinstance(obj, Expr):
             return pattern_form(self._sm_expr(obj), as_dict=None)
 
         return self.to_single_mode(sympify(obj))
 
-    def eval_vacuum(self, obj, vac_modes, single_mode=False):
+    def _combine_weak_with_tuple(self, k, bs_weak):
+        """
+        Combines weak-field BosonPat operators with a multimode tuple key k.
+        Yields (s, new_k) where s is a sign/scalar multiplier.
+
+        When weak-field operators are on the right (acting on vacuum |0>):
+        1. Annihilation COP (b_1^m): b_1^m |0> = 0, so vacuum expectation is zero.
+        2. Creation COP (b_0^m): b_0^m is converted to multimode B_0^m by appending to k.
+           By U(n_m) spherical symmetry, the extra factor introduced by converting
+           single-mode b_0^m to multimode B_0^m is exactly:
+               C(m, _nm) = binomial(_nm + m - 1, m)
+           Thus we yield multiplier s = 1 / C(m, _nm).
+        3. Unpaired operators: if annihilation on the right, b |0> = 0;
+           otherwise bt_swap swaps through k.
+        """
+        if not bs_weak:
+            yield S.One, k
+            return
+
+        # Check for annihilation COP (cop_idx = 1):
+        # Since bs_weak is on the right, annihilation operator on vacuum gives 0
+        m_ann = self._match_cop(self.a[1], bs_weak)
+        if m_ann is not None:
+            return
+
+        # Check for creation COP (cop_idx = 0):
+        m_cre = self._match_cop(self.a[0], bs_weak)
+        if m_cre is not None:
+            new_k = k
+            for _ in range(m_cre):
+                new_k = t_mul(new_k, (None,), 0)
+            # Normalization factor C = binomial(nm_sym + m - 1, m)
+            # Represented via cached permutation gperm and factorial fac:
+            # C = gperm(_nm + m_cre - 1, m_cre) / fac(m_cre)
+            s_comb = fac(m_cre) / gperm(_nm + m_cre - 1, m_cre)
+            yield (s_comb, new_k)
+            return
+
+        if len(bs_weak) == 1:
+            b = bs_weak[0]
+            # Annihilation operator on the right gives 0 on vacuum
+            if b.left_base.is_annihilation:
+                return
+            b_op = BosonOp(b.name, b.left_base.is_annihilation)
+            if k == (None,):
+                return
+            else:
+                i, *exps = k
+                for s, _, nes in self.bt_swap(b_op, i, exps, to_left=True):
+                    yield s, _tdz(i, nes)
+            return
+
+        yield S.One, k
+
+    def eval_vacuum(self, obj, vac_modes):
         """
         Evaluates the partial or full expectation value of an operator expression
-        under vacuum input assertions for the specified weak-field mode(s).
+        under vacuum input assertions for the specified mode(s).
 
         Uses MultimodeCOP.swap_exps to exchange powers of multimode canonical
         operators and eagerly collapses generated MultimodeCOP, MultimodeNum,
         and MultimodeNum2 operators using the active vacuum mode presets.
+        For modes outside the weak-field pair, projects PatternForm values
+        via vac_pf directly.
 
         :param obj: Expr, PF, dict, f_dict, or wrapper with `.val`.
         :param vac_modes: Iterable of mode names / BosonOps asserted to be in vacuum.
-        :param single_mode: Whether single-mode processing (n_m = 1) is enabled.
         :return: Collapsed PF, dict, or f_dict representation.
         """
+
         if hasattr(obj, 'val'):
             obj = obj.val
 
-        vac_set = {
-            sympify(m.name if hasattr(m, 'name') else m)
-            for m in (vac_modes or ())
-        }
-        if not vac_set:
-            return self.to_single_mode(obj) if single_mode else obj
+        vac_sets = set(), set()
+        weak_names = self.a[0].names
+        for m in (vac_modes or ()):
+            m = sympify(m)
+            if not m.is_Symbol and hasattr(m, 'name'):
+                m = m.name
+            vac_sets[m in weak_names].add(m)
+        if not vac_sets[0] and not vac_sets[1]:
+            return obj
 
-        nm_sym = S.One if single_mode else _nm
-        weak_names = set(self.a[0].names)
-        weak_vac = vac_set & weak_names
-        base_d = S.One if self.dc else S.Zero
+        def _collapse_mmn(name, displacement):
+            if name in vac_sets[1]:
+                return displacement * _nm
+            return MultimodeNum(name, displacement)
 
-        def _collapse_mmn(x):
-            if x.name in vac_set:
-                return x.displacement * nm_sym
-            if len(weak_vac) == 1 and x.name in weak_names and x.displacement != base_d:
-                return MultimodeNum(x.name, base_d) + (x.displacement - base_d) * nm_sym
-            return x
-
-        def _collapse_mmn2(x):
-            n1, n2 = x.names
-            p = x.parity
-            d = x.displacement
-            in1 = n1 in vac_set
-            in2 = n2 in vac_set
+        def _collapse_mmn2(n1, n2, p, d):
+            in1 = n1 in vac_sets[1]
+            in2 = n2 in vac_sets[1]
             if not in1 and not in2:
-                return x
+                return MultimodeNum2(n1, n2, p, d)
             if not p:
                 if in1 and in2:
-                    return (1 + d) * nm_sym
+                    return (S.One + d) * _nm
                 n_surv = n2 if in1 else n1
-                return MultimodeNum(n_surv, 1) + d * nm_sym
+                return MultimodeNum(n_surv, 1) + d * _nm
             else:
                 if in1 and in2:
-                    return d * nm_sym
+                    return d * _nm
                 if in1:
-                    return MultimodeNum(n2, 0) + d * nm_sym
-                return -MultimodeNum(n1, 0) + d * nm_sym
-
-        def _collapse_num(expr):
-            if not isinstance(expr, Expr) or expr.is_number:
-                return expr
-            res = expr.replace(
-                lambda x: isinstance(x, (BosonNum, MultimodeNum, MultimodeNum2)),
-                lambda x: (
-                    (S.Zero if x.name in vac_set else x) if isinstance(x, BosonNum)
-                    else (_collapse_mmn(x) if isinstance(x, MultimodeNum)
-                          else _collapse_mmn2(x))
-                )
-            )
-            return self._sm_expr(res) if single_mode else self.n_simp(res)
+                    return MultimodeNum(n2) + d * _nm
+                return -MultimodeNum(n1) + d * _nm
+            
+        _collapse_num = (lambda expr: sympify(expr).replace(MultimodeNum, _collapse_mmn)
+                         .replace(MultimodeNum2, _collapse_mmn2))
 
         def _vac_pf(pf: PF) -> PF:
-            if not pf.table and pf.npf == S.Zero:
+            vp = vac_pf(pf, vac_sets[0] | vac_sets[1])
+            if not vp.table and vp.npf == S.Zero:
                 return PF0
-            new_table = {}
-            for (bs, fs), tail in pf.table.items():
-                if any(b.name in vac_set for b in bs):
-                    continue
-                c_tail = _collapse_num(tail)
-                if c_tail != S.Zero:
-                    new_table[(bs, fs)] = c_tail
-            new_npf = _collapse_num(pf.npf) if pf.npf != S.Zero else S.Zero
-            return PF(new_table, new_npf) if (new_table or new_npf != S.Zero) else PF0
+            applied = vp.n_apply(_collapse_num, on_npf=True)
+            clean_table = {k: v for k, v in applied.table.items() if v != S.Zero}
+            return PF(clean_table, applied.npf) if (clean_table or applied.npf) else PF0
 
         tuple_cache = {}
 
@@ -984,13 +1337,13 @@ class WM_Processor:
             if len(k) == 1:
                 tuple_cache[k] = S.One
                 return S.One
-            if not self.dc and len(weak_vac) == 2:
+            if not self.dc and len(vac_sets[1]) == 2:
                 tuple_cache[k] = S.Zero
                 return S.Zero
 
             if self.dc:
                 ann_idx = True
-            elif a_s.name in weak_vac:
+            elif a_s.name in vac_sets[1]:
                 ann_idx = False
             else:
                 ann_idx = True
@@ -1042,28 +1395,66 @@ class WM_Processor:
             return acc
 
         def _vac_dict(d: dict):
-            if not weak_vac:
+            if vac_sets[0]:
+                d = {k: vac_pf(pf, vac_sets[0]) for k, pf in d.items()}
+                d = {k: pf for k, pf in d.items() if pf.table or pf.npf != S.Zero}
+                if not d:
+                    return dict()
+
+            if not vac_sets[1]:
                 res = {}
                 for k, pf in d.items():
-                    vp = _vac_pf(pf)
-                    if vp.table or vp.npf != S.Zero:
-                        res[k] = vp
-                return res if res else PF0
+                    applied = pf.n_apply(_collapse_num, on_npf=True)
+                    clean_table = {k_t: v for k_t, v in applied.table.items() if v != S.Zero}
+                    if clean_table or applied.npf != S.Zero:
+                        res[k] = PF(clean_table, applied.npf)
+                return res if res else dict()
+
             pfs = []
             for k, pf in d.items():
-                ck = _vac_tuple(k)
-                if ck == S.Zero:
+                if not pf.table and pf.npf == S.Zero:
                     continue
-                vp = _vac_pf(pf)
-                if not vp.table and vp.npf == S.Zero:
-                    continue
-                pfs.append(vp.n_apply(lambda t, c=ck: _collapse_num(c * t)))
-            return PF.add(*pfs) if pfs else PF0
+
+                if pf.npf != S.Zero:
+                    ck = _vac_tuple(k)
+                    if ck != S.Zero:
+                        c_npf = _collapse_num(pf.npf)
+                        if c_npf != S.Zero:
+                            pfs.append(PF({}, _collapse_num(ck * c_npf)))
+
+                for (bs, fs), tail in pf.table.items():
+                    bs_weak = tuple(b for b in bs if b.name in weak_names)
+                    bs_strong = tuple(b for b in bs if b.name not in weak_names)
+
+                    if not bs_weak:
+                        ck = _vac_tuple(k)
+                        if ck == S.Zero:
+                            continue
+                        sub_pf = PF({(bs_strong, fs): tail}, S.Zero)
+                        applied = sub_pf.n_apply(_collapse_num, on_npf=True)
+                        clean_table = {k_t: v for k_t, v in applied.table.items() if v != S.Zero}
+                        if clean_table or applied.npf != S.Zero:
+                            vp = PF(clean_table, applied.npf)
+                            pfs.append(vp.n_apply(lambda t, c=ck: _collapse_num(c * t)))
+                    else:
+                        for s_comb, new_k in self._combine_weak_with_tuple(k, bs_weak):
+                            ck = _vac_tuple(new_k)
+                            if ck == S.Zero:
+                                continue
+                            sub_pf = PF({(bs_strong, fs): tail}, S.Zero)
+                            applied = sub_pf.n_apply(_collapse_num, on_npf=True)
+                            clean_table = {k_t: v for k_t, v in applied.table.items() if v != S.Zero}
+                            if clean_table or applied.npf != S.Zero:
+                                vp = PF(clean_table, applied.npf)
+                                pfs.append(vp.n_apply(lambda t, c=ck, s=s_comb:
+                                                      _collapse_num(cancel(s * c * t))))
+
+            return PF.add(*pfs) if pfs else dict()
 
         def _vac_f_dict(fd: f_dict):
-            if len(weak_vac) == 2:
-                return PF0
-            if not weak_vac:
+            if len(vac_sets[1]) == 2:
+                return dict()
+            if not vac_sets[1]:
                 res = f_dict(b_left=fd.b_left)
                 for b, d in fd.items():
                     vd = _vac_dict(d)
@@ -1071,39 +1462,43 @@ class WM_Processor:
                         res[b] = vd
                     elif isinstance(vd, PF) and (vd.table or vd.npf != S.Zero):
                         res[b] = {(None,): vd}
-                return res if res else PF0
+                return res if res else dict()
 
             fds = []
             for b, d in fd.items():
                 if not d:
                     continue
-                if b.name in vac_set:
-                    if (b.is_annihilation and not fd.b_left) or (not b.is_annihilation and fd.b_left):
+                if b.name in vac_sets[1]:
+                    if (b.is_annihilation and not fd.b_left
+                        or not b.is_annihilation and fd.b_left):
                         continue
-                    swapped_fd = self.bdswap(b, d, to_left=not b.is_annihilation)
+                    swapped_fd = self.bd_swap(b, d, to_left=not b.is_annihilation)
                     b_partner = self._od(b)
                     d_partner = swapped_fd.get(b_partner)
                     if d_partner:
                         vp = _vac_dict(d_partner)
                         if isinstance(vp, PF) and (vp.table or vp.npf != S.Zero):
-                            fds.append(f_dict({b_partner: {(None,): vp}}, b_left=swapped_fd.b_left))
+                            fds.append(f_dict({b_partner: {(None,): vp}},
+                                              b_left=swapped_fd.b_left))
+                        elif isinstance(vp, dict) and vp:
+                            fds.append(f_dict({b_partner: vp},
+                                              b_left=swapped_fd.b_left))
                 else:
                     vp = _vac_dict(d)
                     if isinstance(vp, PF) and (vp.table or vp.npf != S.Zero):
                         fds.append(f_dict({b: {(None,): vp}}, b_left=fd.b_left))
+                    elif isinstance(vp, dict) and vp:
+                        fds.append(f_dict({b: vp}, b_left=fd.b_left))
 
             if not fds:
-                return PF0
+                return dict()
             combined = self.d_add(*fds)
-            cleaned = f_dict(
-                {
-                    b: {k: pf for k, pf in sub.items() if pf.table or pf.npf != S.Zero}
-                    for b, sub in combined.items()
-                },
-                b_left=combined.b_left,
-            )
-            cleaned = f_dict({b: sub for b, sub in cleaned.items() if sub}, b_left=combined.b_left)
-            return cleaned if cleaned else PF0
+            cleaned = f_dict(b_left=combined.b_left)
+            for b, sub in combined.items():
+                for k, pf in sub.items():
+                    if pf.table or pf.npf != S.Zero:
+                        cleaned.setdefault(b, {})[k] = pf
+            return cleaned if cleaned else dict()
 
         if isinstance(obj, f_dict):
             res = _vac_f_dict(obj)
@@ -1116,172 +1511,53 @@ class WM_Processor:
         else:
             res = _vac_pf(pattern_form(sympify(obj), as_dict=None))
 
-        if single_mode and not isinstance(res, PF):
-            res = self.to_single_mode(res)
         return res
 
-    def eval_coherent(self, obj, order: int, alpha=None, gain_sym=None, return_both=False):
+    def eval_coherent(self, obj, order: int = 0):
         """
-        Evaluates an operator expression (in time t_ representation) under the
-        assertion that the strong driving field input is in a coherent state |alpha>,
-        using `coherent_average_terms` from `perturb_eval.state_eval` up to `order`
-        and substituting `self.nd` with `|alpha|^2`.
+        Evaluates an operator representation under coherent state assertion
+        for the strong pump field.
 
         :param obj: Expr, PF, dict, f_dict, or wrapper with `.val`.
         :param order: Target perturbative expansion order.
-        :param alpha: Complex coherent amplitude Symbol (defaults to alpha_0 / alpha_2).
-        :param gain_sym: Symbol used for classical parametric gain g when return_both=True.
-        :param return_both: If True, returns (res_t, res_g) simultaneously.
-        :return: Evaluated representation in t_ (or (res_t, res_g) if return_both=True).
         """
+
         if hasattr(obj, 'val'):
             obj = obj.val
 
-        strong_name = self.nd.name
-        if alpha is None:
-            alpha = Symbol('alpha_0') if self.dc else Symbol('alpha_2')
-        if gain_sym is None:
-            gain_sym = Symbol('g', real=True)
-        alpha_sq = Abs(alpha) ** 2
-        nd_step = max(1, abs(int(self.pe.leading_order(self.nd)[1])))
+        alpha = Symbol('alpha_0') if self.dc else Symbol('alpha_2')
+        sub_dict = {self.nd.name: alpha}
 
-        def _cohr_tail(norm_tail, rem_order):
-            if norm_tail == S.Zero:
-                return (S.Zero, S.Zero)
-            by_ord = defaultdict(list)
-            for t_sub, t_ord in self.pe.expand_expr(norm_tail, rem_order):
-                if t_sub != S.Zero and t_ord <= rem_order:
-                    by_ord[t_ord].append(t_sub)
-            if not by_ord:
-                return (S.Zero, S.Zero)
+        def _apply_cohr(item):
 
-            ca_parts = []
-            for t_ord, terms in by_ord.items():
-                sub_expr = Add(*terms)
-                if sub_expr == S.Zero:
-                    continue
-                if not sub_expr.has(self.nd):
-                    ca_parts.append(sub_expr)
-                else:
-                    lmax = max(0, int((rem_order - t_ord) // nd_step))
-                    sub_comm = sub_expr.subs({self.nd: _nd})
-                    ca_term = Add(*cohr_avr(sub_comm, (_nd,), lmax)).subs({_nd: self.nd})
-                    ca_parts.append(ca_term)
-
-            if not ca_parts:
-                return (S.Zero, S.Zero)
-            ca_raw = Add(*ca_parts)
-            ca_trunc = Add(*(e[0] for e in self.pe.expand_expr(ca_raw, rem_order)))
-            if ca_trunc == S.Zero:
-                return (S.Zero, S.Zero)
-
-            if rem_order >= 0 or ca_trunc.has(t_):
-                ca_g_op = self.n_simp(d_p2s(_g, self.p2s_group(ca_trunc.subs({t_: _g / self.gc}))))
+            if isinstance(item, f_dict):
+                res = f_dict(b_left=item.b_left)
+                for b, d in item.items():
+                    child = _apply_cohr(d)
+                    if child:
+                        res[b] = child
+                return res if res else dict()
+            elif isinstance(item, dict):
+                res = {}
+                for k, v in item.items():
+                    child = _apply_cohr(v)
+                    if isinstance(child, PF):
+                        if child.table or child.npf != S.Zero:
+                            res[k] = child
+                    elif child:
+                        res[k] = child
+                return res if res else dict()
+            elif isinstance(item, PF):
+                return self.pe.cohr_pf(item, sub_dict, order)
+            elif isinstance(item, Expr):
+                return self.pe.cohr_pf(pattern_form(item, as_dict=None), sub_dict, order)
             else:
-                ca_g_op = self.n_simp(ca_trunc)
+                return self.pe.cohr_pf(pattern_form(sympify(item), as_dict=None),
+                                       sub_dict, order)
 
-            expr_t = bottom_up(self.nd_simp(ca_g_op.subs({_g: self.gc * t_})).subs({self.nd: alpha_sq}), _ps)
-            if return_both:
-                expr_g = bottom_up(self.nd_simp(ca_g_op).subs({_g: gain_sym, self.nd: alpha_sq}), _ps)
-            else:
-                expr_g = S.Zero
-            return (expr_t, expr_g)
+        return _apply_cohr(obj)
 
-        def _cohr_pf(pf: PF, pf_order: int):
-            if not pf.table and pf.npf == S.Zero:
-                return (PF0, PF0)
-            table_t = {}
-            table_g = {}
-            for (bs, fs), tail in pf.table.items():
-                b_strong = None
-                bs_rest_list = []
-                for b in bs:
-                    if b.name == strong_name:
-                        b_strong = b
-                    else:
-                        bs_rest_list.append(b)
-                bs_rest = tuple(bs_rest_list)
-                rest_ord = Add(*(self.pe.leading_order(x)[1] for x in (*bs_rest, *fs)))
-
-                if b_strong is None:
-                    b_ord = S.Zero
-                    c_amp = S.One
-                    norm_tail = tail
-                elif b_strong.left_base.is_annihilation:
-                    m = b_strong.exps[0]
-                    b_ord = self.pe.leading_order(b_strong)[1]
-                    c_amp = alpha ** m
-                    norm_tail = NumShift(tail, -1, b_strong).doit()
-                else:
-                    m = b_strong.exps[0]
-                    b_ord = self.pe.leading_order(b_strong)[1]
-                    c_amp = conjugate(alpha) ** m
-                    norm_tail = tail
-
-                rem_order = pf_order - b_ord - rest_ord
-                et, eg = _cohr_tail(norm_tail, rem_order)
-                if et != S.Zero:
-                    key = (bs_rest, fs)
-                    val_t = table_t.get(key, S.Zero) + c_amp * et
-                    if val_t != S.Zero:
-                        table_t[key] = val_t
-                    elif key in table_t:
-                        del table_t[key]
-                if return_both and eg != S.Zero:
-                    key = (bs_rest, fs)
-                    val_g = table_g.get(key, S.Zero) + c_amp * eg
-                    if val_g != S.Zero:
-                        table_g[key] = val_g
-                    elif key in table_g:
-                        del table_g[key]
-
-            npf_t, npf_g = _cohr_tail(pf.npf, pf_order) if pf.npf != S.Zero else (S.Zero, S.Zero)
-            pf_t = PF(table_t, npf_t) if (table_t or npf_t != S.Zero) else PF0
-            pf_g = PF(table_g, npf_g) if (return_both and (table_g or npf_g != S.Zero)) else PF0
-            return (pf_t, pf_g)
-
-        def _cohr_dict(d: dict, d_order: int):
-            res_t = {}
-            res_g = {}
-            for k, pf in d.items():
-                pt, pg = _cohr_pf(pf, d_order)
-                if pt.table or pt.npf != S.Zero:
-                    res_t[k] = pt
-                if return_both and (pg.table or pg.npf != S.Zero):
-                    res_g[k] = pg
-            out_t = res_t if res_t else PF0
-            out_g = res_g if (return_both and res_g) else PF0
-            return (out_t, out_g)
-
-        def _cohr_f_dict(fd: f_dict, fd_order: int):
-            res_t = f_dict(b_left=fd.b_left)
-            res_g = f_dict(b_left=fd.b_left)
-            for b, d in fd.items():
-                b_ord = self.pe.leading_order(b)[1]
-                dt, dg = _cohr_dict(d, fd_order - b_ord)
-                if isinstance(dt, dict) and dt:
-                    res_t[b] = dt
-                if return_both and isinstance(dg, dict) and dg:
-                    res_g[b] = dg
-            out_t = res_t if res_t else PF0
-            out_g = res_g if (return_both and res_g) else PF0
-            return (out_t, out_g)
-
-        if isinstance(obj, f_dict):
-            rt, rg = _cohr_f_dict(obj, order)
-        elif isinstance(obj, dict):
-            rt, rg = _cohr_dict(obj, order)
-        elif isinstance(obj, PF):
-            rt, rg = _cohr_pf(obj, order)
-        elif isinstance(obj, Expr):
-            rt, rg = _cohr_pf(pattern_form(obj, as_dict=None), order)
-        else:
-            rt, rg = _cohr_pf(pattern_form(sympify(obj), as_dict=None), order)
-
-        return (rt, rg) if return_both else rt
-
-
-class TWMSolver(WM_Processor):
+class TWMSolver(WMProcessor):
     """
     Three-wave mixing quantum multimode parametric process perturbation solver
 
@@ -1314,25 +1590,20 @@ class TWMSolver(WM_Processor):
         super().__init__(dc=dc, mismatch=mismatch)
         self.half_p_factor = exp(I * self.pm * t_ * S.Half)
         if dc:
-            self.nd = BosonNum(a_p.name)
-            self.a = (MultimodeCOP(a_s.name, a_i.name, annih1=0),
-                      MultimodeCOP(a_s.name, a_i.name))
-            # Mark multiplication directions: a_s/a_i right-multiplied (False), a_s†/a_i† left-multiplied (True)
+            # Mark multiplication directions:
+            # a_s/a_i right-multiplied (b_left=False),
+            # a_s†/a_i† left-multiplied (b_left=True)
             self.sol = [({(None,): PF({((a_p,), ()): S.One})},
                          f_dict({a_s: {(None,): PF0}, Dagger(a_i): {(None,): PF0}}, b_left=False),
                          f_dict({Dagger(a_s): {(None,): PF0}, a_i: {(None,): PF0}}))]
             self.gc = S.Half*(4*nlc**2*self.nd-self.pm**2)**S.Half
-            self.base_assumptions = {a_p.name: S.NegativeOne, nlc: S.One}
+            self.update_pe({a_p.name: S.NegativeOne})
         else:
-            self.nd = BosonNum(a_i.name)
-            self.a = (MultimodeCOP(a_p.name, a_s.name, 1, 0),
-                      MultimodeCOP(a_p.name, a_s.name, 1))
             self.sol = [(f_dict({a_p: {(None,): PF0}, a_s: {(None,): PF0}}),
                          f_dict({a_p: {(None,): PF0}, a_s: {(None,): PF0}}),
                          {(None,): PF({((a_i,), ()): S.One})})]
             self.gc = S.Half*(4*nlc**2*self.nd+self.pm**2)**S.Half
-            self.base_assumptions = {a_i.name: S.NegativeOne, nlc: S.One}
-        self.pe = PE(self.base_assumptions)
+            self.update_pe({a_i.name: S.NegativeOne})
         self.pe.register(MultimodeNum)
         self.pe.register(MultimodeNum2)
         self.pe.register(MultimodeCOP)
@@ -1383,10 +1654,12 @@ class TWMSolver(WM_Processor):
                         pfs.append(term2[b][k].n_apply(lambda t: -t))
                     if k in last_sol[mode][b]:
                         pfs.append(last_sol[mode][b][k].n_apply(lambda t: s3*t*self.nd))
-                    rhs = self.expand(PF.add(*pfs).n_apply(lambda t: Mul(nlc**2, t, gc_m2)), order)
+                    rhs = self.expand(PF.add(*pfs).n_apply(lambda t:
+                                                           Mul(nlc**2, t, gc_m2)), order)
                     s0 = rhs.n_apply(lambda t: self.n_simp(dsd2(_g, self.p2s_group(t), self.dc,
                                                                 subs=self.gc*t_)))
-                    self.sol[i][mode][b][k] = PF.add(s0, self.fdf0(n0, mode)) if len(k) == 1 else s0
+                    self.sol[i][mode][b][k] = (PF.add(s0, self.fdf0(n0, mode))
+                                               if len(k) == 1 else s0)
             if dc:
                 self.sol.append((last_sol[0],
                                  f_dict({a_s: dict(), Dagger(a_i): dict()}, b_left=False),
@@ -1452,7 +1725,7 @@ class TWMSolver(WM_Processor):
         return p*self.to_expr(self.get_sol(order)[mode])
 
 
-class FWMSolver(WM_Processor):
+class FWMSolver(WMProcessor):
     """
     Four-wave mixing quantum multimode parametric process perturbation solver.
 
@@ -1466,16 +1739,11 @@ class FWMSolver(WM_Processor):
 
     def __init__(self):
         super().__init__(dc=True, mismatch=True)
-        self.nd = BosonNum(a_p.name)
         self.a = (MultimodeCOP(a_s.name, a_i.name, annih1=0),
                   MultimodeCOP(a_s.name, a_i.name))
         self.hpm = -I*self.pm*S.Half + I*nlc*self.nd
         self.gc = S.Half*(self.pm * (-self.pm + 4*nlc*self.nd))**S.Half
-        self.base_assumptions = {a_p.name: -S.Half, nlc: S.One}
-        self.pe = PE(self.base_assumptions)
-        self.pe.register(MultimodeNum)
-        self.pe.register(MultimodeNum2)
-        self.pe.register(MultimodeCOP)
+        self.update_pe({a_p.name: -S.Half})
         self.expand = (lambda pf, order:
                        self.pe.expand_pf(pf, order).n_apply(lambda t:
                                                              t.subs({t_: _g/self.gc})))
@@ -1492,12 +1760,16 @@ class FWMSolver(WM_Processor):
         # Order 0: Undepleted pump and parametric weak field evolution
         fwm0_0 = {(None,): PF({((a_p,), ()): S.One})}
         fwm0_1 = f_dict({
-            a_s: {(None,): PF({((), ()): dsd2(self.gc*t_, dict(), True, S.One, self.hpm/self.gc)})},
-            Dagger(a_i): {(None,): PF({((a_p**2,), ()): dsd2(self.gc*t_, dict(), True, S.Zero, -I*nlc/self.gc)})}
+            a_s: {(None,): PF({((), ()): dsd2(self.gc*t_, dict(),
+                                              True, S.One, self.hpm/self.gc)})},
+            Dagger(a_i): {(None,): PF({((a_p**2,), ()): dsd2(self.gc*t_, dict(),
+                                                             True, S.Zero, -I*nlc/self.gc)})}
         }, b_left=False)
         fwm0_2 = f_dict({
-            Dagger(a_s): {(None,): PF({((a_p**2,), ()): dsd2(self.gc*t_, dict(), True, S.Zero, -I*nlc/self.gc)})},
-            a_i: {(None,): PF({((), ()): dsd2(self.gc*t_, dict(), True, S.One, self.hpm/self.gc)})}
+            Dagger(a_s): {(None,): PF({((a_p**2,), ()): dsd2(self.gc*t_, dict(),
+                                                             True, S.Zero, -I*nlc/self.gc)})},
+            a_i: {(None,): PF({((), ()): dsd2(self.gc*t_, dict(),
+                                              True, S.One, self.hpm/self.gc)})}
         }, b_left=True)
         sol_0 = (fwm0_0, fwm0_1, fwm0_2)
 
@@ -1510,7 +1782,8 @@ class FWMSolver(WM_Processor):
         dd2 = self.e_mul(self.e_mul(sol_0[1], self.d_adjoint(sol_0[0])), sol_0[2])
         fwm1p = dict()
         for k, v in self.d_add(dd2, xpm_c, self.e_mul(coeff, xpm_t)).items():
-            rhs = self.pe.expand_pf(v.n_apply(lambda t: -2*I*nlc*t.subs({t_: _g/self.gc})/self.gc), 1)
+            rhs = self.pe.expand_pf(v.n_apply(lambda t:
+                                              -2*I*nlc*t.subs({t_: _g/self.gc})/self.gc), 1)
             s0 = rhs.n_apply(lambda t: self.n_simp(dsd1(_g, self.p2s_group(t), subs=self.gc*t_)))
             fwm1p[k] = PF.add(sol_0[0][(None,)], s0) if len(k) == 1 else s0
 
@@ -1522,13 +1795,15 @@ class FWMSolver(WM_Processor):
         Get the solution tuple for the given order (-1, 0, or 1).
         """
         if order < -1 or order > 1:
-            raise ValueError(f"Order {order} out of range for FWMSolver (supports orders -1, 0, 1)")
+            raise ValueError(f"Order {order} out of range for"
+                             " FWMSolver (supports orders -1, 0, 1)")
         return self.sol[order + 1]
 
     def sol_expr(self, mode: int, order: int):
         """
         Get the expression of the solution for the given mode and order (up to order 1).
-        For the pump mode (mode 0), includes the SPM phase factor exp(-i * χ * N_0 * t) for order >= 0.
+        For the pump mode (mode 0), includes the SPM phase factor
+        exp(-i * χ * N_0 * t) for order >= 0.
         """
         sol_dict = self.get_sol(order)[mode]
         expr = self.to_expr(sol_dict)
@@ -1543,10 +1818,11 @@ class FWMSolver(WM_Processor):
 
         :param obj: Expr, PF, dict, f_dict, or WmWrapper.
         """
+
         if hasattr(obj, 'val'):
             obj = obj.val
 
-        return d_apply(obj, lambda x: self.nd_simp(x.subs({self.pm: 2*nlc*self.nd})))
+        return d_apply(obj, lambda x: nd_simp(x.subs({self.pm: 2*nlc*self.nd}), self.nd))
 
 
 TWM = TWMSolver

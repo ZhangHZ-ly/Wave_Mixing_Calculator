@@ -139,7 +139,7 @@ window.addEventListener('error', function(e) {
           Calculate
         </button>
         <button class="btn btn-accent" onclick="runPf(true)">
-          Calculate with Residue
+          Calculate with Remainder
         </button>
         <button class="btn btn-secondary" onclick="document.getElementById('pf-input').value = ''">
           Clear
@@ -156,18 +156,18 @@ window.addEventListener('error', function(e) {
           <span style="color: var(--text-secondary); font-size: 0.95rem;">Click a calculation button above...</span>
         </div>
 
-        <!-- Residue Section (Only displayed when residue mode is selected) -->
-        <div id="pf-residue-container" style="display: none; padding: 0 1.25rem 1.25rem 1.25rem;">
-          <div class="residue-box">
-            <div class="residue-header">
-              <span>Commutator Residue (Non-independent Mode Commutator Error):</span>
-              <button class="btn btn-secondary btn-sm" onclick="copyLatex(currentPfResidueLatex)">
-                Copy Residue LaTeX
+        <!-- Remainder Section (Only displayed when remainder mode is selected) -->
+        <div id="pf-remainder-container" style="display: none; padding: 0 1.25rem 1.25rem 1.25rem;">
+          <div class="remainder-box">
+            <div class="remainder-header">
+              <span>Commutator Remainder (Non-independent Mode Commutator Error):</span>
+              <button class="btn btn-secondary btn-sm" onclick="copyLatex(currentPfRemainderLatex)">
+                Copy Remainder LaTeX
               </button>
             </div>
-            <div id="pf-residue-output" class="residue-content"></div>
+            <div id="pf-remainder-output" class="remainder-content"></div>
             <span style="font-size: 0.775rem; color: #92400e;">
-              Note: The commutator residue cannot be named or saved as a variable.
+              Note: The commutator remainder cannot be named or saved as a variable.
             </span>
           </div>
         </div>

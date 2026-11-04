@@ -6,8 +6,8 @@ let currentSingleModeLatex = '';
 let currentSingleModeExprStr = '';
 let currentPfLatex = '';
 let currentPfExpr = '';
-let currentPfResidueLatex = '';
-let currentPfResidueExpr = '';
+let currentPfRemainderLatex = '';
+let currentPfRemainderExpr = '';
 // Separately cached source formula text for Page 2 and Page 3
 let currentPfSourceInput = localStorage.getItem('qc_tab2_source_input') || '';
 let currentWmLatex = '';

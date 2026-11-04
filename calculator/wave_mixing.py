@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from dsolve_pm import d_p2s
 from op_patterns import BosonNum, BosonPat, FermionPat, check_num
 from parametric import (
-    WM_Processor, TWMSolver, FWMSolver, f_dict, d_apply, t_, _g, _nm, _ps, nlc, pm,
+    WMProcessor, TWMSolver, FWMSolver, f_dict, d_apply, t_, _g, _nm, _ps, nlc, pm,
     a_p, a_s, a_i, MultimodeNum, MultimodeNum2, MultimodeCOP, _tdz,
     INIT_OPS, PF_ONE
 )
@@ -15,6 +15,7 @@ from sympy.core.expr import Expr
 from sympy.core.function import diff
 from sympy.core.mul import Mul
 from sympy.core.numbers import I, Integer, pi
+from sympy.core.power import Pow
 from sympy.core.singleton import S
 from sympy.core.symbol import Symbol
 from sympy.core.sympify import sympify
@@ -31,8 +32,9 @@ from sympy.physics.quantum.fermion import FermionOp
 from sympy.printing.latex import latex
 
 from .common import (
-    TRANSFORMS,
+    WM_TRANSFORMS,
     is_valid_variable_name,
+    RESERVED_NAMES,
     g_hat,
 )
 from .conditions import normalize_process, process_is_dc
@@ -45,29 +47,15 @@ TWM_SOLVERS = (
 )
 FWM_SOLVER = FWMSolver()
 
-SOLVERS: Dict[str, Any] = {
-    'twm_fc': TWM_SOLVERS[0],
-    'twm_dc': TWM_SOLVERS[1],
-    'fwm': (FWM_SOLVER, FWM_SOLVER),
-}
 
-ALL_SOLVERS: Tuple[WM_Processor, ...] = (
-    TWM_SOLVERS[0][0],
-    TWM_SOLVERS[0][1],
-    TWM_SOLVERS[1][0],
-    TWM_SOLVERS[1][1],
-    FWM_SOLVER,
-)
-
-
-def get_wm_solver(process: Optional[str] = None, mismatch: bool = False, dc: Optional[bool] = None) -> WM_Processor:
+def get_wm_solver(process: Optional[str] = None, mismatch: bool = False, dc: Optional[bool] = None) -> WMProcessor:
     proc = normalize_process(process, dc)
     if proc == 'fwm':
         return FWM_SOLVER
     return TWM_SOLVERS[1 if proc == 'twm_dc' else 0][1 if mismatch else 0]
 
 
-def _solver_process(s: WM_Processor) -> str:
+def _solver_process(s: WMProcessor) -> str:
     if isinstance(s, FWMSolver):
         return 'fwm'
     return 'twm_dc' if getattr(s, 'dc', True) else 'twm_fc'
@@ -217,7 +205,7 @@ def _apply_to_pfs(val, pf_fn):
     return val
 
 
-def _mul_two_vals(v1, v2, solver: WM_Processor):
+def _mul_two_vals(v1, v2, solver: WMProcessor, single_mode: bool = False):
     """Multiply two single resolved values (PF, dict, or f_dict)."""
     # 1. Pure scalar PF fast-path
     if _is_pure_scalar_pf(v1):
@@ -234,13 +222,15 @@ def _mul_two_vals(v1, v2, solver: WM_Processor):
         b = next(iter(v2.keys()))
         d1 = {(None,): v1} if isinstance(v1, PF) else v1
         return f_dict({b: d1}, b_left=False)
-    # 4. General dict / f_dict / PF multiplication via solver.e_mul
+    # 4. General dict / f_dict / PF multiplication (m_mul for single-mode, e_mul for multi-mode)
     d1 = {(None,): v1} if isinstance(v1, PF) else v1
     d2 = {(None,): v2} if isinstance(v2, PF) else v2
+    if single_mode:
+        return solver.f_mul(d1, d2)
     return solver.e_mul(d1, d2)
 
 
-def _merge_non_f_dicts(items: List[Any], solver: WM_Processor) -> List[Any]:
+def _merge_non_f_dicts(items: List[Any], solver: WMProcessor) -> List[Any]:
     """
     Prioritize multiplying adjacent non-f_dict factors (PF and dict):
     1. First merge adjacent PF factors into a single PF.
@@ -265,7 +255,7 @@ def _merge_non_f_dicts(items: List[Any], solver: WM_Processor) -> List[Any]:
     return merged
 
 
-def _dict_pow(d: dict, n: int, solver: WM_Processor) -> dict:
+def _dict_pow(d: dict, n: int, solver: WMProcessor) -> dict:
     """Binary exponentiation for a multimode dict (non-f_dict)."""
     if n == 0:
         return {(None,): PF({((), ()): S.One})}
@@ -283,7 +273,7 @@ def _dict_pow(d: dict, n: int, solver: WM_Processor) -> dict:
     return result
 
 
-def _eval_product_factors(factors: List[Any], solver: WM_Processor):
+def _eval_product_factors(factors: List[Any], solver: WMProcessor):
     """
     Evaluate a product chain of factors:
     1. Checks the parities of all f_dict factors and counts them;
@@ -351,7 +341,7 @@ class WmWrapper:
     - Multimode dict ({tuple: PF}: A and balanced weak-field pairs)
     - Weak-field f_dict ({BosonOp: {tuple: PF}}: weak-field initial ops and evolved weak modes)
     """
-    def __init__(self, val, solver: WM_Processor, _factors: Optional[List[Any]] = None):
+    def __init__(self, val, solver: WMProcessor, _factors: Optional[List[Any]] = None):
         self.solver = solver
         if _factors is not None:
             self._factors = list(_factors)
@@ -383,7 +373,7 @@ class WmWrapper:
         if isinstance(val, cls):
             return val
 
-        s = solver if isinstance(solver, WM_Processor) else TWM_SOLVERS[1 if bool(solver) else 0][0]
+        s = solver if isinstance(solver, WMProcessor) else TWM_SOLVERS[1 if bool(solver) else 0][0]
         dc = s.dc
 
         if isinstance(val, str) and val in INIT_OPS[dc]:
@@ -478,6 +468,16 @@ class WmWrapper:
     def __rmul__(self, other):
         return WmWrapper.from_val(other, self.solver).__mul__(self)
 
+    def __matmul__(self, other):
+        other = WmWrapper.from_val(other, self.solver)
+        res_val = _mul_two_vals(self.val, other.val, self.solver, single_mode=True)
+        return WmWrapper(res_val, self.solver)
+
+    def __rmatmul__(self, other):
+        other = WmWrapper.from_val(other, self.solver)
+        res_val = _mul_two_vals(other.val, self.val, self.solver, single_mode=True)
+        return WmWrapper(res_val, self.solver)
+
     def __truediv__(self, other):
         other = WmWrapper.from_val(other, self.solver)
         if isinstance(other.val, PF) and other.val.npf == S.Zero and set(other.val.table.keys()).issubset({((), ())}):
@@ -501,9 +501,12 @@ class WmWrapper:
             if pf_val.npf == S.Zero and set(pf_val.table.keys()).issubset({((), ())}):
                 base_expr = pf_val.table.get(((), ()), S.Zero)
                 return WmWrapper(PF({((), ()): base_expr ** p_sym}), self.solver)
-            if p_sym.is_Integer and p_sym >= 0:
-                return WmWrapper(pf_val.power_ind(Integer(p_sym)), self.solver)
-            raise ValueError("Operator exponentiation only supports non-negative integers.")
+            if getattr(p_sym, 'is_Integer', False) and p_sym >= 0:
+                try:
+                    return WmWrapper(pf_val.power_ind(Integer(p_sym)), self.solver)
+                except Exception:
+                    return WmWrapper(PF(npf=Pow(pf_val.expr(), p_sym)), self.solver)
+            return WmWrapper(PF(npf=Pow(pf_val.expr(), p_sym)), self.solver)
         if p_sym.is_Integer and p_sym >= 0:
             n = int(p_sym)
             if n == 0:
@@ -527,7 +530,7 @@ class WmWrapper:
 
     def adjoint(self):
         adj_factors = [
-            f.adjoint(res=False) if isinstance(f, PF) else self.solver.d_adjoint(f)
+            f.adjoint(rem=False) if isinstance(f, PF) else self.solver.d_adjoint(f)
             for f in reversed(self._factors)
         ]
         return WmWrapper(None, self.solver, _factors=adj_factors)
@@ -640,7 +643,7 @@ def save_wm_variable(
     **kwargs
 ) -> WmWrapper:
     proc = normalize_process(kwargs.get('process'), kwargs.get('dc'))
-    s = solver if isinstance(solver, WM_Processor) else get_wm_solver(proc, mismatch=bool(kwargs.get('mismatch', False)))
+    s = solver if isinstance(solver, WMProcessor) else get_wm_solver(proc, mismatch=bool(kwargs.get('mismatch', False)))
     w = WmWrapper.from_val(val_t, s)
     w.name = name
     w.val_t = w.val
@@ -695,7 +698,7 @@ def _format_order_num(val) -> Union[int, float]:
 
 def compute_val_leading_order(
     val: Any,
-    s: WM_Processor,
+    s: WMProcessor,
     dc: Optional[bool] = None,
     process: Optional[str] = None,
 ) -> Union[int, float]:
@@ -1003,6 +1006,28 @@ def analyze_expression_terms(
     return max_evolved_needed, insufficient_items
 
 
+def validate_input_identifiers(expr_str: str, local_dict: dict):
+    """
+    Validates identifiers in expr_str. Variable names concatenated without spaces (e.g. a_sa_i)
+    are recognized as a single overall long variable name (containing two or more underscores).
+    If no corresponding variable is stored in local_dict, it is treated as invalid input.
+    """
+    if not expr_str or not expr_str.strip():
+        return
+    import io, tokenize
+    try:
+        toks = list(tokenize.tokenize(io.BytesIO(expr_str.encode('utf-8')).readline))
+    except Exception:
+        return
+    for tok in toks:
+        if tok.type == tokenize.NAME:
+            name = tok.string
+            if name.count('_') >= 2 and name not in local_dict and name not in RESERVED_NAMES:
+                raise ValueError(
+                    f"不规范输入：未定义的复合变量名 '{name}'。若要执行乘法运算，请在变量之间使用空格（单模乘法）或'*'（多模乘法）分隔。"
+                )
+
+
 def _prepare_wm_evaluation(
     text: str,
     dc: bool,
@@ -1202,7 +1227,7 @@ def _prepare_wm_evaluation(
             if isinstance(item, WmWrapper) and isinstance(item.val, PF):
                 if item.val.npf == S.Zero and set(item.val.table.keys()).issubset({((), ())}):
                     arg = item.val.table.get(((), ()), S.Zero)
-                    return WmWrapper(PF({((), ()): fn(arg)}), s)
+                    return WmWrapper(PF({((), ()): sympify(fn(arg))}), s)
             return WmWrapper.from_val(fn(sympify(item)), s)
         return _inner
 
@@ -1378,7 +1403,8 @@ def _prepare_wm_evaluation(
             if not ne_str:
                 continue
             try:
-                parsed_ne = parse_expr(ne_str, local_dict=local_dict, transformations=TRANSFORMS)
+                validate_input_identifiers(ne_str, local_dict)
+                parsed_ne = parse_expr(ne_str, local_dict=local_dict, transformations=WM_TRANSFORMS)
                 w_ne = WmWrapper.from_val(parsed_ne, s)
                 if single_mode:
                     w_ne = w_ne.to_single_mode()
@@ -1401,7 +1427,8 @@ def _prepare_wm_evaluation(
 
     # 5. Parse and evaluate target expression
     try:
-        parsed_target = parse_expr(text, local_dict=local_dict, transformations=TRANSFORMS)
+        validate_input_identifiers(text, local_dict)
+        parsed_target = parse_expr(text, local_dict=local_dict, transformations=WM_TRANSFORMS)
         wrapper_target = WmWrapper.from_val(parsed_target, s)
     except Exception as e:
         raise ValueError(f"Calculation failed: {e}")
@@ -1534,17 +1561,17 @@ def eval_combination_assertions(
         vac_modes.append('a_2' if is_dc else 'a_0')
 
     if vac_modes:
-        val = s.eval_vacuum(val, vac_modes, single_mode=single_mode)
-    elif single_mode:
+        val = s.eval_vacuum(val, vac_modes)
+    if single_mode:
         val = s.to_single_mode(val)
 
     if coherent_drive:
-        val_t, val_g = s.eval_coherent(val, order, return_both=True)
+        val_t = s.eval_coherent(val, order)
         if proc == 'fwm' and not mismatch:
             alpha_sym = Symbol('alpha_0')
             pm_cohr = 2 * nlc * (Abs(alpha_sym) ** 2)
             val_t = d_apply(val_t, lambda x: bottom_up(x.subs({s.pm: pm_cohr}), _ps))
-            val_g = d_apply(val_g, lambda x: bottom_up(x.subs({s.pm: pm_cohr}), _ps))
+        val_g = t_to_g(val_t, process=proc, mismatch=mismatch, coherent=True)
     else:
         def _postprocess_pf(p: PF) -> PF:
             if not p.table and p.npf == S.Zero:

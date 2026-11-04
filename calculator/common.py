@@ -8,7 +8,7 @@ from sympy.core.mul import Mul
 from sympy.core.singleton import S
 from sympy.core.symbol import Symbol
 import re
-from tokenize import NUMBER, NAME
+from tokenize import NUMBER, NAME, OP
 from sympy.core.sympify import sympify
 from sympy.parsing.sympy_parser import (
     convert_xor,
@@ -18,6 +18,11 @@ from sympy.parsing.sympy_parser import (
     split_symbols_custom,
     standard_transformations,
     _token_splittable,
+    _group_parentheses,
+    _apply_functions,
+    _flatten,
+    AppliedFunction,
+    _token_callable,
 )
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.dagger import Dagger
@@ -59,6 +64,72 @@ TRANSFORMS = (
 ) + standard_transformations + (
     split_symbols_custom(custom_can_split),
     implicit_multiplication,
+    implicit_application,
+    function_exponentiation,
+    convert_xor,
+)
+
+
+def _implicit_multiplication_single(tokens, local_dict, global_dict):
+    """
+    Implicitly adds '@' (single-mode multiplication) tokens between adjacent factors
+    separated only by spaces, while preserving explicit '*' for multi-mode multiplication.
+    """
+    result = []
+    skip = False
+    for tok, nextTok in zip(tokens, tokens[1:]):
+        result.append(tok)
+        if skip:
+            skip = False
+            continue
+        if tok[0] == OP and tok[1] == '.' and nextTok[0] == NAME:
+            skip = True
+            continue
+        if isinstance(tok, AppliedFunction):
+            if isinstance(nextTok, AppliedFunction):
+                result.append((OP, '@'))
+            elif nextTok == (OP, '('):
+                if tok.function[1] == "Function":
+                    tok.function = (tok.function[0], 'Symbol')
+                result.append((OP, '@'))
+            elif nextTok[0] == NAME or nextTok[0] == NUMBER:
+                result.append((OP, '@'))
+        else:
+            if tok == (OP, ')'):
+                if isinstance(nextTok, AppliedFunction):
+                    result.append((OP, '@'))
+                elif nextTok[0] == NAME or nextTok[0] == NUMBER:
+                    result.append((OP, '@'))
+                elif nextTok == (OP, '('):
+                    result.append((OP, '@'))
+            elif (tok[0] == NAME and not _token_callable(tok, local_dict, global_dict)) or tok[0] == NUMBER:
+                if isinstance(nextTok, AppliedFunction) or (nextTok[0] == NAME and _token_callable(nextTok, local_dict, global_dict)):
+                    result.append((OP, '@'))
+                elif nextTok == (OP, '('):
+                    result.append((OP, '@'))
+                elif nextTok[0] == NAME or nextTok[0] == NUMBER:
+                    result.append((OP, '@'))
+    if tokens:
+        result.append(tokens[-1])
+    return result
+
+
+def implicit_multiplication_single(tokens, local_dict, global_dict):
+    """
+    Custom implicit multiplication for Page 3 (Wave Mixing):
+    Factors separated by whitespace without '*' execute single-mode multiplication (mapped to '@').
+    """
+    res1 = _group_parentheses(implicit_multiplication_single)(tokens, local_dict, global_dict)
+    res2 = _apply_functions(res1, local_dict, global_dict)
+    res3 = _implicit_multiplication_single(res2, local_dict, global_dict)
+    return _flatten(res3)
+
+
+WM_TRANSFORMS = (
+    split_scientific_variable,
+) + standard_transformations + (
+    split_symbols_custom(custom_can_split),
+    implicit_multiplication_single,
     implicit_application,
     function_exponentiation,
     convert_xor,

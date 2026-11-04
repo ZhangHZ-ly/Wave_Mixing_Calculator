@@ -205,7 +205,7 @@ class FermionPat(Operator):
         if exp.is_integer:
             if (exp > 1) == True:
                 if self.comm_symm == -1:
-                    return 0
+                    return S.Zero
                 if self.comm_symm == 1:
                     return self
                 if all(n.is_integer and n.is_positive for n in self.exps):

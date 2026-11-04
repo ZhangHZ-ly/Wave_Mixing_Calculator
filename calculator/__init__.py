@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .common import (
     TRANSFORMS,
+    WM_TRANSFORMS,
     RESERVED_NAMES,
     is_valid_variable_name,
     is_valid_python_name,
@@ -37,8 +38,6 @@ from .conditions import (
 from .wave_mixing import (
     TWM_SOLVERS,
     FWM_SOLVER,
-    SOLVERS,
-    ALL_SOLVERS,
     get_wm_solver,
     WmWrapper,
     WM_VARIABLES,
@@ -56,6 +55,7 @@ from .wave_mixing import (
 
 __all__ = [
     'TRANSFORMS',
+    'WM_TRANSFORMS',
     'RESERVED_NAMES',
     'is_valid_variable_name',
     'is_valid_python_name',
@@ -82,8 +82,6 @@ __all__ = [
     'check_expression_compatibility',
     'TWM_SOLVERS',
     'FWM_SOLVER',
-    'SOLVERS',
-    'ALL_SOLVERS',
     'get_wm_solver',
     'WmWrapper',
     'WM_VARIABLES',
