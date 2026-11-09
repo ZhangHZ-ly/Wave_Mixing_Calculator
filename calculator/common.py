@@ -2,14 +2,9 @@ from __future__ import annotations
 import keyword
 from typing import Tuple
 
-from op_patterns import BosonNum, BosonPat, FermionPat
-from sympy.core.expr import Expr
-from sympy.core.mul import Mul
-from sympy.core.singleton import S
 from sympy.core.symbol import Symbol
 import re
 from tokenize import NUMBER, NAME, OP
-from sympy.core.sympify import sympify
 from sympy.parsing.sympy_parser import (
     convert_xor,
     function_exponentiation,
@@ -170,37 +165,3 @@ def is_valid_variable_name(name: str) -> Tuple[bool, str]:
 def is_valid_python_name(name: str) -> bool:
     """Validate whether name conforms to Python identifier rules and does not conflict with keywords or built-ins."""
     return is_valid_variable_name(name)[0]
-
-
-def expr_to_code_str(e: Expr) -> str:
-    """
-    Convert a SymPy quantum operator expression (from single-mode or pattern form)
-    into a valid Python expression string that can be parsed back by parse_expr.
-    """
-    if e == 0:
-        return "0"
-    if e == 1:
-        return "1"
-
-    def _rec(x):
-        if isinstance(x, BosonNum):
-            return Symbol(f'N_({x.name})', commutative=False)
-        if isinstance(x, (BosonOp, FermionOp)):
-            return Symbol(str(x.name), commutative=False) if x.is_annihilation else Symbol(f'dag({x.name})', commutative=False)
-        if isinstance(x, (BosonPat, FermionPat)):
-            factors = []
-            is_ann = x.left_base.is_annihilation
-            for exp_val in x.exps:
-                op_sym = Symbol(str(x.name), commutative=False) if is_ann else Symbol(f'dag({x.name})', commutative=False)
-                factors.append(op_sym ** exp_val if exp_val != 1 else op_sym)
-                is_ann = not is_ann
-            return Mul(*factors)
-        if isinstance(x, Dagger) or getattr(x, 'func', None) and x.func.__name__ == 'conjugate':
-            inner = _rec(x.args[0])
-            return Symbol(f'dag({inner})', commutative=False)
-        if not getattr(x, 'args', None):
-            return x
-        return x.func(*(_rec(a) for a in x.args))
-
-    return str(_rec(sympify(e)))
-

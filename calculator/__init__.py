@@ -13,14 +13,12 @@ from .single_mode import (
     _fermion_target_to_expr_str,
 )
 from .pf_expr import (
-    PFWrapper,
     PF_VARIABLES,
     save_pf_variable,
     save_latest_pf_variable,
     get_pf_variable,
     clear_pf_variables,
     eval_pf_form,
-    eval_pattern_form,
 )
 from .wm_transforms import (
     t_to_g,
@@ -50,7 +48,6 @@ from .wave_mixing import (
     analyze_expression_terms,
     eval_operator_combination,
     eval_combination_assertions,
-    expr_to_code_str,
 )
 
 __all__ = [
@@ -59,18 +56,15 @@ __all__ = [
     'RESERVED_NAMES',
     'is_valid_variable_name',
     'is_valid_python_name',
-    'expr_to_code_str',
     'g_hat',
     'eval_single_mode',
     '_fermion_target_to_expr_str',
-    'PFWrapper',
     'PF_VARIABLES',
     'save_pf_variable',
     'save_latest_pf_variable',
     'get_pf_variable',
     'clear_pf_variables',
     'eval_pf_form',
-    'eval_pattern_form',
     't_to_g',
     'PROCESS_LABELS',
     'normalize_process',

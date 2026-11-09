@@ -218,7 +218,7 @@ def dsd1(x, d, f0=0, subs=None):
             terms.append(t * pm_expr(x, func, nk, deg, True).subs({x: subs}))
             if func is not None and (func in (sinh, sin)) ^ (deg & 1):
                 f0s.append(-pm_coeffs1(func, nk, deg)[0] * t)
-    return Add(Add(f0, *f0s), *terms)
+    return Add(f0, *f0s, *terms)
 
 def dsolve_pm1(rhs, x, h=True, f0=0, subs=None):
     """

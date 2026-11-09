@@ -740,7 +740,7 @@ async function runWm() {
     cachedWmResult = data;
     cachedWmResult.sourceInput = input;
     currentWmSourceInput = input;
-    currentWmLatex = data.latex;
+    currentWmLatex = (wmUseGain ? data.latex_g : data.latex_t) || data.latex || '';
     currentWmExpr = data.expr_str;
 
     // Lazy update TWM solver sol length for current mixing mode and re-render table
@@ -755,7 +755,7 @@ async function runWm() {
     }
 
     output.innerHTML = '';
-    katex.render(data.latex, output, { displayMode: true, throwOnError: false });
+    katex.render(currentWmLatex, output, { displayMode: true, throwOnError: false });
   } catch (err) {
     output.classList.add('error');
     output.textContent = err.message;
@@ -988,7 +988,7 @@ async function runWmAssertions() {
     if (!res.ok) throw new Error(data.detail || 'Assertion calculation failed');
 
     cachedAssertResult = data;
-    currentAssertLatex = data.latex;
+    currentAssertLatex = (assertUseGain ? data.latex_g : data.latex_t) || data.latex || '';
     currentAssertExpr = data.expr_str;
 
     if (curProcess !== 'fwm' && typeof data.sol_len === 'number') {
@@ -1002,7 +1002,7 @@ async function runWmAssertions() {
     }
 
     output.innerHTML = '';
-    katex.render(data.latex, output, { displayMode: true, throwOnError: false });
+    katex.render(currentAssertLatex, output, { displayMode: true, throwOnError: false });
     updateAssertModeTag();
   } catch (err) {
     output.classList.add('error');

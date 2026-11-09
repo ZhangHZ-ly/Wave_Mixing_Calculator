@@ -2,16 +2,13 @@ from __future__ import annotations
 import re
 from typing import Optional, Set, Tuple
 
-from op_patterns import BosonNum, BosonPat, FermionPat
+from wave_mixing.pattern_form import BosonNum, BosonPat, FermionPat
 from sympy.core.singleton import S
 from sympy.core.symbol import Symbol
 from sympy.functions.combinatorial.factorials import FallingFactorial
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.fermion import FermionOp
 from sympy.printing.latex import latex
-
-from .common import expr_to_code_str
-
 
 def _fermion_target_to_expr_str(target, name: str) -> str:
     """Format single-mode fermion result into a valid Python expression string for Tab 2."""
@@ -32,16 +29,14 @@ def _fermion_target_to_expr_str(target, name: str) -> str:
             return f"1 - dag({name}) * {name}"
     except Exception:
         pass
-    return expr_to_code_str(target)
+    return str(target)
 
 
 def _has_unknowns(target, exp_symbols: Set[Symbol]) -> bool:
     """Check whether the simplified quantum expression contains any undetermined symbols (unknowns)."""
     if not exp_symbols:
         return False
-    target_syms = getattr(target, 'free_symbols', set())
-    if not target_syms and hasattr(target, 'atoms'):
-        target_syms = target.atoms(Symbol)
+    target_syms = target.free_symbols
     for s in exp_symbols:
         if s in target_syms:
             return True
@@ -91,14 +86,11 @@ def eval_single_mode(mode_type: str, name: str, first_op: str, exp_str: str, act
                 is_hermitian = True
             else:
                 patform = orig.rewrite(BosonNum)
-                pd = getattr(orig, 'parity_diff', None)
-                if pd is not None:
-                    if pd == 0 or pd is S.Zero:
-                        is_hermitian = True
-                    elif not getattr(pd, 'free_symbols', None):
-                        is_hermitian = False
-                    else:
-                        is_hermitian = None
+                pd = orig.parity_diff
+                if pd == 0 or pd is S.Zero:
+                    is_hermitian = True
+                elif not pd.free_symbols:
+                    is_hermitian = False
                 else:
                     is_hermitian = None
 
@@ -110,9 +102,9 @@ def eval_single_mode(mode_type: str, name: str, first_op: str, exp_str: str, act
                 norm = None
 
         target = orig if action == 'original' else (patform if action == 'patform' else norm)
-        has_ff = hasattr(target, 'has') and target.has(FallingFactorial)
+        has_ff = target.has(FallingFactorial)
         note = "Subscripts in (x)_k indicate the falling factorial (Pochhammer symbol): (x)_k = x(x-1)...(x-k+1), rather than operator powers." if has_ff else None
-        return latex(target), is_hermitian, expr_to_code_str(target), note
+        return latex(target), is_hermitian, str(target), note
 
     else:  # fermion
         if not exps or all(e == 0 for e in exps):
@@ -130,7 +122,7 @@ def eval_single_mode(mode_type: str, name: str, first_op: str, exp_str: str, act
             elif isinstance(simp, FermionPat) and simp.exps == (1, 1):
                 is_hermitian = True
             else:
-                is_herm_val = getattr(simp, 'is_hermitian', None)
+                is_herm_val = simp.is_hermitian
                 if is_herm_val is True:
                     is_hermitian = True
                 elif is_herm_val is False:
@@ -160,7 +152,7 @@ def eval_single_mode(mode_type: str, name: str, first_op: str, exp_str: str, act
 
         target = orig if action == 'original' else (simp if action == 'patform' else norm)
         target_str = _fermion_target_to_expr_str(target, name)
-        has_ff = hasattr(target, 'has') and target.has(FallingFactorial)
+        has_ff = target.has(FallingFactorial)
         note = "Subscripts in (x)_k indicate the falling factorial (Pochhammer symbol): (x)_k = x(x-1)...(x-k+1), rather than operator powers." if has_ff else None
         return latex(target), is_hermitian, target_str, note
 

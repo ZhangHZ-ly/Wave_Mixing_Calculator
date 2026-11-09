@@ -364,7 +364,7 @@ def _base_d(op):
     if isinstance(op, BosonPat):
         base, d = op.name, op.parity_diff
     elif isinstance(op, Sequence):
-        base, d = tuple(op)
+        base, d = Tuple(*op)
         if not d.is_commutative or d.is_real == False:
             raise ValueError('Cannot shift with a non-commutative'
                 ' or imaginary quantity')
@@ -383,6 +383,7 @@ class NumShift(Expr):
     """
 
     def __new__(cls, expr_num: Expr, *shift, **hints):
+        expr_num = sympify(expr_num)
         if expr_num.is_commutative:
             return expr_num
         if isinstance(expr_num, cls):
@@ -400,17 +401,16 @@ class NumShift(Expr):
             or not isinstance(shift[0], (Dict, dict, Tuple, tuple))):
             for s in shift:
                 if isinstance(s, (dict, Dict)):
-                    for a in s:
-                        if not isinstance(a, BosonOp):
-                            raise TypeError('Expect BosonOp, got %s' % a)
-                        d = sympify(s[a])
+                    for a, d in s.items():
+                        d = sympify(d)
                         if not d.is_commutative or d.is_real == False:
                             raise ValueError('Cannot shift with'
                                 ' a non-commutative or imaginary quantity')
-                        if a.is_annihilation:
-                            _shift[a.name] = _shift.get(a, 0) + d
+                        if isinstance(a, BosonPat):
+                            _shift[a.name] = _shift.get(a.name, 0) + d * a.parity_diff
                         else:
-                            _shift[a.name] = _shift.get(Dagger(a), 0) - d
+                            a = sympify(a)
+                            _shift[a] = _shift.get(a, 0) + d
                 else:
                     try:
                         for op in s:

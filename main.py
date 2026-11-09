@@ -9,7 +9,6 @@ from pydantic import BaseModel
 from calculator import (
     eval_single_mode,
     eval_pf_form,
-    eval_pattern_form,
     eval_wm_solve,
     eval_operator_combination,
     eval_combination_assertions,
@@ -161,7 +160,7 @@ def api_single_mode(req: SingleModeRequest):
 def api_pattern_form(req: PatternFormRequest):
     try:
         use_rem = req.use_rem
-        latex_str, expr_str, rem_latex, rem_str = eval_pattern_form(
+        latex_str, expr_str, rem_latex, rem_str = eval_pf_form(
             req.text,
             [s.model_dump() for s in req.symbols],
             [op.model_dump() for op in req.operators],
@@ -182,21 +181,16 @@ def api_pattern_form(req: PatternFormRequest):
 def solve(req: SolveRequest):
     try:
         proc = normalize_process(req.process, req.dc)
-        latex_curr, expr_curr, latex_t, expr_t, latex_g, expr_g = eval_wm_solve(
+        latex_t, latex_g = eval_wm_solve(
             dc=process_is_dc(proc),
             mismatch=req.mismatch,
             var_index=req.var_index,
             order=req.order,
-            use_gain=req.use_gain,
             process=proc,
         )
         return {
-            "latex": latex_curr,
-            "expr_str": expr_curr,
             "latex_t": latex_t,
-            "expr_str_t": expr_t,
-            "latex_g": latex_g,
-            "expr_str_g": expr_g
+            "latex_g": latex_g
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -207,7 +201,7 @@ def api_combination(req: CombinationRequest):
     try:
         proc = normalize_process(req.process, req.dc)
         is_dc = process_is_dc(proc)
-        latex_curr, expr_curr, latex_t, expr_t, latex_g, expr_g, leading_order, sol_len = eval_operator_combination(
+        latex_curr, latex_t, latex_g, leading_order, sol_len = eval_operator_combination(
             req.text,
             dc=is_dc,
             mismatch=req.mismatch,
@@ -223,11 +217,8 @@ def api_combination(req: CombinationRequest):
         lead_ord = _format_lead_ord(leading_order)
         return {
             "latex": str(latex_curr),
-            "expr_str": str(expr_curr),
             "latex_t": str(latex_t),
-            "expr_str_t": str(expr_t),
             "latex_g": str(latex_g),
-            "expr_str_g": str(expr_g),
             "leading_order": lead_ord,
             "order": int(req.order),
             "sol_len": int(sol_len),
@@ -245,7 +236,7 @@ def api_combination_assert(req: AssertionRequest):
     try:
         proc = normalize_process(req.process, req.dc)
         is_dc = process_is_dc(proc)
-        latex_curr, expr_curr, latex_t, expr_t, latex_g, expr_g, leading_order, sol_len = eval_combination_assertions(
+        latex_curr, latex_t, latex_g, leading_order, sol_len = eval_combination_assertions(
             req.text,
             dc=is_dc,
             mismatch=req.mismatch,
@@ -264,11 +255,8 @@ def api_combination_assert(req: AssertionRequest):
         lead_ord = _format_lead_ord(leading_order)
         return {
             "latex": str(latex_curr),
-            "expr_str": str(expr_curr),
             "latex_t": str(latex_t),
-            "expr_str_t": str(expr_t),
             "latex_g": str(latex_g),
-            "expr_str_g": str(expr_g),
             "leading_order": lead_ord,
             "order": int(req.order),
             "sol_len": int(sol_len),
@@ -287,7 +275,7 @@ def api_save_variable(req: SaveVarRequest):
         if req.workspace in ('tab3', 'tab4'):
             save_latest_wm_variable(req.name, notes=req.notes or "")
         else:
-            save_latest_pf_variable(req.name, notes=req.notes or "")
+            save_latest_pf_variable(req.name)
         return {"status": "ok", "name": req.name}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

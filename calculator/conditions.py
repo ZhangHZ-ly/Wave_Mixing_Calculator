@@ -38,8 +38,8 @@ def process_is_dc(process: str) -> bool:
 class LogicRelation(str, Enum):
     """
     Propositional logic relation between expression state (E) and calculation preset (P).
-    - XNOR: E == P (同或: absolute independence / mutually exclusive states, e.g. process)
-    - IMPLIES: E -> P (蕴含 / 包含: expression state implies preset state, e.g. single_mode)
+    - XNOR: E == P (absolute independence / mutually exclusive states, e.g. process)
+    - IMPLIES: E -> P (expression state implies preset state, e.g. single_mode)
     """
     XNOR = "xnor"
     IMPLIES = "implies"
@@ -99,11 +99,11 @@ class ConditionRule:
 
     def convert(self, obj: Any, solver: Any = None, dc: bool = True) -> Any:
         """Apply conversion method if registered on solver or obj."""
-        if self.convert_method:
-            if solver is not None and hasattr(solver, self.convert_method):
-                return getattr(solver, self.convert_method)(obj)
-            if hasattr(obj, self.convert_method):
-                return getattr(obj, self.convert_method)()
+        if self.convert_method == 'to_single_mode':
+            if solver is not None:
+                return solver.to_single_mode(obj)
+            if hasattr(obj, 'to_single_mode'):
+                return obj.to_single_mode()
         return obj
 
 
