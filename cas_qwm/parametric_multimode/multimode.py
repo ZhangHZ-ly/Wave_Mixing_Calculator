@@ -7,14 +7,14 @@ from sympy.core.mul import Mul
 from sympy.concrete.summations import Sum
 from sympy.physics.quantum.operator import Operator, HermitianOperator
 from sympy.core.traversal import bottom_up
-from .pattern_form.op_patterns import BosonNum, NumShift
-from .pattern_form import PF
+from ..op_pattern import BosonNum, NumShift
+from ..pattern_form import PF
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.dagger import Dagger
 from .dsolve_pm import _ps
 from functools import cached_property, lru_cache
 
-__all__ = ['MultimodeCOP', 'MultimodeNum', 'MultimodeNum2', 'mmn_shift', 'f_dict', 'd_apply', 'nd_simp']
+__all__ = ['MultimodeCOP', 'MultimodeNum', 'MultimodeNum2', 'mmn_shift', 'nd_simp']
 
 _mcc_indices = tuple(Dummy(integer=True, nonnegative=True) for _ in range(2))
 @lru_cache(8)  # The number of terms EXPONENTIALLY EXPLODES!
@@ -307,29 +307,6 @@ def t_mul(t1, t2, mid=None):
         return (i1, *exps1[:-1], exps1[-1]+ exps2[0], *exps2[1:])
     return (i1, *exps1, *exps2)
 
-def d_apply(e, f):
-    if isinstance(e, f_dict):
-        return f_dict({k: d_apply(v, f) for k, v in e.items()}, b_left=e.b_left)
-    if isinstance(e, dict):
-        return {k: d_apply(v, f) for k, v in e.items()}
-    if isinstance(e, PF):
-        try:
-            return e.n_apply(f, on_npf=True)
-        except (TypeError, AttributeError):
-            pass
-    return f(e)
-
-class f_dict(dict):
-    """
-    A dictionary subclass representing operator expressions.
-    Includes the 'b_left' attribute: indicates whether the single-mode
-    weak-field operator is left-multiplied (True) or right-multiplied (False)
-    in the expression.
-    """
-    def __init__(self, *args, b_left=True, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.b_left = b_left
-
 def _tdz(i, exps):
     """Drops the zeros in a multimode exponent tuple"""
     lz=False
@@ -394,10 +371,13 @@ def nd_simp(expr, nd):
     1. Extracting common factors of nd from Add expressions inside Mul;
     2. Merging powers of nd (using dummy commutative substitution if nd is non-commutative or composite);
     """
-    if isinstance(expr, (PF, dict, f_dict)):
-        return d_apply(expr, lambda x: nd_simp(x, nd))
+    if not isinstance(expr, Expr):
+        if hasattr(expr, 'apply'):
+            return expr.apply(lambda x: nd_simp(x, nd))
+        if isinstance(expr, PF):
+            return expr.n_apply(lambda x: nd_simp(x, nd), on_npf=True)
     nd = nd.base if nd.is_Pow else nd
-    if not isinstance(expr, Expr) or not expr.has(nd):
+    if not expr.has(nd):
         return expr
     _nd = None if nd.is_commutative else Dummy()
     return bottom_up(expr, lambda x: _mps(x, nd, _nd) if x.is_Mul else _ps(x))

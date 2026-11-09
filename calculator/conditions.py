@@ -97,13 +97,10 @@ class ConditionRule:
             return (not bool(expr_val)) and bool(preset_val)
         return False
 
-    def convert(self, obj: Any, solver: Any = None, dc: bool = True) -> Any:
-        """Apply conversion method if registered on solver or obj."""
-        if self.convert_method == 'to_single_mode':
-            if solver is not None:
-                return solver.to_single_mode(obj)
-            if hasattr(obj, 'to_single_mode'):
-                return obj.to_single_mode()
+    def convert(self, obj: Any) -> Any:
+        """Apply conversion method if registered on obj."""
+        if self.convert_method == 'to_single_mode' and hasattr(obj, 'to_single_mode'):
+            return obj.to_single_mode()
         return obj
 
 

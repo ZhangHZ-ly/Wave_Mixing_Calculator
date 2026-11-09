@@ -14,17 +14,18 @@ from sympy.core.symbol import Symbol, Dummy
 from sympy.core.sympify import sympify
 from sympy.physics.quantum.anticommutator import AntiCommutator
 from sympy.physics.quantum.commutator import Commutator
-from .op_patterns import *
-from .op_patterns.boson_pattern import fac, NumShift
+from ..op_pattern import *
+from ..op_pattern.boson_pattern import fac, NumShift
 from .pattern_form import PF
 from collections import defaultdict
 from sympy.core.traversal import bottom_up, preorder_traversal
 from sympy.series.limits import limit
-from functools import lru_cache, cached_property
+from sympy.utilities.iterables import multiset_permutations
+from functools import lru_cache
 import inspect
 import warnings
 
-__all__ = ['PE']
+__all__ = ['PE', 'perturb_rec', 'poly_perm']
 
 warnings.simplefilter("once", FutureWarning)
 class DerivCache:
@@ -43,13 +44,13 @@ class DerivCache:
         self.lim = lim
         # key = orders tuple, value = expression (already divided by factorial)
         self.cache = {(0,)*self.dim: f}
-    
+
     def get(self, orders, i=None, **kwargs):
         """
         Calculates and caches the partial derivatives of f,
-        given the updated index
+        given the updated index.
 
-        If the updated index is invalid or unspecified, search from the first index
+        If the updated index is invalid or unspecified, search from the last non-zero index.
 
         :param orders: tuple of total derivative orders (l+k)
         :param i: index of variable currently being increased (k_i)
@@ -61,22 +62,13 @@ class DerivCache:
         if self.lim is not None and sum(orders) > self.lim:
             raise ValueError('Exceeds the maximal order limit')
         if orders in self.cache:
-            expr = self.cache[orders]
-        elif i is None:
-            for i, n in enumerate(orders, start=1):
-                expr = self.get((0,)*(self.dim-i)+(orders[-i:]), self.dim-i, **kwargs)
-        else:
-            n = orders[i]
-            if n == 0:
-                """
-                If the warning is triggered, the iteration order or cache release logic
-                may be inconsistent with the expected growth semantics.
-                """
-                warnings.warn('Got unexpected index, implementing forced method')
-                return self.get(orders)
-            expr = diff(self.get((*orders[:i], n-1, *orders[i+1:]), i),
-                              self.xs[i], **kwargs)
-            self.cache[orders] = expr
+            return self.cache[orders]
+        if i is None or orders[i] == 0:
+            i = next(j for j in range(self.dim - 1, -1, -1) if orders[j] > 0)
+        n = orders[i]
+        expr = diff(self.get((*orders[:i], n - 1, *orders[i+1:]), i, **kwargs),
+                    self.xs[i], **kwargs)
+        self.cache[orders] = expr
         return expr
 
     def release(self, orders, i):
@@ -166,8 +158,14 @@ check_num_cache = dict()
 commute_dep_cache = dict()
 commute_ind_cache = dict()
 
-def commute(a, b, **hints):
-    if a is b or a.is_commutative or b.is_commutative:
+def commute(a, b, _comm=None, _is_comm=None, _is_num=None, **hints):
+    if a is b:
+        return True
+    if _is_comm is None:
+        _is_comm = lambda x : x.is_commutative
+    if _is_num is None:
+        _is_num = lambda x: check_num(x, check_num_cache)
+    if _is_comm(a) or _is_comm(b):
         return True
     if hints.get('independent', False):
         if a in commute_ind_cache and b in commute_ind_cache[a]:
@@ -176,88 +174,182 @@ def commute(a, b, **hints):
             return commute_ind_cache[b][a]
         elif a not in commute_ind_cache:
             commute_ind_cache[a] = dict()
-        if check_num(a, check_num_cache) and check_num(b, check_num_cache):
+        if _is_num(a) and _is_num(b):
             result = True
-        else:
+        elif _comm is None:
             ba, fa, na, _, _ = extract_modes_cached(a)
             bb, fb, nb, _, _ = extract_modes_cached(b)
             if fa or na or fb or nb:
                 pass
             elif not (ba & bb) or Commutator(a, b).doit(independent=True) == 0:
                 result = True
-            else:
-                result = False
+            result = False
+        else:
+            result = _comm(a, b)
         commute_ind_cache[a][b] = result
         return result
-    if a in commute_dep_cache and b in commute_dep_cache[a]:
-        return commute_dep_cache[a][b]
-    elif b in commute_dep_cache and a in commute_dep_cache[b]:
-        return commute_dep_cache[b][a]
-    elif a not in commute_dep_cache:
-        commute_dep_cache[a] = dict()
-    ba = extract_modes_cached(a)[0]
-    bb = extract_modes_cached(b)[0]
-    if (len(ba) == 1 and ba == bb
-          and check_num(a, check_num_cache) and check_num(b, check_num_cache)):
-        result = True
-    elif Commutator(a, b).doit() == 0:
-        result = True
-    else:
+    if _comm is None:
+        if a in commute_dep_cache and b in commute_dep_cache[a]:
+            return commute_dep_cache[a][b]
+        elif b in commute_dep_cache and a in commute_dep_cache[b]:
+            return commute_dep_cache[b][a]
+        elif a not in commute_dep_cache:
+            commute_dep_cache[a] = dict()
+        ba = extract_modes_cached(a)[0]
+        bb = extract_modes_cached(b)[0]
+        if (len(ba) == 1 and ba == bb
+            and check_num(a, check_num_cache) and check_num(b, check_num_cache)):
+            result = True
+        elif Commutator(a, b).doit() == 0:
+            result = True
         result = False
+    else:
+        result = _comm(a, b)
     commute_dep_cache[a][b] = result
     return result
 
-class PolyPermutation(Expr):
-    def __new__(cls, arg):
-        if not arg:
-            return S.One
-        return Expr.__new__(cls, Dict(arg))
-
-    @cached_property
-    def total_order(self):
-        return sum(self.args[0].values())
-    
-    def sep_cnc(self, **hints):
-        comm = []
-        ts = dict(self.args[0])
-        for a in ts:
-            if all(commute(a, b, **hints) for b in ts):
-                comm.append(a)
-        coeffs = []
-        for a in comm:
-            m = ts[a]
-            del ts[a]
-            coeffs.append(a**m / fac(m))
-        return Mul(*coeffs, PolyPermutation(ts))
-
-    def doit(self, **hints):
-        comm = []
-        ts = dict(self.args[0])
-        for a in ts:
-            if all(commute(a, b, **hints) for b in ts):
-                comm.append(a)
-        coeffs = []
-        for a in comm:
-            m = ts[a]
-            del ts[a]
-            if hints.get('deep', True):
-                a = a.doit(**hints)
-            coeffs.append(a**m / fac(m))
-        if not ts:
-            return Mul(*coeffs)
-        from sympy.utilities.iterables import multiset_permutations as perm
-        if hints.get('deep', True):
-            terms = {term.doit(**hints): m for term, m in self.args[0].items()}
+def poly_perm(ts, _comm=None, _is_comm=None, _is_num=None,
+              _add=Add, _mul=None, _pow=None, **hints):
+    items = [(k, v) for k, v in (ts.items() if isinstance(ts, dict) else ts) if v]
+    if not items:
+        return S.One
+    if _mul is None:
+        _mul = (lambda args: Mul(*args).doit(**hints)) if hints.get('deep', False) else (lambda args: Mul(*args))
+    if _pow is None:
+        _pow = (lambda a, m: Pow(a, m).doit(**hints)) if hints.get('deep', False) else pow
+    coeffs = []
+    nc = []
+    for a, m in items:
+        if all(commute(a, b, _comm, _is_comm, _is_num, **hints) for b, _ in items):
+            coeffs.append(_pow(a, m) / fac(m))
         else:
-            terms = self.args[0]
-        l = sum(([term] * m for term, m in terms.items()), [])
-        return Mul(*coeffs, Add(*(Mul(*p) for p in perm(l))) / fac(self.total_order))
+            nc.append((a, m))
+    if nc:
+        total_order = sum(m for _, m in nc)
+        l = sum(([i] * m for i, (_, m) in enumerate(nc)), [])
+        coeffs.append(
+            _add(*(_mul([nc[i][0] for i in p]) for p in multiset_permutations(l))) / fac(total_order)
+        )
+    return coeffs[0] if len(coeffs) == 1 else _mul(coeffs)
 
-def coeffs(ao, prefix, l, **kwargs):
-    collection = [dict() for _ in range(l)]
-    for (i, _, ta), o in zip(ao, prefix):
-        collection[i][ta] = o
-    return tuple(PolyPermutation(pt).sep_cnc(**kwargs) for pt in collection)
+def perturb_rec( _comm=None, _is_comm=None, _is_num=None,
+                _add=Add, _mul=None, _pow=None, **hints):
+    """
+    Decorator factory that unifies multivariable perturbation recursion and Taylor expansions
+    with support for non-commutative operator algebra.
+
+    Encapsulates the branch-and-bound recursive search over perturbation orders,
+    automatically assembling symmetrized operator permutations (`poly_perm`) and managing
+    derivative caching via `DerivCache`.
+
+    Parameters
+    ----------
+    _comm : callable, optional
+        Custom commutator checker `_comm(a, b) -> bool`.
+        If None, falls back to mode commutation checks or `Commutator(a, b).doit() == 0`.
+    _is_comm : callable, optional
+        Predicate `_is_comm(x) -> bool` testing if an element commutes with all others.
+        Defaults to `lambda x: x.is_commutative`.
+    _is_num : callable, optional
+        Predicate `_is_num(x) -> bool` testing if an element is a scalar number.
+        Defaults to `check_num(x, check_num_cache)`.
+    _add : callable, optional
+        Addition operator function `_add(*args)`. Defaults to SymPy's `Add`.
+    _mul : callable, optional
+        Multiplication operator function `_mul(args)`.
+        Defaults to `Mul(*args).doit(**hints)` if `hints.get('deep')` else `Mul(*args)`.
+    _pow : callable, optional
+        Power operator function `_pow(a, m)`.
+        Defaults to `Pow(a, m).doit(**hints)` if `hints.get('deep')` else `pow`.
+    **hints : dict
+        Additional algebra or expansion hints passed down to `poly_perm`, `DerivCache.get`,
+        `commute`, etc. (e.g. `independent=True`, `deep=True`).
+
+    Returns
+    -------
+    decorator : callable
+        Takes an evaluation callback `term` and returns `wrapper(ao, n, xs, f=None)`.
+
+    Decorated Function (`term`)
+    ---------------------------
+    term(arg) -> nf or None
+        Evaluates the coefficient / prefactor for a given order combination.
+        - If `dfc` is active (`f` is not None and `xs` is a sequence):
+          `arg` is the cached partial derivative:
+          `dfc.get(tuple(deriv_orders), **hints)`
+        - If `dfc` is None (`xs` is an int or `f` is None):
+          `arg` is `deriv_orders`, a list of non-negative integers specifying
+          the variation count (derivative order) for each variable index.
+        - Return value `nf`: the evaluated prefactor (e.g. scalar derivative value,
+          falling factorial factor `gperm(m, tot) * lt**(m - tot)`, or WMWrapper).
+          If `nf is None` or `nf == 0` (or `S.Zero`), the recursion branch is pruned.
+
+    Wrapper Function (`wrapper`)
+    ----------------------------
+    wrapper(ao, n, xs, f=None) -> Generator[(term_expr, order)]
+        Executes the recursive perturbation expansion.
+        - `ao` : list of tuples `(idx, weight, term)`
+          - `idx` (`int`): Variable index in `[0, l-1]` being perturbed.
+          - `weight` (`int` or number): Perturbation order `w > 0` of this variation.
+          - `term`: The perturbation term / operator variation.
+        - `n` : maximum perturbation order budget.
+        - `xs` : either `int` (total number of independent variables `l`),
+          or a sequence of symbols/Dummy variables of length `l`.
+        - `f` : optional expression for base function `f(*xs)` to differentiate.
+        - Yields: `(expr, order)` pairs where `expr = _mul((*cs, nf))` and
+          `order = n - remaining = sum(x_k * w_k)` is the relative perturbation order.
+        - Automatically clears mode, commutativity, and number check caches on exit.
+    """
+    if _mul is None:
+        _mul = (lambda args: Mul(*args).doit(**hints)) if hints.get('deep', False) else (lambda args: Mul(*args))
+    if _pow is None:
+        _pow = (lambda a, m: Pow(a, m).doit(**hints)) if hints.get('deep', False) else pow
+
+    def decorator(term):
+        def wrapper(ao, n, xs, f=None):
+            if isinstance(xs, int):
+                l = xs
+                dfc = None
+            else:
+                l = len(xs)
+                dfc = DerivCache(f, xs) if f is not None else None
+            ao = sorted(ao, key=lambda item: (item[0], item[1]))
+            dim = len(ao)
+            min_i = {i for i in range(dim) if i == 0 or ao[i][0] != ao[i - 1][0]}
+
+            def rec(i, remaining, prefix, deriv_orders):
+                if i == dim:
+                    arg = dfc.get(tuple(deriv_orders), **hints) if dfc is not None else deriv_orders
+                    nf = term(arg)
+                    if nf is None or nf == 0:
+                        return
+                    collection = [[] for _ in range(l)]
+                    for (idx, _, ta), o in zip(ao, prefix):
+                        if o:
+                            collection[idx].append((ta, o))
+                    cs = tuple(poly_perm(pt, _comm, _is_comm, _is_num, _add, _mul, _pow, **hints)
+                               for pt in collection if pt)
+                    yield _mul((*cs, nf)), n - remaining
+                    return
+                curr, w, _ = ao[i]
+                max_count = remaining // w
+                for x in range(max_count + 1):
+                    prefix.append(x)
+                    deriv_orders[curr] += x
+                    yield from rec(i + 1, remaining - x * w, prefix, deriv_orders)
+                    if dfc is not None and x == max_count and i in min_i:
+                        dfc.release(deriv_orders, curr)
+                    del prefix[-1]
+                    deriv_orders[curr] -= x
+
+            yield from rec(0, n, [], [0] * l)
+            extract_modes_cache.clear()
+            check_num_cache.clear()
+            commute_dep_cache.clear()
+            commute_ind_cache.clear()
+
+        return wrapper
+    return decorator
 
 class PE:
     """
@@ -276,9 +368,12 @@ class PE:
 
     def __init__(self, assumptions):
         self.assumptions = Dict(assumptions)
-        self.rc = {FermionPat}
+        self.rc = set()
         self.rs = {Symbol}
-        self.rp = {BosonPat: ('name', lambda p: Add(*p.exps))}
+        self.rp = {
+            BosonPat: ('name', lambda p: Add(*p.exps)),
+            FermionPat: ('name', lambda p: Add(*p.exps)),
+        }
         self._lo_cache = dict()
         self._subs_cache = dict()
 
@@ -568,27 +663,15 @@ class PE:
             if not d:
                 yield lt**m, lo * m
                 return
-            dim = len(d)
-            weights, terms = zip(*d.items())
-            def rec(i, remaining, prefix):
-                if i == dim:
-                    pp = PolyPermutation(dict(zip(terms, prefix)))
-                    if m.is_Integer and m < pp.total_order:
-                        yield from ()
-                    yield (Mul(gperm(m, pp.total_order), lt**(m-pp.total_order),
-                            pp.sep_cnc(**kwargs)), n - remaining)
-                    return
-                w = weights[i]
-                max_count = remaining // w
-                for x in range(max_count + 1):
-                    prefix.append(x)
-                    yield from rec(i+1, remaining - x*w, prefix)
-                    del prefix[-1]
-            yield from rec(0, n_new, [])
-            extract_modes_cache.clear()
-            check_num_cache.clear()
-            commute_dep_cache.clear()
-            commute_ind_cache.clear()
+            ao = [(0, o, t) for o, t in d.items()]
+            @perturb_rec(**kwargs)
+            def term(deriv_orders):
+                tot = deriv_orders[0]
+                if m.is_Integer and 0 <= m < tot:
+                    return None
+                return Mul(gperm(m, tot), lt**(m - tot))
+            for res, o in term(ao, n_new, 1):
+                yield res, o + lo * m
         else:
             if isinstance(expr, Derivative):
                 args = expr.expr.args if isinstance(expr.expr, Function) else ()
@@ -633,25 +716,25 @@ class PE:
                     for oa, ta in d.items():
                         ao.append((i, oa, ta))
                     d.clear()
-                dim = len(ao)
                 d0 = tuple(Dummy() for _ in a0)
-                pt = [i[2] for i in ao]
+                subs_pt = dict(zip(d0, (i[2] for i in ao)))
                 ini_order = [0] * len(args)
                 for v in expr.variable_count:
                     if isinstance(v, Tuple):
                         ini_order[syms[v[0]]] += v[1]
-                def term(remaining, prefix, deriv_orders, *_):
-                    cs = coeffs(ao, prefix, len(a0), **kwargs)
-                    nd = Derivative(expr.expr.func(*d0),
-                                    *((d0, p+q) for d0, p, q in zip(d0, ini_order, deriv_orders)))
-                    return Mul(*cs, nd).subs(dict(zip(d0, pt))), n-remaining
+                f_arg = None
+                @perturb_rec(**kwargs)
+                def term(deriv_orders):
+                    return Derivative(
+                        expr.expr.func(*d0),
+                        *((d, p + q) for d, p, q in zip(d0, ini_order, deriv_orders))
+                    ).subs(subs_pt)
             elif expr.is_Pow or isinstance(expr, Function):
                 if n < 0:
                     yield from ()
                     return
                 a0 = []
                 ao = []
-                min_i = [0]
                 d = {}
                 for i, arg in enumerate(expr.args):
                     for ta, oa in self.expand_expr(arg, n):
@@ -663,32 +746,27 @@ class PE:
                         a0.append(d.pop(S.Zero))
                     else:
                         a0.append(S.Zero)
-                    min_i.append(len(d)+min_i[-1])
                     for oa, ta in d.items():
                         ao.append((i, oa, ta))
                     d.clear()
-                min_i = dict(zip(min_i, range(len(a0))))
-                d0 = tuple(Dummy() for _ in a0)
-                pt = [i[2] for i in ao]
                 if not ao:
                     yield expr.func(*a0), S.Zero
                     return
-                dim = len(ao)
-                dfc = DerivCache(expr.func(*d0), d0)
+                d0 = tuple(Dummy() for _ in a0)
                 if isinstance(expr.func, UndefinedFunction):
-                    def term(remaining, prefix, deriv_orders, *_):
-                        cs = coeffs(ao, prefix, len(a0), **kwargs)
-                        nd = Derivative(expr.func(*d0), *((d0, q) for d0, q in zip(d0, deriv_orders)))
-                        return Mul(*cs, nd.subs(dict(zip(d0, pt)))), n-remaining
+                    subs_pt = dict(zip(d0, (i[2] for i in ao)))
+                    f_arg = None
+                    @perturb_rec(**kwargs)
+                    def term(deriv_orders):
+                        return Derivative(
+                            expr.func(*d0), *((d, q) for d, q in zip(d0, deriv_orders))
+                        ).subs(subs_pt)
                 else:
-                    def term(remaining, prefix, deriv_orders, current_sum, last_nz):
-                        cs = coeffs(ao, prefix, len(a0), **kwargs)
-                        nf = dfc.get(tuple(deriv_orders), last_nz, **kwargs).subs(dict(zip(d0, a0)))
-                        if last_nz in min_i and ao[last_nz][1] < remaining:
-                            dfc.release(deriv_orders, min_i[last_nz])
-                        if nf is S.Zero:
-                            return
-                        return Mul(*cs, nf), current_sum
+                    subs_a0 = dict(zip(d0, a0))
+                    f_arg = expr.func(*d0)
+                    @perturb_rec(**kwargs)
+                    def term(df):
+                        return df.subs(subs_a0)
             else:
                 ne = expr.doit(**kwargs)
                 if ne != expr:
@@ -699,35 +777,7 @@ class PE:
                 if o is not S.Infinity and o <= n:
                     yield expr, o
                 return
-            def rec(i, remaining, prefix, deriv_orders, current_sum, last_nz):
-                if i == dim:
-                    result = term(remaining, prefix, deriv_orders, current_sum, last_nz)
-                    if result is None:
-                        yield from()
-                    else:
-                        yield result
-                    return
-                curr, w, _ = ao[i]
-                max_count = remaining // w
-                for x in range(max_count + 1):
-                    prefix.append(x)
-                    deriv_orders[curr] += x
-                    next_last = curr if x != 0 else last_nz
-                    yield from rec(
-                        i + 1,
-                        remaining - x * w,
-                        prefix,
-                        deriv_orders,
-                        current_sum + x * w,
-                        next_last
-                    )
-                    del prefix[-1]
-                    deriv_orders[curr] -= x
-            yield from rec(0, n, [], [0]*len(a0), 0, 0)
-            extract_modes_cache.clear()
-            check_num_cache.clear()
-            commute_dep_cache.clear()
-            commute_ind_cache.clear()
+            yield from term(ao, n, d0, f_arg)
 
     def lo_pf(self, pf: PF, **kwargs):
         """
@@ -737,7 +787,7 @@ class PE:
         for (bs, fs), t in pf.table.items():
             if t == 0 or t is S.Zero:
                 continue
-            nb = Add(*(self.leading_order(b)[1] for b in bs))
+            nb = Add(*(self.leading_order(b)[1] for b in bs + fs))
             ot = self.leading_order(t)[1]
             if ot is not S.Infinity:
                 o = nb + ot
@@ -765,7 +815,7 @@ class PE:
 
         new_t = dict()
         for (bs, fs), t in pf.table.items():
-            nb = Add(*(self.leading_order(b)[1] for b in bs))
+            nb = Add(*(self.leading_order(b)[1] for b in bs + fs))
             new_t[(bs, fs)] = Add(*(e[0] for e in self.expand_expr(t, m-nb, **kwargs)))
         return PF(new_t, Add(*(e[0] for e in self.expand_expr(pf.npf, m, **kwargs)))), m
 
@@ -777,7 +827,7 @@ class PE:
         if with_order:
             orders = dict()
             for (bs, fs), t in pf.table.items():
-                nb = Add(*(self.leading_order(b)[1] for b in bs))
+                nb = Add(*(self.leading_order(b)[1] for b in bs + fs))
                 for term, o in self.expand_expr(t, n-nb, **kwargs):
                     tot_o = nb + o
                     if tot_o not in orders:
@@ -795,7 +845,7 @@ class PE:
 
         new_t = dict()
         for (bs, fs), t in pf.table.items():
-            nb = Add(*(self.leading_order(b)[1] for b in bs))
+            nb = Add(*(self.leading_order(b)[1] for b in bs + fs))
             new_t[(bs, fs)] = Add(*(e[0] for e in self.expand_expr(t, n-nb, **kwargs)))
         return PF(new_t, Add(*(e[0] for e in self.expand_expr(pf.npf, n, **kwargs))))
 

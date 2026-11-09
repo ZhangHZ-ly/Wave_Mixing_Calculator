@@ -2,7 +2,7 @@ from __future__ import annotations
 import re
 from typing import Optional, Set, Tuple
 
-from wave_mixing.pattern_form import BosonNum, BosonPat, FermionPat
+from cas_qwm.op_pattern import BosonNum, BosonPat, FermionPat
 from sympy.core.singleton import S
 from sympy.core.symbol import Symbol
 from sympy.functions.combinatorial.factorials import FallingFactorial

@@ -16,9 +16,9 @@ from sympy.physics.quantum.fermion import FermionOp
 from sympy.core.function import diff as sympy_diff
 from sympy.physics.quantum.commutator import Commutator
 from sympy.physics.quantum.anticommutator import AntiCommutator
-from wave_mixing.pattern_form.op_patterns.boson_pattern import BosonPat, BosonNum, NumShift
-from wave_mixing.pattern_form.op_patterns.fermion_pattern import FermionPat, m1_base, UidCommutator
-from wave_mixing.pattern_form.op_patterns.tools import mul_pattern, extract_modes, check_num, redo_mul
+from ..op_pattern.boson_pattern import BosonPat, BosonNum, NumShift
+from ..op_pattern.fermion_pattern import FermionPat, m1_base, UidCommutator
+from ..op_pattern.tools import mul_pattern, extract_modes, check_num, redo_mul
 from sortedcontainers import SortedDict
 import warnings
 
@@ -519,6 +519,9 @@ class PF:
         if isinstance(value, PF):
             return self.table == value.table and self.npf == value.npf
         return False
+    
+    def __bool__(self) -> bool:
+        return bool(self.table or self.npf != 0 or self.rem != 0)
 
     def expr(self, with_npf=True) -> Expr:
         if with_npf:
@@ -680,7 +683,8 @@ class PF:
     def n_apply(self, f, on_npf: bool = False) -> PF:
         sf = dict()
         for k, t in self.table.items():
-            sf[k] = f(t)
+            if (nt := f(t)) != 0:
+                sf[k] = nt
         npf = f(self.npf) if on_npf else self.npf
         return PF(
             sf, npf, self._rem_cache,

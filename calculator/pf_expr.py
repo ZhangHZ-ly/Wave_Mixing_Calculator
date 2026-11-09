@@ -1,8 +1,8 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
-from wave_mixing.pattern_form import BosonNum, BosonPat, FermionPat
-from wave_mixing.pattern_form import PF
+from cas_qwm.op_pattern import BosonNum, BosonPat, FermionPat
+from cas_qwm.pattern_form import PF
 from sympy.core.function import diff
 from sympy.core.numbers import I, pi
 from sympy.core.singleton import S
@@ -92,29 +92,20 @@ def eval_pf_form(
             return PF.from_val(fn(sympify(item)), use_rem)
         return _inner
 
-    def _make_bp(item, *args):
+    def _unwrap_args(args):
         raw_args = []
         for a in args:
             if isinstance(a, (tuple, list)):
                 raw_args.extend(x if isinstance(x, bool) else (x.expr() if isinstance(x, PF) else sympify(x)) for x in a)
             else:
                 raw_args.append(a if isinstance(a, bool) else (a.expr() if isinstance(a, PF) else sympify(a)))
-        name = item.name if hasattr(item, 'name') else str(item)
-        if op_mode_map and name in op_mode_map:
-            name = str(op_mode_map[name])
-        return PF.from_val(BosonPat(name, *raw_args), use_rem)
+        return raw_args
 
-    def _make_fp(item, *args):
-        raw_args = []
-        for a in args:
-            if isinstance(a, (tuple, list)):
-                raw_args.extend(x if isinstance(x, bool) else (x.expr() if isinstance(x, PF) else sympify(x)) for x in a)
-            else:
-                raw_args.append(a if isinstance(a, bool) else (a.expr() if isinstance(a, PF) else sympify(a)))
+    def _make_op_pat(pat_cls, item, *args):
         name = item.name if hasattr(item, 'name') else str(item)
         if op_mode_map and name in op_mode_map:
             name = str(op_mode_map[name])
-        return PF.from_val(FermionPat(name, *raw_args), use_rem)
+        return PF.from_val(pat_cls(name, *_unwrap_args(args)), use_rem)
 
     def _make_pat(item, *args):
         if isinstance(item, PF) and item.table:
@@ -135,13 +126,7 @@ def eval_pf_form(
         if op_mode_map and name in op_mode_map:
             name = str(op_mode_map[name])
 
-        exps = []
-        for a in args:
-            if isinstance(a, (tuple, list)):
-                exps.extend(x if isinstance(x, bool) else (x.expr() if isinstance(x, PF) else sympify(x)) for x in a)
-            else:
-                exps.append(a if isinstance(a, bool) else (a.expr() if isinstance(a, PF) else sympify(a)))
-
+        exps = _unwrap_args(args)
         if exps and isinstance(exps[0], bool):
             is_ann = exps.pop(0)
         if not exps:
@@ -175,10 +160,10 @@ def eval_pf_form(
         'BosonNum': _make_boson_num,
         'Pat': _make_pat,
         'pattern': _make_pat,
-        'BP': _make_bp,
-        'BosonPat': _make_bp,
-        'FP': _make_fp,
-        'FermionPat': _make_fp,
+        'BP': lambda item, *args: _make_op_pat(BosonPat, item, *args),
+        'BosonPat': lambda item, *args: _make_op_pat(BosonPat, item, *args),
+        'FP': lambda item, *args: _make_op_pat(FermionPat, item, *args),
+        'FermionPat': lambda item, *args: _make_op_pat(FermionPat, item, *args),
         'Pow': lambda b, e: (b ** e) if isinstance(b, PF) else ((PF.from_val(b, use_rem)) ** e),
         'pow': lambda b, e: (b ** e) if isinstance(b, PF) else ((PF.from_val(b, use_rem)) ** e),
         'diff': lambda expr, *args, **kwargs: expr.diff(*args, **kwargs) if hasattr(expr, 'diff') else diff(expr, *args, **kwargs),

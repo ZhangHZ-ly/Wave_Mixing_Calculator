@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import List, Optional, Union
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
@@ -14,11 +14,10 @@ from calculator import (
     eval_combination_assertions,
     save_latest_pf_variable,
     save_latest_wm_variable,
-    TWM_SOLVERS,
-    FWM_SOLVER,
     normalize_process,
     process_is_dc,
 )
+from cas_qwm.parametric_multimode import wm_processors
 
 
 app = FastAPI(title="Quantum Operator Calculator")
@@ -284,12 +283,9 @@ def api_save_variable(req: SaveVarRequest):
 @app.post("/api/combination/reset")
 def api_reset_combination():
     try:
-        for s in (*TWM_SOLVERS[0], *TWM_SOLVERS[1], FWM_SOLVER):
-            if hasattr(s, 'reset_pe'):
-                s.reset_pe()
-            elif hasattr(s, 'update_pe'):
-                s.update_pe({})
-        return {"status": "success", "message": "WM solver PE reset to defaults"}
+        for p in wm_processors:
+            p.reset_pe()
+        return {"status": "success", "message": "WM processor PE reset to defaults"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
