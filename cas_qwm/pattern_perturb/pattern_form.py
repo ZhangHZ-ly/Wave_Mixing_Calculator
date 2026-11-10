@@ -22,7 +22,7 @@ from ..op_pattern.tools import mul_pattern, extract_modes, check_num, redo_mul
 from sortedcontainers import SortedDict
 import warnings
 
-__all__ = ['is_pattern_form', 'pf', 'PF', 'PF0', 'PF1', 'BSC', 'FSC']
+__all__ = ['is_pattern_form', 'pf', 'PF', 'pf_add', 'PF0', 'PF1', 'BSC', 'FSC']
 
 _k_cache = dict()
 def key(a):
@@ -490,12 +490,15 @@ def is_pattern_form(*exprs: Expr) -> bool:
 
 _vpk = ((), ())
 
+def make_contexts(pf: PF):
+    return pf.make_context()
+
 class PF:
     """
     Final representation of pattern form
     """
     __slots__ = (
-        'table', 'npf', '_rem_cache', 'rem', 'use_rem'
+        'table', 'npf', '_rem_cache', 'rem'
     )
 
     def __init__(
@@ -504,13 +507,11 @@ class PF:
         npf=S.Zero,
         cache=None,
         rem=S.Zero,
-        use_rem: bool = False,
     ):
         self.table = dict() if table is None else table
         self.npf = sympify(npf)
         self._rem_cache = dict() if cache is None else cache
         self.rem = S.Zero if rem is None else sympify(rem)
-        self.use_rem = bool(use_rem)
 
     def __repr__(self):
         return f"PatternForm({self.table}, {self.npf})"
@@ -535,91 +536,190 @@ class PF:
         return self, getattr(self, 'rem', S.Zero)
 
     @classmethod
-    def from_val(cls, val, use_rem: bool = False) -> PF:
+    def from_val(cls, val) -> PF:
         if isinstance(val, PF):
-            if use_rem:
-                val.use_rem = True
             return val
         if isinstance(val, tuple) and len(val) == 2 and isinstance(val[0], PF):
             pf_obj = val[0]
             pf_obj.rem = sympify(val[1])
-            pf_obj.use_rem = use_rem
             return pf_obj
         expr = sympify(val)
         if getattr(expr, 'is_commutative', True) or not expr.has(BosonOp, BosonPat, FermionOp, FermionPat):
-            return cls({_vpk: expr}, rem=S.Zero, use_rem=use_rem)
+            return cls({_vpk: expr}, rem=S.Zero)
         pf_res = pattern_form(expr, as_dict=None)
         if isinstance(pf_res, tuple):
             pf_obj, r = pf_res
             pf_obj.rem = r
-            pf_obj.use_rem = use_rem
             return pf_obj
-        pf_res.use_rem = use_rem
         return pf_res
+
+    def make_context(self):
+        rem = getattr(self, 'rem', S.Zero)
+        for (bs, fs), n in self.table.items():
+            bsc = object.__new__(BSC)
+            bsc.result = bsc.pat_sorted = bs
+            bsc.tail = bsc.tail_pat = n
+            bsc.remainder = bsc.remainder_pat = rem
+            bsc._rem_cache = self._rem_cache
+            fsc = object.__new__(FSC)
+            fsc.result = fs
+            fsc.tail = S.One
+            fsc.remainder = S.Zero
+            yield bsc, fsc
+
+    make_contexts = make_context
 
     def __add__(self, other):
         if not isinstance(other, PF):
-            other = PF.from_val(other, self.use_rem)
-        new_pf = pf_add(self, other)
-        if self.use_rem or other.use_rem:
-            new_pf.rem = self.rem + other.rem
-            new_pf.use_rem = True
-        return new_pf
+            other = PF.from_val(other)
+        return pf_add(self, other)
 
     def __radd__(self, other):
+        if other == 0 or other is S.Zero:
+            return self
+        return PF.from_val(other).__add__(self)
+
+    def __iadd__(self, other):
         return self.__add__(other)
 
     def __neg__(self):
         return PF(
-            {k: -v for k, v in self.table.items()}, -self.npf, self._rem_cache,
-            rem=-self.rem, use_rem=self.use_rem
+            {k: -v for k, v in self.table.items()}, -self.npf, dict(self._rem_cache),
+            rem=-self.rem
         )
+
+    def __pos__(self):
+        return self
 
     def __sub__(self, other):
         if not isinstance(other, PF):
-            other = PF.from_val(other, self.use_rem)
-        return self.__add__(-other)
+            other = PF.from_val(other)
+        return pf_add(self, -other)
 
     def __rsub__(self, other):
-        return PF.from_val(other, self.use_rem).__sub__(self)
+        return PF.from_val(other).__sub__(self)
+
+    def __isub__(self, other):
+        return self.__sub__(other)
 
     def __mul__(self, other):
+        if isinstance(other, (int, Integer)):
+            if other == 0:
+                return PF0
+            if other == 1:
+                return self
+            return PF(
+                {k: v * other for k, v in self.table.items()},
+                self.npf * other,
+                dict(self._rem_cache)
+            )
+        if isinstance(other, Expr) and getattr(other, 'is_commutative', False):
+            if other == 0 or other is S.Zero:
+                return PF0
+            if other == 1 or other is S.One:
+                return self
+            return PF(
+                {k: v * other for k, v in self.table.items()},
+                self.npf * other,
+                dict(self._rem_cache)
+            )
         if not isinstance(other, PF):
-            other = PF.from_val(other, self.use_rem)
-        if self.use_rem or other.use_rem:
-            new_pf, r = pf_mul_rem(self, other)
-            new_pf.rem = self.rem + other.rem + r
-            new_pf.use_rem = True
-            return new_pf
-        new_pf = pf_mul_ind(self, other)
-        new_pf.rem = S.Zero
-        new_pf.use_rem = False
-        return new_pf
+            other = PF.from_val(other)
+        sf = dict()
+        for bsc, fsc in self.make_context():
+            for (bs, fs), t in other.table.items():
+                bp, bt = bsc.merge_ind(bs)
+                fp, ft = fsc.merge_ind(fs)
+                if fp is not None:
+                    a = (bp, fp)
+                    sf[a] = sf.get(a, 0) + Mul(ft, bt, t)
+        cache = dict(self._rem_cache)
+        _rem_cache_update(cache, other._rem_cache)
+        return PF(
+            sf,
+            Add(Mul(self.expr(), other.npf), Mul(self.npf, other.expr(False))),
+            cache
+        )
 
     def __rmul__(self, other):
-        return PF.from_val(other, self.use_rem) * self
+        if isinstance(other, (int, Integer)):
+            return self.__mul__(other)
+        if isinstance(other, Expr) and getattr(other, 'is_commutative', False):
+            return self.__mul__(other)
+        return PF.from_val(other) * self
+
+    def __imul__(self, other):
+        return self.__mul__(other)
+
+    def _mul_rem(self, other: PF, reserve_unshifted=False):
+        sf, rem = dict(), []
+        for bsc, fsc in self.make_context():
+            for (bs, fs), t in other.table.items():
+                nbsc = object.__new__(BSC)
+                (nbsc.pat_sorted,
+                 nbsc.tail_pat,
+                 nbsc.remainder_pat) = bsc.merge_rem_pat(bs, reserve_unshifted)
+                bp, bt, br = nbsc.result_rem()
+                fp, ft, fr = fsc.merge_rem(fs)
+                if fp is not None:
+                    a = (bp, fp)
+                    sf[a] = sf.get(a, 0) + Mul(ft, bt, t)
+                    rem.append(Mul(br, t, *fs))
+                rem.append(Mul(Mul(*bp, bt) + br, t, fr))
+        cache = dict(self._rem_cache)
+        _rem_cache_update(cache, other._rem_cache)
+        return PF(
+            sf,
+            Add(Mul(self.expr(), other.npf), Mul(self.npf, other.expr(False))),
+            cache
+        ), Add(*rem)
 
     def __pow__(self, power):
         if isinstance(power, PF):
             if power.npf == S.Zero and set(power.table.keys()).issubset({_vpk}):
                 power = power.table.get(_vpk, S.Zero)
             else:
-                return PF(npf=Pow(self.expr(), power.expr()), rem=S.Zero, use_rem=self.use_rem)
+                return PF(npf=Pow(self.expr(), power.expr()))
         p_sym = sympify(power)
         if self.npf == S.Zero and set(self.table.keys()).issubset({_vpk}):
-            return PF({_vpk: self.table.get(_vpk, S.Zero) ** p_sym}, rem=self.rem, use_rem=self.use_rem)
+            return PF({_vpk: self.table.get(_vpk, S.Zero) ** p_sym})
         if getattr(p_sym, 'is_Integer', False) and p_sym >= 0:
-            exp_int = int(p_sym)
-            if self.use_rem:
-                new_pf, r = pf_pow_rem(self, exp_int, self.rem)
-                new_pf.rem = r
-                new_pf.use_rem = True
-                return new_pf
-            new_pf = pf_pow_ind(self, exp_int)
-            new_pf.rem = S.Zero
-            new_pf.use_rem = False
-            return new_pf
-        return PF(npf=Pow(self.expr(), p_sym), rem=S.Zero, use_rem=self.use_rem)
+            exp = int(p_sym)
+            if exp == 0:
+                return PF1
+            if exp == 1:
+                return self
+            if len(self.table) == 1 and self.npf == 0:
+                (bs, fs) = next(iter(self.table))
+                t = self.table[(bs, fs)]
+                if t == 1 or t is S.One:
+                    bps = tuple(b**exp for b in bs)
+                    fps = tuple(f**exp for f in fs)
+                    return PF({(bps, fps): S.One}, cache=dict(self._rem_cache))
+            sf_k = self ** (exp >> 1)
+            sf_2k = sf_k * sf_k
+            if exp & 1 == 0:
+                return sf_2k
+            return self * sf_2k
+        return PF(npf=Pow(self.expr(), p_sym))
+
+    def _pow_rem(self, exp: int | Integer, base_rd=S.Zero):
+        if exp == 1:
+            return self, base_rd
+        if exp < 0:
+            raise ValueError('Exponent must be nonnegative')
+        if exp == 0:
+            return PF1, S.Zero
+        sf_k, rd_k = self._pow_rem(exp >> 1, base_rd)
+        sf_2k, r_sf2k = sf_k._mul_rem(sf_k, True)
+        rd_2k = Add(r_sf2k, Mul(sf_k.expr(), rd_k),
+                    Mul(rd_k, sf_k.expr()), Mul(rd_k, rd_k))
+        if exp & 1 == 0:
+            return sf_2k, rd_2k
+        sf, r_sf = self._mul_rem(sf_2k, True)
+        rd = Add(r_sf, Mul(self.expr(), rd_2k),
+                 Mul(base_rd, sf_2k.expr() + rd_2k))
+        return sf, rd
 
     def __truediv__(self, other):
         if isinstance(other, PF):
@@ -635,12 +735,16 @@ class PF:
     def __rtruediv__(self, other):
         if self.npf == S.Zero and set(self.table.keys()).issubset({_vpk}):
             base_expr = self.table.get(_vpk, S.One)
-            return PF.from_val(base_expr ** S.NegativeOne, self.use_rem) * other
+            return PF.from_val(base_expr ** S.NegativeOne) * other
         raise ValueError("Division by non-scalar operator expression is not supported.")
 
-    def adjoint(self, rem=None) -> PF:
-        if rem is None:
-            rem = getattr(self, 'use_rem', False)
+    def __invert__(self):
+        return self.adjoint()
+
+    def _eval_adjoint(self):
+        return self.adjoint()
+
+    def adjoint(self, rem=False) -> PF:
         sf = dict()
         if rem:
             new_rem = dict()
@@ -667,8 +771,7 @@ class PF:
             _rem_cache_update(self._rem_cache, new_rem)
             return PF(
                 sf, self.npf.adjoint(), d_rem,
-                rem=getattr(self, 'rem', S.Zero),
-                use_rem=True
+                rem=getattr(self, 'rem', S.Zero)
             )
         for (bs, fs), t in self.table.items():
             new_bs = tuple(b._eval_adjoint() for b in bs)
@@ -676,8 +779,7 @@ class PF:
             sf[(new_bs, new_fs)] = NumShift(t.adjoint(), 1, new_bs).doit(deep=False)
         return PF(
             sf, self.npf.adjoint(),
-            rem=getattr(self, 'rem', S.Zero),
-            use_rem=getattr(self, 'use_rem', False)
+            rem=getattr(self, 'rem', S.Zero)
         )
 
     def n_apply(self, f, on_npf: bool = False) -> PF:
@@ -688,8 +790,7 @@ class PF:
         npf = f(self.npf) if on_npf else self.npf
         return PF(
             sf, npf, self._rem_cache,
-            rem=getattr(self, 'rem', S.Zero),
-            use_rem=getattr(self, 'use_rem', False)
+            rem=getattr(self, 'rem', S.Zero)
         )
 
     def diff(self, *symbols, **kwargs) -> PF:
@@ -716,32 +817,21 @@ class PF:
         new_rem = sympy_diff(self.rem, *resolved, **kwargs) if self.rem != S.Zero else S.Zero
         return PF(
             new_table, new_npf, self._rem_cache,
-            rem=new_rem, use_rem=self.use_rem
+            rem=new_rem
         )
-
-
-def make_contexts(pf: PF):
-    for (bs, fs), n in pf.table.items():
-        bsc = object.__new__(BSC)
-        bsc.result = bsc.pat_sorted = bs
-        bsc.tail = bsc.tail_pat = n
-        bsc.remainder = bsc.remainder_pat = S.Zero
-        bsc._rem_cache = pf._rem_cache
-        fsc = object.__new__(FSC)
-        fsc.result = fs
-        fsc.tail = S.One
-        fsc.remainder = S.Zero
-        yield bsc, fsc
 
 
 def pf_add(*pfs):
     if not pfs:
         return PF()
     if len(pfs) == 1:
-        return pfs[0]
+        p = pfs[0]
+        return p if isinstance(p, PF) else PF.from_val(p)
     result = dict()
     cache = dict()
     for pf in pfs:
+        if not isinstance(pf, PF):
+            pf = PF.from_val(pf)
         for p, f in pf.table.items():
             if p in result:
                 result[p].append(f)
@@ -756,85 +846,7 @@ def pf_add(*pfs):
             del result[p]
     return PF(result, Add(*(pf.npf for pf in pfs if pf.npf is not S.Zero)), cache)
 
-
-def pf_mul_ind(pf1: PF, pf2: PF) -> PF:
-    sf = dict()
-    for bsc, fsc in make_contexts(pf1):
-        for (bs, fs), t in pf2.table.items():
-            bp, bt = bsc.merge_ind(bs)
-            fp, ft = fsc.merge_ind(fs)
-            if fp is not None:
-                a = (bp, fp)
-                sf[a] = sf.get(a, 0) + Mul(ft, bt, t)
-    cache = dict(pf1._rem_cache)
-    _rem_cache_update(cache, pf2._rem_cache)
-    return PF(
-        sf,
-        Add(Mul(pf1.expr(), pf2.npf), Mul(pf1.npf, pf2.expr(False))),
-        cache
-    )
-
-
-def pf_mul_rem(pf1: PF, pf2: PF, reserve_unshifted=False):
-    sf, rem = dict(), []
-    for bsc, fsc in make_contexts(pf1):
-        for (bs, fs), t in pf2.table.items():
-            nbsc = object.__new__(BSC)
-            (nbsc.pat_sorted,
-             nbsc.tail_pat,
-             nbsc.remainder_pat) = bsc.merge_rem_pat(bs, reserve_unshifted)
-            bp, bt, br = nbsc.result_rem()
-            fp, ft, fr = fsc.merge_rem(fs)
-            if fp is not None:
-                a = (bp, fp)
-                sf[a] = sf.get(a, 0) + Mul(ft, bt, t)
-                rem.append(Mul(br, t, *fs))
-            rem.append(Mul(Mul(*bp, bt) + br, t, fr))
-    cache = dict(pf1._rem_cache)
-    _rem_cache_update(cache, pf2._rem_cache)
-    return PF(
-        sf,
-        Add(Mul(pf1.expr(), pf2.npf), Mul(pf1.npf, pf2.expr(False))),
-        cache
-    ), Add(*rem)
-
-
-def pf_pow_ind(pf: PF, exp: int | Integer) -> PF:
-    if exp == 1:
-        return pf
-    if exp < 0:
-        raise ValueError('Exponent must be nonnegative')
-    if exp == 0:
-        return PF1
-    if len(pf.table) == 1 and pf.npf == 0:
-        (bs, fs) = next(iter(pf.table))
-        bps = tuple(b**exp for b in bs)
-        fps = tuple(f**exp for f in fs)
-        return PF({(bps, fps): pf.table[(bs, fs)]}, cache=dict(pf._rem_cache))
-    sf_k = pf_pow_ind(pf, exp >> 1)
-    sf_2k = pf_mul_ind(sf_k, sf_k)
-    if exp & 1 == 0:
-        return sf_2k
-    return pf_mul_ind(pf, sf_2k)
-
-
-def pf_pow_rem(pf: PF, exp: int | Integer, base_rd=S.Zero):
-    if exp == 1:
-        return pf, base_rd
-    if exp < 0:
-        raise ValueError('Exponent must be nonnegative')
-    if exp == 0:
-        return PF1, S.Zero
-    sf_k, rd_k = pf_pow_rem(pf, exp >> 1, base_rd)
-    sf_2k, r_sf2k = pf_mul_rem(sf_k, sf_k, True)
-    rd_2k = Add(r_sf2k, Mul(sf_k.expr(), rd_k),
-                Mul(rd_k, sf_k.expr()), Mul(rd_k, rd_k))
-    if exp & 1 == 0:
-        return sf_2k, rd_2k
-    sf, r_sf = pf_mul_rem(pf, sf_2k, True)
-    rd = Add(r_sf, Mul(pf.expr(), rd_2k),
-             Mul(base_rd, sf_2k.expr() + rd_2k))
-    return sf, rd
+PF.add = staticmethod(pf_add)
 
 def clear_cache():
     _k_cache.clear()
@@ -1038,12 +1050,11 @@ class PFTreeNode:
                 e = exp.expr()
                 if not e.is_Integer or e < 0:
                     return PF(npf=self.ls_apply(Pow(base.expr(), e)))
-                pf = pf_pow_ind(base, e)
+                pf = base ** e
             case Mul():
-                pf = PF({((), ()): S.One})
+                pf = PF1
                 for r in self.recur():
-                    new = r.result_ind()
-                    pf = pf_mul_ind(pf, new)
+                    pf = pf * r.result_ind()
             case _:
                 pf = next(self.recur()).result_ind()
         if hasattr(self, 'limits'):
@@ -1090,13 +1101,13 @@ class PFTreeNode:
                     return PF({((), ()): Pow(base_pf[((), ())], exp)
                                                         * self.ls_apply(S.One).doit()}), S.Zero
                 return PF(npf=self.ls_apply()), S.Zero
-            pf, rem = pf_pow_rem(base_pf, exp, base_rd)
+            pf, rem = base_pf._pow_rem(exp, base_rd)
         elif isinstance(self.expr, Mul):
-            pf, rem = PF({((), ()): S.One}), S.Zero
+            pf, rem = PF1, S.Zero
             for r in self.recur():
                 new, rd = r.result_rem()
                 new_rem = Mul(pf.expr(), rd) if rd is not S.Zero else S.Zero
-                pf, mr = pf_mul_rem(pf, new)
+                pf, mr = pf._mul_rem(new)
                 rem = Add(Mul(rem, Add(new.expr(), mr)), mr, new_rem)
         else:
             pf, rem = next(self.recur()).result_rem()
@@ -1162,5 +1173,3 @@ def pattern_form(expr, as_dict=False, rem=False, ignore=(), _s=True):
     return pftn.result_ind().expr()
 
 pf = pattern_form
-
-

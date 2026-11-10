@@ -5,11 +5,11 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from cas_qwm.parametric_multimode.dsolve_pm import d_p2s
 from cas_qwm.op_pattern import BosonNum, BosonPat, FermionPat
-from cas_qwm.pattern_form.pattern_form import _vpk
+from cas_qwm.pattern_perturb.pattern_form import _vpk
 from cas_qwm.parametric_multimode import *
-from cas_qwm.parametric_multimode.pm_processor import t_, _g, nm, _ps, nlc, _tdz
-from cas_qwm.parametric_multimode.pm_solver import pm
-from cas_qwm.pattern_form import PF, PF1
+from cas_qwm.parametric_multimode.wm_processor import t_, _g, nm, _ps, nlc, _tdz
+from cas_qwm.parametric_multimode.wm_solver import pm
+from cas_qwm.pattern_perturb import PF, PF1
 from sympy.core.expr import Expr
 from sympy.core.function import diff
 from sympy.core.numbers import I, pi
@@ -88,7 +88,7 @@ def eval_wm_solve(
     return latex(expr_t), latex(expr_g)
 
 
-WM_VARIABLES: Dict[str, PMWrapper] = {}
+WM_VARIABLES: Dict[str, WMWrapper] = {}
 LAST_EVAL_WM: Dict[str, Any] = {}
 
 
@@ -100,11 +100,11 @@ def save_wm_variable(
     latex_t: Optional[str] = None,
     latex_g: Optional[str] = None,
     **kwargs
-) -> PMWrapper:
+) -> WMWrapper:
     proc = normalize_process(kwargs.get('process'), kwargs.get('dc'))
     s = solver if isinstance(solver, PMSolver) else get_wm_solver(proc, mismatch=bool(kwargs.get('mismatch', False)))
-    w = PMWrapper.from_val(val_t, s.processor)
-    w = PMWrapper(w.processor, dict(w.dict_repr), w.b_left)
+    w = WMWrapper.from_val(val_t, s.processor)
+    w = WMWrapper(w.processor, dict(w.dict_repr), w.b_left)
     w.name = name
     w.val_t = w
     w.val_g = val_g if val_g is not None else t_to_g(
@@ -121,7 +121,7 @@ def save_wm_variable(
     return w
 
 
-def save_latest_wm_variable(name: str, **kwargs) -> Optional[PMWrapper]:
+def save_latest_wm_variable(name: str, **kwargs) -> Optional[WMWrapper]:
     if not LAST_EVAL_WM:
         return None
     proc = normalize_process(LAST_EVAL_WM.get('process'), LAST_EVAL_WM.get('dc', True))
@@ -143,7 +143,7 @@ def save_latest_wm_variable(name: str, **kwargs) -> Optional[PMWrapper]:
     )
 
 
-def get_wm_variable(name: str) -> Optional[PMWrapper]:
+def get_wm_variable(name: str) -> Optional[WMWrapper]:
     return WM_VARIABLES.get(name)
 
 
@@ -175,7 +175,7 @@ def compute_val_leading_order(
         gc_eff = (nlc * s.nd) if (proc == 'fwm' and not expr_t.has(pm)) else s.gc
         return expr_t.subs({t_: _g / gc_eff})
 
-    w_sub = PMWrapper.from_val(val, s.processor).apply(_sub_t_for_order)
+    w_sub = WMWrapper.from_val(val, s.processor).apply(_sub_t_for_order)
     orders: List[Any] = []
     if w_sub.b_left is None:
         for p in w_sub.dict_repr.values():
@@ -508,7 +508,7 @@ def _prepare_wm_evaluation(
     sol = s.get_sol(evolved_order)
 
     if proc == 'fwm' and evolved_order >= 0:
-        spm_w = PMWrapper(p, {(None,): PF({((), ()): exp(-I * nlc * s.nd * t_)})})
+        spm_w = WMWrapper(p, {(None,): PF({((), ()): exp(-I * nlc * s.nd * t_)})})
         sol = (sol[0] * spm_w, sol[1], sol[2])
 
     init_ops = p.init_ops
@@ -534,7 +534,7 @@ def _prepare_wm_evaluation(
         p.pe.update(custom_orders)
 
     def _resolve_mode_name(item) -> str:
-        if isinstance(item, PMWrapper):
+        if isinstance(item, WMWrapper):
             for idx, ew in enumerate(sol):
                 if item is ew:
                     return f'a_{idx}'
@@ -550,27 +550,27 @@ def _prepare_wm_evaluation(
         return op_mode_map.get(name, name)
 
     def _unwrap_scalar(x):
-        if isinstance(x, PMWrapper):
+        if isinstance(x, WMWrapper):
             sc = x.as_scalar
             return sc if sc is not None else x.expr
         return sympify(x)
 
     def _make_boson_num(item):
-        return PMWrapper.from_val(BosonNum(_resolve_mode_name(item)), p)
+        return WMWrapper.from_val(BosonNum(_resolve_mode_name(item)), p)
 
     def _make_mmn(name, disp=0):
-        return PMWrapper.from_val(MultimodeNum(_resolve_mode_name(name), _unwrap_scalar(disp)), p)
+        return WMWrapper.from_val(MultimodeNum(_resolve_mode_name(name), _unwrap_scalar(disp)), p)
 
     def _make_mmn2(disp=0):
         d_val = _unwrap_scalar(disp)
         val = p.mmn2 + d_val * nm if d_val != 0 else p.mmn2
-        return PMWrapper.from_val(val, p)
+        return WMWrapper.from_val(val, p)
 
     def _make_pat(item, *args):
         raw_args = [a if isinstance(a, bool) else _unwrap_scalar(a) for a in args]
 
-        is_A = isinstance(item, PMWrapper) and (item is init_ops['A'] or item == init_ops['A'])
-        is_dagA = (isinstance(item, PMWrapper) and item.b_left is None
+        is_A = isinstance(item, WMWrapper) and (item is init_ops['A'] or item == init_ops['A'])
+        is_dagA = (isinstance(item, WMWrapper) and item.b_left is None
                    and list(item.dict_repr.keys()) == [(False, 1)]
                    and item.dict_repr[(False, 1)].table == {_vpk: S.One})
         if is_A or is_dagA:
@@ -583,9 +583,9 @@ def _prepare_wm_evaluation(
             int_exps = [int(sympify(e)) for e in exps]
             if any(e < 0 for e in int_exps):
                 raise ValueError("Pattern exponents must be non-negative integers.")
-            return PMWrapper(p, {_tdz(is_ann, int_exps): PF1})
+            return WMWrapper(p, {_tdz(is_ann, int_exps): PF1})
 
-        if isinstance(item, PMWrapper) and (item.b_left is not None or set(item.dict_repr.keys()) != {(None,)}):
+        if isinstance(item, WMWrapper) and (item.b_left is not None or set(item.dict_repr.keys()) != {(None,)}):
             exps = list(raw_args)
             explicit_ann = exps.pop(0) if (exps and isinstance(exps[0], bool)) else None
             if not exps:
@@ -597,14 +597,14 @@ def _prepare_wm_evaluation(
             else:
                 op_ann = item
                 is_a = True if explicit_ann is None else bool(explicit_ann)
-            res = PMWrapper(p, PF1)
+            res = WMWrapper(p, PF1)
             for e in exps:
                 cur = op_ann if is_a else op_ann.adjoint()
                 res = res * (cur ** int(sympify(e)))
                 is_a = not is_a
             return res
 
-        if isinstance(item, PMWrapper):
+        if isinstance(item, WMWrapper):
             pf_item = item.dict_repr.get((None,), PF1)
             if pf_item.table:
                 bs, fs = next(iter(pf_item.table.keys()))
@@ -630,34 +630,34 @@ def _prepare_wm_evaluation(
 
         is_fermion = (mode_kind_map.get(name) == 'fermion') or isinstance(inner, (FermionOp, FermionPat))
         if is_fermion:
-            return PMWrapper.from_val(FermionPat(name, is_ann, *exps), p)
+            return WMWrapper.from_val(FermionPat(name, is_ann, *exps), p)
 
         bp = BosonPat(name, is_ann, *exps)
         a_op, tail = bp.num_repr()
         b_key = (a_op,) if a_op is not S.One else ()
-        return PMWrapper(p, PF({(b_key, ()): tail}))
+        return WMWrapper(p, PF({(b_key, ()): tail}))
 
     def _make_op_pat(pat_cls, item, *args):
         raw_args = [a if isinstance(a, bool) else _unwrap_scalar(a) for a in args]
-        return PMWrapper.from_val(pat_cls(_resolve_mode_name(item), *raw_args), p)
+        return WMWrapper.from_val(pat_cls(_resolve_mode_name(item), *raw_args), p)
 
     def _wrap_fn(fn):
         def _inner(item):
-            if isinstance(item, PMWrapper):
+            if isinstance(item, WMWrapper):
                 sc = item.as_scalar
                 if sc is not None:
-                    return PMWrapper(p, PF({_vpk: sympify(fn(sc))}))
+                    return WMWrapper(p, PF({_vpk: sympify(fn(sc))}))
                 if item.b_left is None:
                     return p.expand_func_d(fn, evolved_order, item)
-            raw_item = item.expr if isinstance(item, PMWrapper) else item
-            return PMWrapper.from_val(fn(sympify(raw_item)), p)
+            raw_item = item.expr if isinstance(item, WMWrapper) else item
+            return WMWrapper.from_val(fn(sympify(raw_item)), p)
         return _inner
 
-    w_g_internal = PMWrapper(p, PF({_vpk: s.gc * t_}))
+    w_g_internal = WMWrapper(p, PF({_vpk: s.gc * t_}))
     w_g_internal._is_g = True
     w_g_internal._gc = s.gc
 
-    w_t = PMWrapper.from_val(t_, p)
+    w_t = WMWrapper.from_val(t_, p)
     w_t._is_t = True
 
     pm_internal = s.pm if proc == 'fwm' else (pm if mismatch else S.Zero)
@@ -674,9 +674,9 @@ def _prepare_wm_evaluation(
         'cosh': _wrap_fn(cosh),
         'tanh': _wrap_fn(tanh),
         'sqrt': _wrap_fn(sqrt),
-        'dag': lambda item: PMWrapper.from_val(item, p).adjoint(),
-        'Dagger': lambda item: PMWrapper.from_val(item, p).adjoint(),
-        'dagger': lambda item: PMWrapper.from_val(item, p).adjoint(),
+        'dag': lambda item: WMWrapper.from_val(item, p).adjoint(),
+        'Dagger': lambda item: WMWrapper.from_val(item, p).adjoint(),
+        'dagger': lambda item: WMWrapper.from_val(item, p).adjoint(),
         'N_': _make_boson_num,
         'BosonNum': _make_boson_num,
         'Pat': _make_pat,
@@ -689,11 +689,11 @@ def _prepare_wm_evaluation(
         'MMN2': _make_mmn2,
         't': w_t,
         'g': w_g_internal,
-        'diff': lambda expr, *args, **kwargs: expr.diff(*args, gc=s.gc, **kwargs) if isinstance(expr, PMWrapper) else diff(expr, *args, **kwargs),
-        'Derivative': lambda expr, *args, **kwargs: expr.diff(*args, gc=s.gc, **kwargs) if isinstance(expr, PMWrapper) else diff(expr, *args, **kwargs),
-        'nlc': PMWrapper.from_val(nlc, p),
-        'pm': PMWrapper.from_val(pm_internal, p),
-        'n_m': PMWrapper.from_val(S.One if single_mode else nm, p),
+        'diff': lambda expr, *args, **kwargs: expr.diff(*args, gc=s.gc, **kwargs) if isinstance(expr, WMWrapper) else diff(expr, *args, **kwargs),
+        'Derivative': lambda expr, *args, **kwargs: expr.diff(*args, gc=s.gc, **kwargs) if isinstance(expr, WMWrapper) else diff(expr, *args, **kwargs),
+        'nlc': WMWrapper.from_val(nlc, p),
+        'pm': WMWrapper.from_val(pm_internal, p),
+        'n_m': WMWrapper.from_val(S.One if single_mode else nm, p),
         'a_0': init_ops['a_0'],
         'a_1': init_ops['a_1'],
         'a_2': init_ops['a_2'],
@@ -714,15 +714,15 @@ def _prepare_wm_evaluation(
         d_name = (sym_def.get('display_name') or '').strip()
 
         if s_name == 'nlc' or sym_def.get('builtin_key') == 'nlc':
-            local_dict[s_name] = PMWrapper.from_val(nlc, p)
+            local_dict[s_name] = WMWrapper.from_val(nlc, p)
             if d_name and d_name not in ('nlc', r'\chi', 'χ'):
                 disp_subs[nlc] = Symbol(d_name)
             continue
         if s_name == 'pm' or sym_def.get('builtin_key') == 'pm':
             if not mismatch:
-                local_dict[s_name] = PMWrapper.from_val(pm_internal, p)
+                local_dict[s_name] = WMWrapper.from_val(pm_internal, p)
             else:
-                local_dict[s_name] = PMWrapper.from_val(pm, p)
+                local_dict[s_name] = WMWrapper.from_val(pm, p)
                 if d_name and d_name not in ('pm', 'Δk', r'\Delta k'):
                     disp_subs[pm] = Symbol(d_name)
             continue
@@ -733,7 +733,7 @@ def _prepare_wm_evaluation(
         elif sym_def.get('is_integer'): kwargs['integer'] = True
         elif sym_def.get('is_real'): kwargs['real'] = True
         sym_obj = Symbol(s_name, **kwargs)
-        local_dict[s_name] = PMWrapper.from_val(sym_obj, p)
+        local_dict[s_name] = WMWrapper.from_val(sym_obj, p)
         if d_name and d_name != s_name:
             disp_subs[sym_obj] = Symbol(d_name)
 
@@ -749,7 +749,7 @@ def _prepare_wm_evaluation(
             mode_kind_map[op_name] = kind
             op_mode_map[op_name] = op_name
             op_obj = BosonOp(op_name) if kind == 'boson' else FermionOp(op_name)
-            local_dict[op_name] = PMWrapper.from_val(op_obj, p)
+            local_dict[op_name] = WMWrapper.from_val(op_obj, p)
 
             d_name = (op_def.get('display_name') or '').strip()
             if d_name and d_name != op_name:
@@ -783,7 +783,7 @@ def _prepare_wm_evaluation(
 
         val_obj = ne.get('val')
         if val_obj is not None:
-            w_ne = PMWrapper.from_val(val_obj, p)
+            w_ne = WMWrapper.from_val(val_obj, p)
             if single_mode:
                 w_ne = w_ne.to_single_mode()
             local_dict[ne_name] = w_ne
@@ -806,7 +806,7 @@ def _prepare_wm_evaluation(
                 w_ne = w_ne.to_single_mode()
             local_dict[ne_name] = w_ne
         elif ne_name in PF_VARIABLES:
-            w_ne = PMWrapper.from_val(PF_VARIABLES[ne_name], p)
+            w_ne = WMWrapper.from_val(PF_VARIABLES[ne_name], p)
             if single_mode:
                 w_ne = w_ne.to_single_mode()
             local_dict[ne_name] = w_ne
@@ -817,7 +817,7 @@ def _prepare_wm_evaluation(
             try:
                 validate_input_identifiers(ne_str, local_dict)
                 parsed_ne = parse_expr(ne_str, local_dict=local_dict, transformations=WM_TRANSFORMS)
-                w_ne = PMWrapper.from_val(parsed_ne, p)
+                w_ne = WMWrapper.from_val(parsed_ne, p)
                 if single_mode:
                     w_ne = w_ne.to_single_mode()
                 local_dict[ne_name] = w_ne
@@ -840,7 +840,7 @@ def _prepare_wm_evaluation(
     try:
         validate_input_identifiers(text, local_dict)
         parsed_target = parse_expr(text, local_dict=local_dict, transformations=WM_TRANSFORMS)
-        wrapper_target = PMWrapper.from_val(parsed_target, p)
+        wrapper_target = WMWrapper.from_val(parsed_target, p)
     except Exception as e:
         raise ValueError(f"Calculation failed: {e}")
 

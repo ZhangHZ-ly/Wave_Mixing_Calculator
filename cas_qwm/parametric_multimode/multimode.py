@@ -8,7 +8,7 @@ from sympy.concrete.summations import Sum
 from sympy.physics.quantum.operator import Operator, HermitianOperator
 from sympy.core.traversal import bottom_up
 from ..op_pattern import BosonNum, NumShift
-from ..pattern_form import PF
+from ..pattern_perturb import PF, pf_add
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.dagger import Dagger
 from .dsolve_pm import _ps
@@ -309,11 +309,12 @@ def t_mul(t1, t2, mid=None):
 
 def _tdz(i, exps):
     """Drops the zeros in a multimode exponent tuple"""
-    lz=False
+    i = bool(i)
+    lz = False
     new_exps = []
     for e in exps:
         if lz:
-            new_exps[-1] += e
+            new_exps[-1] += sympify(e)
             lz = False
         elif e == 0:
             if not new_exps:
@@ -321,7 +322,7 @@ def _tdz(i, exps):
             else:
                 lz = True
         else:
-            new_exps.append(e)
+            new_exps.append(sympify(e))
     if new_exps:
         return (i, *new_exps)
     return (None,)

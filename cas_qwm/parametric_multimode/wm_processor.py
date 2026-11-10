@@ -6,6 +6,7 @@ from sympy.core.singleton import S
 from sympy.core.sympify import sympify
 from sympy.core.expr import Expr
 from sympy.core.symbol import Dummy, Symbol, symbols
+from sympy.core.numbers import Integer
 from sympy.core.add import Add
 from sympy.core.mul import Mul
 from sympy.core.power import Pow
@@ -13,19 +14,19 @@ from sympy.core.function import _mexpand
 from sympy.core.traversal import bottom_up
 from sympy.core.exprtools import factor_terms
 from sympy.physics.quantum.boson import BosonOp
-from ..pattern_form import BSC, PF, pf, PF0, PF1, PE
+from ..wm_variables import *
+from ..pattern_perturb import BSC, PF, pf, PF0, PF1, PE
 from ..op_pattern import BosonPat, BosonNum, FermionPat
-from ..pattern_form.pattern_form import pf_add, pf_mul_ind, _vpk
-from ..pattern_form.perturb_expander import perturb_rec
+from ..pattern_perturb.pattern_form import pf_add, _vpk
+from ..pattern_perturb.perturb_expander import perturb_rec
 from .dsolve_pm import group_terms, _ps
 from .multimode import (MultimodeCOP, MultimodeNum, MultimodeNum2,
                         t_mul, mmn_shift, _mps, _tdz, _pd)
 import warnings
 
-__all__ = ['PMProcessor', 'wm_processors', 'a_p', 'a_s', 'a_i', 't_', '_g', '_ps', 'nlc', 'nm', 'vac_pf']
+__all__ = ['WMProcessor', 'wm_processors', '_g', 'nm', 'vac_pf']
 
 warnings.simplefilter('once', UserWarning)
-
 
 def _collapse_boson_num(expr, vac_names):
     if not isinstance(expr, Expr) or expr.is_number:
@@ -34,7 +35,6 @@ def _collapse_boson_num(expr, vac_names):
         lambda x: isinstance(x, BosonNum),
         lambda x: S.Zero if (x.name in vac_names or str(x.name) in vac_names) else x
     )
-
 
 def vac_pf(p: PF, vac_mode) -> PF:
     """
@@ -64,8 +64,7 @@ def vac_pf(p: PF, vac_mode) -> PF:
     new_npf = _collapse_boson_num(p.npf, vac_names)
     return PF(new_table, new_npf) if (new_table or new_npf != 0) else PF0
 
-
-def _merge_pf_dicts(ds) -> dict:
+def _merge_dicts(ds) -> dict:
     """Merges multiple {tuple_key: PF} dicts by summing PF values for identical keys."""
     grouped = defaultdict(list)
     for d in ds:
@@ -73,24 +72,17 @@ def _merge_pf_dicts(ds) -> dict:
             grouped[k].append(v)
     return {k: p for k, vs in grouped.items() if (p := pf_add(*vs))}
 
-
 # Dummy symbols for MultimodeNum, MultimodeNum2, driving BosonNum
 _n1, _n2, _nd = symbols('n_1 n_2 n_d', Dummy=True, nonnegative=True)
-# Field names: a0 - pump (high frequency), a1, a2 - signal and idler (low frequency)
-a_p = BosonOp('a_0')
-a_s = BosonOp('a_1')
-a_i = BosonOp('a_2')
 _g = Dummy('g', real=True)  # Dummy symbol for the parametric gain
 
-# Time / nonlinear coefficient / mode count symbols: t, χ, n_m
-t_ = Dummy('t', real=True)
-nlc = Symbol('χ', real=True, nonnegative=True)
+# Mode count symbol n_m
 nm = Symbol('n_m', nonnegative=True)
 
 _e = lambda p: S.Zero if p == 1 else (p.exp if p.is_Pow else S.One)
 
 
-class PMProcessor:
+class WMProcessor:
     """
     Base processor for quantum multimode parametric wave-mixing processes (TWM, FWM).
 
@@ -116,27 +108,27 @@ class PMProcessor:
 
     @cached_property
     def init_ops(self) -> dict:
-        from .pm_wrapper import PMWrapper
+        from .wm_wrapper import WMWrapper
         if self.dc:
             return {
-                'a_0': PMWrapper(self, {(None,): PF({((a_p,), ()): S.One})}),
-                'a_1': PMWrapper(self, {a_s: {(None,): PF1}}),
-                'a_2': PMWrapper(self, {a_i: {(None,): PF1}}),
-                'a_p': PMWrapper(self, {(None,): PF({((a_p,), ()): S.One})}),
-                'a_s': PMWrapper(self, {a_s: {(None,): PF1}}),
-                'a_i': PMWrapper(self, {a_i: {(None,): PF1}}),
-                'A': PMWrapper(self, {(True, 1): PF1}),
-                'N_t': PMWrapper(self, {(None,): PF({_vpk: MultimodeNum2(a_s.name, a_i.name, S.Zero)})}),
+                'a_0': WMWrapper(self, {(None,): PF({((a_p,), ()): S.One})}),
+                'a_1': WMWrapper(self, {a_s: {(None,): PF1}}),
+                'a_2': WMWrapper(self, {a_i: {(None,): PF1}}),
+                'a_p': WMWrapper(self, {(None,): PF({((a_p,), ()): S.One})}),
+                'a_s': WMWrapper(self, {a_s: {(None,): PF1}}),
+                'a_i': WMWrapper(self, {a_i: {(None,): PF1}}),
+                'A': WMWrapper(self, {(True, 1): PF1}),
+                'N_t': WMWrapper(self, {(None,): PF({_vpk: MultimodeNum2(a_s.name, a_i.name, S.Zero)})}),
             }
         return {
-            'a_0': PMWrapper(self, {a_p: {(None,): PF1}}),
-            'a_1': PMWrapper(self, {a_s: {(None,): PF1}}),
-            'a_2': PMWrapper(self, {(None,): PF({((a_i,), ()): S.One})}),
-            'a_p': PMWrapper(self, {(None,): PF({((a_i,), ()): S.One})}),
-            'a_s': PMWrapper(self, {a_p: {(None,): PF1}}),
-            'a_i': PMWrapper(self, {a_s: {(None,): PF1}}),
-            'A': PMWrapper(self, {(True, 1): PF1}),
-            'N_t': PMWrapper(self, {(None,): PF({_vpk: MultimodeNum2(a_p.name, a_s.name, S.One)})}),
+            'a_0': WMWrapper(self, {a_p: {(None,): PF1}}),
+            'a_1': WMWrapper(self, {a_s: {(None,): PF1}}),
+            'a_2': WMWrapper(self, {(None,): PF({((a_i,), ()): S.One})}),
+            'a_p': WMWrapper(self, {(None,): PF({((a_i,), ()): S.One})}),
+            'a_s': WMWrapper(self, {a_p: {(None,): PF1}}),
+            'a_i': WMWrapper(self, {a_s: {(None,): PF1}}),
+            'A': WMWrapper(self, {(True, 1): PF1}),
+            'N_t': WMWrapper(self, {(None,): PF({_vpk: MultimodeNum2(a_p.name, a_s.name, S.One)})}),
         }
 
     def odag(self, b: BosonOp) -> BosonOp:
@@ -171,7 +163,7 @@ class PMProcessor:
         return bool(b0.is_annihilation) == bool(p)
 
     def expand_func_d(self, func, order, *ds, sub_g: bool = False, gc=None):
-        from .pm_wrapper import PMWrapper
+        from .wm_wrapper import WMWrapper
         if not ds:
             return self.from_expr(func())
 
@@ -179,7 +171,7 @@ class PMProcessor:
         x0_list = []
         perturb_list = []
         for j, (d, ol) in enumerate(zip(ds, ord_lims)):
-            w = PMWrapper.from_val(d, self)
+            w = WMWrapper.from_val(d, self)
             if w.b_left is not None:
                 raise ValueError('The expression does not support expand-with-func')
 
@@ -203,7 +195,7 @@ class PMProcessor:
                 raise ValueError('Unappropriate input for the function')
             for od, td in odt.items():
                 if td:
-                    perturb_list.append((j, od - ol, PMWrapper(self, td, None)))
+                    perturb_list.append((j, od - ol, WMWrapper(self, td, None)))
 
         dummies = tuple(Dummy() for _ in ds)
         f_sym = func(*dummies)
@@ -217,7 +209,7 @@ class PMProcessor:
 
         nol = order - flo
         if nol < 0:
-            return PMWrapper(self, {}, None)
+            return WMWrapper(self, {}, None)
 
         @perturb_rec(_comm = lambda *_: False,
                      _is_comm = lambda d: getattr(d.as_scalar, 'is_commutative', False),
@@ -225,7 +217,7 @@ class PMProcessor:
                      _add=self.d_add, _mul=lambda args: reduce(mul, args), independent=True)
         def term(df):
             if (val := df.subs(subs_dict)) != 0:
-                return PMWrapper(self, {(None,): PF({_vpk: val})}, None)
+                return WMWrapper(self, {(None,): PF({_vpk: val})}, None)
 
         res = self.d_add(*(t for t, _ in term(perturb_list, nol, dummies, f_sym)))
         if sub_g and gc is not None:
@@ -288,23 +280,23 @@ class PMProcessor:
         """
         Adds multiple WMWrapper objects together, collecting identical keys.
         """
-        from .pm_wrapper import PMWrapper
+        from .wm_wrapper import WMWrapper
         items = []
         for w in ws:
             if not w:
                 continue
-            if not isinstance(w, PMWrapper):
-                w = PMWrapper.from_val(w, self)
+            if not isinstance(w, WMWrapper):
+                w = WMWrapper.from_val(w, self)
             if w.dict_repr:
                 items.append(w)
 
         if not items:
-            return PMWrapper(self, {}, None)
+            return WMWrapper(self, {}, None)
         if len(items) == 1:
             return items[0]
 
         if all(w.b_left is None for w in items):
-            return PMWrapper(self, _merge_pf_dicts(w.dict_repr for w in items), None)
+            return WMWrapper(self, _merge_dicts(w.dict_repr for w in items), None)
 
         if all(w.b_left is not None for w in items):
             parities = {self.f_parity(tuple(w.dict_repr)) for w in items}
@@ -320,8 +312,8 @@ class PMProcessor:
                     for k, v in w.dict_repr.items():
                         for nk, nv in self.bd_swap(k, v, to_left=b_left).items():
                             result[nk].append(nv)
-            out = {k: m for k, vs in result.items() if (m := _merge_pf_dicts(vs))}
-            return PMWrapper(self, out, b_left if out else None)
+            out = {k: m for k, vs in result.items() if (m := _merge_dicts(vs))}
+            return WMWrapper(self, out, b_left if out else None)
 
         raise ValueError("Cannot add expressions with and without single-mode weak-field operators")
 
@@ -329,7 +321,7 @@ class PMProcessor:
         if not d1 or not d2:
             return
         if isinstance(mid, PF):
-            d1 = {k1: v for k1, v1 in d1.items() if (v := pf_mul_ind(v1, mid))}
+            d1 = {k1: v for k1, v1 in d1.items() if (v := v1 * mid)}
             if not d1:
                 return
             mid = None
@@ -340,7 +332,7 @@ class PMProcessor:
 
         def _acc(k, p):
             if k in d0:
-                p = pf_add(d0[k], p)
+                p = d0[k] + p
             if p:
                 d0[k] = p
             elif k in d0:
@@ -362,11 +354,11 @@ class PMProcessor:
 
                 if not has_weak_pair:
                     new = e1.n_apply(lambda t: shift_n(mid * t if is_mmn else t, pd), on_npf=True)
-                    _acc(t_join(k1, k2), pf_mul_ind(new, e2))
+                    _acc(t_join(k1, k2), new * e2)
                 else:
                     if e1.npf != 0:
                         c_npf = shift_n(mid * e1.npf if is_mmn else e1.npf, pd)
-                        _acc(t_join(k1, k2), pf_mul_ind(PF({}, c_npf), e2))
+                        _acc(t_join(k1, k2), PF({}, c_npf) * e2)
 
                     for (bs, fs), tail in e1.table.items():
                         c_tail = shift_n(mid * tail if is_mmn else tail, pd)
@@ -376,7 +368,7 @@ class PMProcessor:
                             cop_a1, cop_exp, bs_other = None, 0, bs
 
                         if cop_exp == 0 or cop_a1 is None:
-                            _acc(t_join(k1, k2), pf_mul_ind(PF({(bs, fs): c_tail}, S.Zero), e2))
+                            _acc(t_join(k1, k2), PF({(bs, fs): c_tail}, S.Zero) * e2)
                         else:
                             for k_sub, new_m, P_num in self.tcp_swap(cop_a1, cop_exp, k2, to_left=False):
                                 if new_m == 0:
@@ -386,7 +378,7 @@ class PMProcessor:
                                     op1 = BosonOp(cop_tgt.names[0], cop_tgt.annih1)
                                     op2 = BosonOp(cop_tgt.names[1], cop_tgt.annih2)
                                     new_bw = (op1, op2) if new_m == 1 else (op1**new_m, op2**new_m)
-                                p_term = pf_mul_ind(PF({(bs_other + new_bw, fs): c_tail * P_num}, S.Zero), e2)
+                                p_term = PF({(bs_other + new_bw, fs): c_tail * P_num}, S.Zero) * e2
                                 _acc(t_join(k1, k_sub), p_term)
 
     def bp_swap(self, a: BosonOp, p: PF, s, to_left=True):
@@ -588,26 +580,26 @@ class PMProcessor:
         """
         Converts an Expr, PF, dict, WMWrapper, or string/number into a WMWrapper.
         """
-        from .pm_wrapper import PMWrapper
-        if isinstance(val, PMWrapper):
-            return val if val.dc == self.dc else PMWrapper(self, val.dict_repr, val.b_left)
+        from .wm_wrapper import WMWrapper
+        if isinstance(val, WMWrapper):
+            return val if val.dc == self.dc else WMWrapper(self, val.dict_repr, val.b_left)
         if isinstance(val, PF):
-            return PMWrapper(self, val, None)
+            return WMWrapper(self, val, None)
         if isinstance(val, dict):
-            return PMWrapper(self, val, None)
+            return WMWrapper(self, val, None)
         if isinstance(val, str) and val in self.init_ops:
             return self.init_ops[val]
 
         expr = sympify(val)
         if isinstance(expr, MultimodeCOP):
-            return PMWrapper(self, {(bool(expr.annih1), 1): PF1}, None)
+            return WMWrapper(self, {(bool(expr.annih1), 1): PF1}, None)
 
         weak_names = self.a[0].names
         if isinstance(expr, BosonOp) and expr.name in weak_names:
-            return PMWrapper(self, {expr: {(None,): PF1}})
+            return WMWrapper(self, {expr: {(None,): PF1}})
 
         if self._mmn_only(expr):
-            return PMWrapper(
+            return WMWrapper(
                 self,
                 {(None,): pf(expr, as_dict=None, ignore=(MultimodeNum, MultimodeNum2, MultimodeCOP))},
                 None
@@ -619,9 +611,9 @@ class PMProcessor:
                 if pp.exps[0] > 1:
                     raise ValueError('Solution parity unbalanced')
                 b = BosonOp(*pp.args[:2])
-                w = PMWrapper(self, {b: {(None,): PF({_vpk: np})}}, b_left=True)
+                w = WMWrapper(self, {b: {(None,): PF({_vpk: np})}}, b_left=True)
                 return w if w.b_left == (self.dc ^ w.parity) else w.flip()
-            return PMWrapper(self, {(None,): PF({_vpk: np})}, None)
+            return WMWrapper(self, {(None,): PF({_vpk: np})}, None)
 
         if expr.has(MultimodeCOP) or any(
             getattr(b, 'name', None) in weak_names
@@ -638,7 +630,24 @@ class PMProcessor:
             if expr.is_Pow:
                 return self.from_expr(expr.base) ** expr.exp
 
-        return PMWrapper(self, {(None,): pf(expr, as_dict=None)}, None)
+        return WMWrapper(self, {(None,): pf(expr, as_dict=None)}, None)
 
+def _dr_prep(d: dict):
+    new_d = defaultdict(list)
+    for k, v in d.items():
+        if not isinstance(k, Sequence) or not k or not isinstance(v, PF):
+            return None
+        i, *exps = k
+        new_k = _tdz(i, exps)
+        if not all(isinstance(x, Integer) and x >= 0 for x in new_k[1:]):
+            return None
+        if v:
+            new_d[new_k].append(v)
+    res = dict()
+    for k, vs in new_d.items():
+        v = pf_add(*vs)
+        if v:
+            res[k] = v
+    return res
 
-wm_processors = (PMProcessor(False), PMProcessor())
+wm_processors = (WMProcessor(False), WMProcessor())

@@ -10,31 +10,18 @@ from sympy.core.function import diff, _mexpand
 from sympy.polys.polytools import cancel
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.dagger import Dagger
-from ..pattern_form import PF, PF0, PF1
+from ..pattern_perturb import PF, PF0, PF1
 from ..op_pattern import BosonNum
 from ..op_pattern.boson_pattern import fac
-from ..pattern_form.pattern_form import pf_add, pf_mul_ind, pf_pow_ind, _vpk
-from ..pattern_form.perturb_expander import gperm
+from ..pattern_perturb.pattern_form import pf_add, _vpk
+from ..pattern_perturb.perturb_expander import gperm
 from .multimode import MultimodeNum, MultimodeNum2, t_mul, mmn_shift, _tdz, _pd
-from .pm_processor import (PMProcessor, wm_processors, vac_pf,
+from .wm_processor import (WMProcessor, wm_processors, vac_pf, _dr_prep,
                            a_s, t_, _g, nlc, nm)
 
-__all__ = ['PMWrapper']
+__all__ = ['WMWrapper']
 
-
-def _is_tuple_pf_dict(d) -> bool:
-    return (
-        isinstance(d, dict)
-        and all(
-            isinstance(k, tuple) and len(k) >= 1
-            and (k == (None,) or (isinstance(k[0], (bool, int)) and all(isinstance(x, (int, Expr)) for x in k[1:])))
-            and isinstance(v, PF)
-            for k, v in d.items()
-        )
-    )
-
-
-class PMWrapper:
+class WMWrapper:
     """
     Algebraic wrapper for quantum multimode wave-mixing expressions.
 
@@ -48,34 +35,38 @@ class PMWrapper:
     """
 
     def __init__(self, dc, dict_repr=None, b_left=None):
-        self.processor = dc if isinstance(dc, PMProcessor) else wm_processors[bool(dc)]
+        self.processor = dc if isinstance(dc, WMProcessor) else wm_processors[bool(dc)]
         if isinstance(dict_repr, PF):
             dict_repr = {(None,): dict_repr} if dict_repr else dict()
         elif dict_repr is None:
             dict_repr = dict()
-        elif not isinstance(dict_repr, dict):
-            raise TypeError(f"Expected dict or PF for dict_repr, got {type(dict_repr).__name__}")
-
-        if not dict_repr:
-            self.dict_repr = dict()
+        dr = _dr_prep(dict_repr)
+        if dr is not None:
+            self.dict_repr = dr
             self.b_left = None
-        elif _is_tuple_pf_dict(dict_repr):
-            self.dict_repr = dict_repr
-            self.b_left = None
-        elif all(isinstance(k, BosonOp) and _is_tuple_pf_dict(v) for k, v in dict_repr.items()):
-            parity = self.processor.f_parity(tuple(dict_repr))
-            self.dict_repr = dict_repr
-            self.b_left = (self.dc ^ parity) if b_left is None else bool(b_left)
         else:
-            raise ValueError("Invalid dict_repr structure: expected {tuple: PF} or {BosonOp: {tuple: PF}}")
-
+            new_dr = dict()
+            for k, v in dict_repr.items():
+                if not (isinstance(k, BosonOp) and k.name in self.processor.a[0].names):
+                    raise ValueError(f'{k} is not a legal weak-field key for this instance')
+                v = _dr_prep(v)
+                if v is None:
+                    raise ValueError("Invalid dict_repr structure")
+                elif v:
+                    new_dr[k] = v
+            self.dict_repr = new_dr
+            if new_dr:
+                parity = self.processor.f_parity(tuple(new_dr))
+                self.b_left = (self.dc ^ parity) if b_left is None else bool(b_left)
+            else:
+                self.b_left = None
     @property
     def dc(self) -> bool:
         return self.processor.dc
 
     @classmethod
-    def from_val(cls, val, dc=True) -> 'PMWrapper':
-        proc = dc if isinstance(dc, PMProcessor) else wm_processors[bool(dc)]
+    def from_val(cls, val, dc=True) -> 'WMWrapper':
+        proc = dc if isinstance(dc, WMProcessor) else wm_processors[bool(dc)]
         if isinstance(val, cls):
             return val if val.dc == proc.dc else cls(proc, val.dict_repr, val.b_left)
         return proc.from_expr(val)
@@ -86,7 +77,7 @@ class PMWrapper:
     def __repr__(self) -> str:
         return f"WMWrapper(dc={self.dc}, {self.dict_repr}, b_left={self.b_left})"
 
-    def flip(self) -> 'PMWrapper':
+    def flip(self) -> 'WMWrapper':
         """
         Returns an algebraically equivalent WMWrapper with b_left inverted
         (True <-> False) using bd_swap, or self if b_left is None.
@@ -96,16 +87,16 @@ class PMWrapper:
         p = self.processor
         target_left = not self.b_left
         swapped = [
-            PMWrapper(p, res, target_left)
+            WMWrapper(p, res, target_left)
             for b, d in self.dict_repr.items()
             if (res := p.bd_swap(b, d, to_left=target_left))
         ]
         if not swapped:
-            return PMWrapper(p, {}, None)
+            return WMWrapper(p, {}, None)
         return p.d_add(*swapped)
 
     def __eq__(self, other) -> bool:
-        if not isinstance(other, PMWrapper) or self.dc != other.dc:
+        if not isinstance(other, WMWrapper) or self.dc != other.dc:
             return False
         if self.b_left == other.b_left:
             return self.dict_repr == other.dict_repr
@@ -130,7 +121,7 @@ class PMWrapper:
             return None
         return self.processor.f_parity(tuple(self.dict_repr))
 
-    def apply(self, f) -> 'PMWrapper':
+    def apply(self, f) -> 'WMWrapper':
         """
         Applies f to every leaf PF (or its scalar/number-operator tails via PF.n_apply)
         in dict_repr, returning a new WMWrapper.
@@ -146,9 +137,9 @@ class PMWrapper:
             return f(e)
 
         res = _apply_node(self.dict_repr)
-        return PMWrapper(self.processor, res, self.b_left if res else None)
+        return WMWrapper(self.processor, res, self.b_left if res else None)
 
-    def expand(self, order, sub_g: bool = False, gc=None) -> 'PMWrapper':
+    def expand(self, order, sub_g: bool = False, gc=None) -> 'WMWrapper':
         """Expands this WMWrapper to the given perturbative order."""
         res = self.apply(lambda p: self.processor.pe.expand_pf(p, order))
         if sub_g and gc is not None:
@@ -194,7 +185,7 @@ class PMWrapper:
 
         yield S.One, k
 
-    def eval_vacuum(self, vac_modes) -> 'PMWrapper':
+    def eval_vacuum(self, vac_modes) -> 'WMWrapper':
         """
         Evaluates the partial or full expectation value of this WMWrapper
         under vacuum input assertions for the specified mode(s).
@@ -326,13 +317,13 @@ class PMWrapper:
             return {(None,): tot} if tot else {}
 
         if self.b_left is None:
-            return PMWrapper(p, _vac_dict(self.dict_repr), None)
+            return WMWrapper(p, _vac_dict(self.dict_repr), None)
 
         if len(vac_sets[1]) == 2:
-            return PMWrapper(p, {}, None)
+            return WMWrapper(p, {}, None)
         if not vac_sets[1]:
             res = {b: vd for b, d in self.dict_repr.items() if (vd := _vac_dict(d))}
-            return PMWrapper(p, res, self.b_left if res else None)
+            return WMWrapper(p, res, self.b_left if res else None)
 
         ws = []
         for b, d in self.dict_repr.items():
@@ -345,15 +336,15 @@ class PMWrapper:
                 b_partner = p.odag(b)
                 d_partner = swapped.get(b_partner)
                 if d_partner and (vd := _vac_dict(d_partner)):
-                    w_part = PMWrapper(p, {b_partner: vd}, not b.is_annihilation)
+                    w_part = WMWrapper(p, {b_partner: vd}, not b.is_annihilation)
                     ws.append(w_part if w_part.b_left == self.b_left else w_part.flip())
             else:
                 if (vd := _vac_dict(d)):
-                    ws.append(PMWrapper(p, {b: vd}, self.b_left))
+                    ws.append(WMWrapper(p, {b: vd}, self.b_left))
 
-        return p.d_add(*ws) if ws else PMWrapper(p, {}, None)
+        return p.d_add(*ws) if ws else WMWrapper(p, {}, None)
 
-    def eval_coherent(self, order: int = 0) -> 'PMWrapper':
+    def eval_coherent(self, order: int = 0) -> 'WMWrapper':
         """
         Evaluates this WMWrapper under coherent state assertion for the strong driving field.
         """
@@ -368,9 +359,9 @@ class PMWrapper:
             }
 
         if self.b_left is None:
-            return PMWrapper(p, _cohr_dict(self.dict_repr), None)
+            return WMWrapper(p, _cohr_dict(self.dict_repr), None)
         res = {b: cd for b, d in self.dict_repr.items() if (cd := _cohr_dict(d))}
-        return PMWrapper(p, res, self.b_left if res else None)
+        return WMWrapper(p, res, self.b_left if res else None)
 
     @property
     def expr(self) -> Expr:
@@ -393,7 +384,7 @@ class PMWrapper:
             return Add(*(b * _d_expr(d) for b, d in self.dict_repr.items()))
         return Add(*(_d_expr(d) * b for b, d in self.dict_repr.items()))
 
-    def to_single_mode(self) -> 'PMWrapper':
+    def to_single_mode(self) -> 'WMWrapper':
         """
         Converts multimode operator representations into single-mode boson
         operators (mode_expr) with n_m = 1, returning a single-mode WMWrapper.
@@ -401,19 +392,19 @@ class PMWrapper:
         p = self.processor
         def _dict_sm(d: dict) -> PF:
             return pf_add(*(
-                pf_mul_ind(p._smk(k), v.n_apply(p._sm_expr, on_npf=True))
+                p._smk(k) * v.n_apply(p._sm_expr, on_npf=True)
                 for k, v in d.items()
             ))
 
         if self.b_left is None:
             pf_res = _dict_sm(self.dict_repr)
         elif self.b_left:
-            pf_res = pf_add(*(pf_mul_ind(p._smk(b), _dict_sm(d)) for b, d in self.dict_repr.items()))
+            pf_res = pf_add(*(p._smk(b) * _dict_sm(d) for b, d in self.dict_repr.items()))
         else:
-            pf_res = pf_add(*(pf_mul_ind(_dict_sm(d), p._smk(b)) for b, d in self.dict_repr.items()))
-        return PMWrapper(p, pf_res, None)
+            pf_res = pf_add(*(_dict_sm(d) * p._smk(b) for b, d in self.dict_repr.items()))
+        return WMWrapper(p, pf_res, None)
 
-    def adjoint(self) -> 'PMWrapper':
+    def adjoint(self) -> 'WMWrapper':
         """Takes the Hermitian adjoint of the operator representation."""
         p = self.processor
         a1 = p.a[1]
@@ -477,33 +468,33 @@ class PMWrapper:
             return res
 
         if self.b_left is None:
-            return PMWrapper(p, _adj_dict(self.dict_repr), None)
+            return WMWrapper(p, _adj_dict(self.dict_repr), None)
         res = {Dagger(b): ad for b, d in self.dict_repr.items() if (ad := _adj_dict(d))}
-        return PMWrapper(p, res, (not self.b_left) if res else None)
+        return WMWrapper(p, res, (not self.b_left) if res else None)
 
-    def __add__(self, other) -> 'PMWrapper':
-        other = PMWrapper.from_val(other, self.processor)
+    def __add__(self, other) -> 'WMWrapper':
+        other = WMWrapper.from_val(other, self.processor)
         return self.processor.d_add(self, other)
 
-    def __radd__(self, other) -> 'PMWrapper':
-        return PMWrapper.from_val(other, self.processor).__add__(self)
+    def __radd__(self, other) -> 'WMWrapper':
+        return WMWrapper.from_val(other, self.processor).__add__(self)
 
-    def __neg__(self) -> 'PMWrapper':
+    def __neg__(self) -> 'WMWrapper':
         return self.apply(lambda p: -p)
 
-    def __sub__(self, other) -> 'PMWrapper':
-        other = PMWrapper.from_val(other, self.processor)
+    def __sub__(self, other) -> 'WMWrapper':
+        other = WMWrapper.from_val(other, self.processor)
         return self.processor.d_add(self, -other)
 
-    def __rsub__(self, other) -> 'PMWrapper':
-        return PMWrapper.from_val(other, self.processor).__sub__(self)
+    def __rsub__(self, other) -> 'WMWrapper':
+        return WMWrapper.from_val(other, self.processor).__sub__(self)
 
-    def __mul__(self, other) -> 'PMWrapper':
-        other = PMWrapper.from_val(other, self.processor)
+    def __mul__(self, other) -> 'WMWrapper':
+        other = WMWrapper.from_val(other, self.processor)
         e1, e2 = self.dict_repr, other.dict_repr
         p = self.processor
         if not e1 or not e2:
-            return PMWrapper(p, {}, None)
+            return WMWrapper(p, {}, None)
 
         is_f1 = self.b_left is not None
         is_f2 = other.b_left is not None
@@ -523,7 +514,7 @@ class PMWrapper:
                     p.d_mul(result, d1, d2, b2.is_annihilation)
                 else:
                     p.d_mul(result, d1, d2, b1.is_annihilation)
-            return PMWrapper(p, result, None)
+            return WMWrapper(p, result, None)
 
         if is_f1:
             if self.b_left:
@@ -532,12 +523,12 @@ class PMWrapper:
                     p.d_mul(res_b, d, e2)
                     if res_b:
                         result[b] = res_b
-                return PMWrapper(p, result, True)
+                return WMWrapper(p, result, True)
             for b, d1 in e1.items():
                 for nb, p2_prime in p.bd_swap(b, e2, to_left=False).items():
                     p.d_mul(result.setdefault(nb, dict()), d1, p2_prime)
             result = {k: v for k, v in result.items() if v}
-            return PMWrapper(p, result, False)
+            return WMWrapper(p, result, False)
 
         if is_f2:
             if not other.b_left:
@@ -546,24 +537,24 @@ class PMWrapper:
                     p.d_mul(res_b, e1, d)
                     if res_b:
                         result[b] = res_b
-                return PMWrapper(p, result, False)
+                return WMWrapper(p, result, False)
             for b, d2 in e2.items():
                 for nb, p1_prime in p.bd_swap(b, e1, to_left=True).items():
                     p.d_mul(result.setdefault(nb, dict()), p1_prime, d2)
             result = {k: v for k, v in result.items() if v}
-            return PMWrapper(p, result, True)
+            return WMWrapper(p, result, True)
 
         p.d_mul(result, e1, e2)
-        return PMWrapper(p, result, None)
+        return WMWrapper(p, result, None)
 
-    def __rmul__(self, other) -> 'PMWrapper':
-        return PMWrapper.from_val(other, self.processor).__mul__(self)
+    def __rmul__(self, other) -> 'WMWrapper':
+        return WMWrapper.from_val(other, self.processor).__mul__(self)
 
-    def __matmul__(self, other) -> 'PMWrapper':
-        other = PMWrapper.from_val(other, self.processor)
+    def __matmul__(self, other) -> 'WMWrapper':
+        other = WMWrapper.from_val(other, self.processor)
         p = self.processor
         if not self or not other:
-            return PMWrapper(p, {}, None)
+            return WMWrapper(p, {}, None)
         if self.b_left is None or other.b_left is None:
             return self.__mul__(other)
         if self.parity == other.parity:
@@ -578,25 +569,25 @@ class PMWrapper:
             else:
                 bs_cop = (b2, b1) if b1.compare(b2) == 1 else (b1, b2)
                 p.d_mul(result, d1, d2, PF({(bs_cop, ()): S.One}))
-        return PMWrapper(p, result, None)
+        return WMWrapper(p, result, None)
 
-    def __rmatmul__(self, other) -> 'PMWrapper':
-        return PMWrapper.from_val(other, self.processor).__matmul__(self)
+    def __rmatmul__(self, other) -> 'WMWrapper':
+        return WMWrapper.from_val(other, self.processor).__matmul__(self)
 
-    def __truediv__(self, other) -> 'PMWrapper':
-        other = PMWrapper.from_val(other, self.processor)
+    def __truediv__(self, other) -> 'WMWrapper':
+        other = WMWrapper.from_val(other, self.processor)
         denom = other.as_scalar
         if denom is not None:
-            inv_w = PMWrapper(self.processor, {(None,): PF({_vpk: denom ** S.NegativeOne})}, None)
+            inv_w = WMWrapper(self.processor, {(None,): PF({_vpk: denom ** S.NegativeOne})}, None)
             return self.__mul__(inv_w)
         raise ValueError("Division is only supported by scalar or number-operator expressions.")
 
-    def __rtruediv__(self, other) -> 'PMWrapper':
-        return PMWrapper.from_val(other, self.processor).__truediv__(self)
+    def __rtruediv__(self, other) -> 'WMWrapper':
+        return WMWrapper.from_val(other, self.processor).__truediv__(self)
 
-    def __pow__(self, power) -> 'PMWrapper':
+    def __pow__(self, power) -> 'WMWrapper':
         p = self.processor
-        if isinstance(power, PMWrapper):
+        if isinstance(power, WMWrapper):
             sc = power.as_scalar
             if sc is None:
                 raise ValueError("Exponent must be a scalar or number-operator expression.")
@@ -605,12 +596,12 @@ class PMWrapper:
 
         base_scalar = self.as_scalar
         if base_scalar is not None:
-            return PMWrapper(p, {(None,): PF({_vpk: base_scalar ** p_sym})}, None)
+            return WMWrapper(p, {(None,): PF({_vpk: base_scalar ** p_sym})}, None)
 
         if p_sym.is_Integer and p_sym >= 0:
             n_int = int(p_sym)
             if n_int == 0:
-                return PMWrapper(p, {(None,): PF1}, None)
+                return WMWrapper(p, {(None,): PF1}, None)
             if n_int == 1:
                 return self
             if self.b_left is not None:
@@ -618,9 +609,9 @@ class PMWrapper:
             if set(self.dict_repr.keys()) == {(None,)}:
                 v = self.dict_repr[(None,)]
                 try:
-                    return PMWrapper(p, {(None,): pf_pow_ind(v, n_int)}, None)
+                    return WMWrapper(p, {(None,): v ** n_int}, None)
                 except Exception:
-                    return PMWrapper(p, {(None,): PF(npf=Pow(v.expr(), n_int))}, None)
+                    return WMWrapper(p, {(None,): PF(npf=Pow(v.expr(), n_int))}, None)
             res = None
             base = self
             exp_n = n_int
@@ -637,7 +628,7 @@ class PMWrapper:
             return p.expand_func_d(lambda x: x ** p_sym, order, self)
         raise ValueError("Exponentiation for this operator type only supports non-negative integers or expanded multimode dicts.")
 
-    def diff(self, *symbols, gc=None, **kwargs) -> 'PMWrapper':
+    def diff(self, *symbols, gc=None, **kwargs) -> 'WMWrapper':
         if not symbols:
             raise ValueError("diff requires at least one variable.")
         p = self.processor
@@ -647,7 +638,7 @@ class PMWrapper:
         is_wrt_g = False
         is_wrt_t = False
 
-        if isinstance(var, PMWrapper):
+        if isinstance(var, WMWrapper):
             if getattr(var, '_is_g', False):
                 is_wrt_g = True
                 if gc is None:

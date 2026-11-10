@@ -3,8 +3,8 @@ from typing import Optional
 
 from cas_qwm.op_pattern import BosonNum
 from cas_qwm.parametric_multimode.multimode import _ps, nd_simp
-from cas_qwm.parametric_multimode.pm_processor import t_, _g, nlc, a_p, a_i
-from cas_qwm.parametric_multimode.pm_solver import pm
+from cas_qwm.parametric_multimode.wm_processor import t_, _g, nlc, a_p, a_i
+from cas_qwm.parametric_multimode.wm_solver import pm
 from sympy.core.singleton import S
 from sympy.core.symbol import Symbol
 from sympy.core.traversal import bottom_up
