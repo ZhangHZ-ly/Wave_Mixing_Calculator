@@ -1,13 +1,12 @@
+from collections import defaultdict
 from itertools import product
 from sympy.core.singleton import S
 from sympy.core.sympify import sympify
 from sympy.core.expr import Expr
 from sympy.core.symbol import Symbol
 from sympy.core.add import Add
-from sympy.core.mul import Mul
 from sympy.core.power import Pow
 from sympy.core.function import diff, _mexpand
-from sympy.polys.polytools import cancel
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.dagger import Dagger
 from ..pattern_perturb import PF, PF0, PF1
@@ -15,11 +14,14 @@ from ..op_pattern import BosonNum
 from ..op_pattern.boson_pattern import fac
 from ..pattern_perturb.pattern_form import pf_add, _vpk
 from ..pattern_perturb.perturb_expander import gperm
-from .multimode import MultimodeNum, MultimodeNum2, t_mul, mmn_shift, _tdz, _pd
+from .multimode import MultimodeNum, MultimodeNum2
 from .wm_processor import (WMProcessor, wm_processors, vac_pf, _dr_prep,
-                           a_s, t_, _g, nlc, nm)
+                           _t_mul, _tdz, _pd, a_s, t_, _g, nlc, nm)
 
 __all__ = ['WMWrapper']
+
+def _sum_dl(dl: dict) -> dict:
+    return {k: vs for k, ps in dl.items() if (vs := pf_add(*ps))}
 
 class WMWrapper:
     """
@@ -41,10 +43,7 @@ class WMWrapper:
         elif dict_repr is None:
             dict_repr = dict()
         dr = _dr_prep(dict_repr)
-        if dr is not None:
-            self.dict_repr = dr
-            self.b_left = None
-        else:
+        if dr is None:
             new_dr = dict()
             for k, v in dict_repr.items():
                 if not (isinstance(k, BosonOp) and k.name in self.processor.a[0].names):
@@ -60,6 +59,9 @@ class WMWrapper:
                 self.b_left = (self.dc ^ parity) if b_left is None else bool(b_left)
             else:
                 self.b_left = None
+        else:
+            self.dict_repr = dr
+            self.b_left = None
     @property
     def dc(self) -> bool:
         return self.processor.dc
@@ -96,13 +98,16 @@ class WMWrapper:
         return p.d_add(*swapped)
 
     def __eq__(self, other) -> bool:
-        if not isinstance(other, WMWrapper) or self.dc != other.dc:
-            return False
-        if self.b_left == other.b_left:
-            return self.dict_repr == other.dict_repr
-        if self.b_left is None or other.b_left is None:
-            return False
-        return self.flip().dict_repr == other.dict_repr
+        if not isinstance(other, WMWrapper):
+            return self.__eq__(self.from_val(other))
+        if isinstance(other, WMWrapper):
+            if self.dc != other.dc:
+                return False
+            if self.b_left == other.b_left:
+                return self.dict_repr == other.dict_repr
+            if self.b_left is None or other.b_left is None:
+                return False
+            return self.flip().dict_repr == other.dict_repr
 
     @property
     def as_scalar(self):
@@ -121,9 +126,9 @@ class WMWrapper:
             return None
         return self.processor.f_parity(tuple(self.dict_repr))
 
-    def apply(self, f) -> 'WMWrapper':
+    def apply(self, f, self_update=False) -> 'WMWrapper':
         """
-        Applies f to every leaf PF (or its scalar/number-operator tails via PF.n_apply)
+        Applies f to every leaf PF (or its scalar/number-operator tails via PF.apply)
         in dict_repr, returning a new WMWrapper.
         """
         def _apply_node(e):
@@ -131,12 +136,17 @@ class WMWrapper:
                 return {k: nv for k, v in e.items() if (nv := _apply_node(v))}
             if isinstance(e, PF):
                 try:
-                    return e.n_apply(f, on_npf=True)
+                    return e.apply(f, on_npf=True)
                 except (TypeError, AttributeError):
                     pass
             return f(e)
 
         res = _apply_node(self.dict_repr)
+        if self_update:
+            self.dict_repr = res
+            if not res:
+                self.b_left = None
+            return self
         return WMWrapper(self.processor, res, self.b_left if res else None)
 
     def expand(self, order, sub_g: bool = False, gc=None) -> 'WMWrapper':
@@ -166,7 +176,7 @@ class WMWrapper:
                 return
             new_k = k
             for _ in range(cop_exp):
-                new_k = t_mul(new_k, (None,), 0)
+                new_k = _t_mul(new_k, (None,), 0)
             s_comb = fac(cop_exp) / gperm(nm + cop_exp - 1, cop_exp)
             yield s_comb, new_k
             return
@@ -220,7 +230,7 @@ class WMWrapper:
                          .replace(MultimodeNum2, _collapse_mmn2))
 
         def _clean_pf(pf_obj: PF) -> PF:
-            applied = pf_obj.n_apply(_collapse_num, on_npf=True)
+            applied = pf_obj.apply(_collapse_num)
             clean_table = {k: v for k, v in applied.table.items() if v != 0}
             return PF(clean_table, applied.npf) if (clean_table or applied.npf != 0) else PF0
 
@@ -309,7 +319,7 @@ class WMWrapper:
                         for s_comb, new_k in self._combine_tcp_vac(k, bs_weak):
                             ck = _vac_tuple(new_k)
                             if ck != 0:
-                                pfs.append(_collapse_num(cancel(s_comb * ck)) * vp)
+                                pfs.append(_collapse_num(s_comb * ck) * vp)
 
             if not pfs:
                 return {}
@@ -366,23 +376,12 @@ class WMWrapper:
     @property
     def expr(self) -> Expr:
         """Converts the wrapper representation into a SymPy Expr."""
-        a = self.processor.a
-        def _t_expr(t: tuple) -> Expr:
-            i, *exps = t
-            factors = []
-            for j in exps:
-                factors.append(a[i]**j)
-                i = not i
-            return Mul(*factors)
-
-        def _d_expr(d: dict) -> Expr:
-            return Add(*(_t_expr(k) * p.expr() for k, p in d.items()))
-
+        p = self.processor
         if self.b_left is None:
-            return _d_expr(self.dict_repr)
+            return p._d_expr(self.dict_repr)
         if self.b_left:
-            return Add(*(b * _d_expr(d) for b, d in self.dict_repr.items()))
-        return Add(*(_d_expr(d) * b for b, d in self.dict_repr.items()))
+            return Add(*(b * p._d_expr(d) for b, d in self.dict_repr.items()))
+        return Add(*(p._d_expr(d) * b for b, d in self.dict_repr.items()))
 
     def to_single_mode(self) -> 'WMWrapper':
         """
@@ -392,7 +391,7 @@ class WMWrapper:
         p = self.processor
         def _dict_sm(d: dict) -> PF:
             return pf_add(*(
-                p._smk(k) * v.n_apply(p._sm_expr, on_npf=True)
+                p._smk(k) * v.apply(p._sm_expr, on_npf=True)
                 for k, v in d.items()
             ))
 
@@ -407,65 +406,17 @@ class WMWrapper:
     def adjoint(self) -> 'WMWrapper':
         """Takes the Hermitian adjoint of the operator representation."""
         p = self.processor
-        a1 = p.a[1]
-        weak_names = set(p.a[0].names)
 
         def _adj_dict(d: dict) -> dict:
-            res = dict()
-
-            def _acc(k_t, pf_v):
-                if k_t in res:
-                    pf_v = pf_add(res[k_t], pf_v)
-                if pf_v:
-                    res[k_t] = pf_v
-                elif k_t in res:
-                    del res[k_t]
-
-            for k, e in d.items():
+            ad = defaultdict(list)
+            for k, v in d.items():
                 i, *exps = k
                 if exps:
-                    i = i ^ (len(exps) & 1)
+                    i = bool(i ^ (len(exps) & 1))
                     exps.reverse()
-                k_adj = (i, *exps)
-                pd = _pd(k)
-                e_adj = e.adjoint().n_apply(lambda t: mmn_shift(t, a1, pd), on_npf=True)
-
-                has_weak_pair = False
-                if k_adj != (None,):
-                    for bs, _ in e_adj.table:
-                        bw = tuple(b for b in bs if b.name in weak_names)
-                        if bw:
-                            try:
-                                if p.match_cop(bw)[1] > 0:
-                                    has_weak_pair = True
-                                    break
-                            except ValueError:
-                                pass
-
-                if not has_weak_pair:
-                    _acc(k_adj, e_adj)
-                else:
-                    if e_adj.npf != 0:
-                        _acc(k_adj, PF({}, e_adj.npf))
-                    for (bs, fs), c_tail in e_adj.table.items():
-                        try:
-                            cop_a1, cop_exp, bs_other = p.match_cop(bs)
-                        except ValueError:
-                            cop_a1, cop_exp, bs_other = None, 0, bs
-
-                        if cop_exp == 0 or cop_a1 is None:
-                            _acc(k_adj, PF({(bs, fs): c_tail}, S.Zero))
-                        else:
-                            for k_sub, new_m, P_num in p.tcp_swap(cop_a1, cop_exp, k_adj, to_left=False):
-                                if new_m == 0:
-                                    new_bw = ()
-                                else:
-                                    cop_tgt = p.a[1 if cop_a1 else 0]
-                                    op1 = BosonOp(cop_tgt.names[0], cop_tgt.annih1)
-                                    op2 = BosonOp(cop_tgt.names[1], cop_tgt.annih2)
-                                    new_bw = (op1, op2) if new_m == 1 else (op1**new_m, op2**new_m)
-                                _acc(k_sub, PF({(bs_other + new_bw, fs): c_tail * P_num}, S.Zero))
-            return res
+                for k_new, vp in p.tp_swap((i, *exps), v.adjoint(), to_left=True):
+                    ad[k_new].append(vp)
+            return {k: vs for k, v in ad.items() if (vs := pf_add(*v))}
 
         if self.b_left is None:
             return WMWrapper(p, _adj_dict(self.dict_repr), None)
@@ -491,6 +442,48 @@ class WMWrapper:
 
     def __mul__(self, other) -> 'WMWrapper':
         other = WMWrapper.from_val(other, self.processor)
+        p = self.processor
+        if not self or not other:
+            return WMWrapper(p, {}, None)
+        if self.b_left is None or other.b_left is None:
+            return self.__matmul__(other)
+        if self.parity == other.parity:
+            raise ValueError('Solution parity unbalanced')
+        res_l = defaultdict(list)
+        if other.b_left:
+            e1 = (self.flip() if self.b_left else self).dict_repr
+            for (b1, d1), (b2, d2) in product(e1.items(), other.dict_repr.items()):
+                if b1 == Dagger(b2):
+                    bn = BosonNum(b1.name) + int(b1.is_annihilation)
+                    p.d_mul(res_l, d1, d2, bn)
+                elif b1.compare(b2) == 1:
+                    p.d_mul(res_l, d1, d2, b2.is_annihilation, True)
+                else:
+                    p.d_mul(res_l, d1, d2, b1.is_annihilation, True)
+        else:
+            if self.b_left:
+                for (b1, d1), (b2, d2) in product(self.dict_repr.items(),
+                                                other.dict_repr.items()):
+                    mid_dl = defaultdict(list)
+                    p.d_mul(mid_dl, d1, d2)
+                    for b, d in p.bd_swap(b1, _sum_dl(mid_dl), False).items():
+                        for k, v in d.items():
+                            res_l[k].append(v*(b*b2))
+            else:
+                for (b1, d1), (b2, d2) in product(self.dict_repr.items(),
+                                                other.dict_repr.items()):
+                    for k2, v2 in d2.items():
+                        i, *exps = k2
+                        for s, b, nes in p.bt_swap(b1, i, exps):
+                            for k1, v1 in d1.items():
+                                res_l[_t_mul(k1, _tdz(i, nes))].append(v1*s*b*v2*b2)
+        return WMWrapper(p, _sum_dl(res_l), None)
+
+    def __rmul__(self, other) -> 'WMWrapper':
+        return WMWrapper.from_val(other, self.processor).__mul__(self)
+
+    def __matmul__(self, other) -> 'WMWrapper':
+        other = WMWrapper.from_val(other, self.processor)
         e1, e2 = self.dict_repr, other.dict_repr
         p = self.processor
         if not e1 or not e2:
@@ -503,73 +496,52 @@ class WMWrapper:
         if is_f1 and is_f2:
             if self.parity == other.parity:
                 raise ValueError('Solution parity unbalanced')
+            res_l = defaultdict(list)
             e1 = (self.flip() if self.b_left else self).dict_repr
             e2 = (other if other.b_left else other.flip()).dict_repr
             for (b1, d1), (b2, d2) in product(e1.items(), e2.items()):
                 if b1 == Dagger(b2):
-                    mn = (MultimodeNum(b1.name, S.One) if b1.is_annihilation
-                          else MultimodeNum(b1.name))
-                    p.d_mul(result, d1, d2, mn)
+                    mn = MultimodeNum(b1.name, int(b1.is_annihilation))
+                    p.d_mul(res_l, d1, d2, mn)
                 elif b1.compare(b2) == 1:
-                    p.d_mul(result, d1, d2, b2.is_annihilation)
+                    p.d_mul(res_l, d1, d2, b2.is_annihilation)
                 else:
-                    p.d_mul(result, d1, d2, b1.is_annihilation)
-            return WMWrapper(p, result, None)
+                    p.d_mul(res_l, d1, d2, b1.is_annihilation)
+            return WMWrapper(p, _sum_dl(res_l), None)
 
         if is_f1:
             if self.b_left:
                 for b, d in e1.items():
-                    res_b = dict()
-                    p.d_mul(res_b, d, e2)
-                    if res_b:
+                    res_dl = defaultdict(list)
+                    p.d_mul(res_dl, d, e2)
+                    if (res_b := _sum_dl(res_dl)):
                         result[b] = res_b
                 return WMWrapper(p, result, True)
+            res_dl = defaultdict(lambda: defaultdict(list))
             for b, d1 in e1.items():
                 for nb, p2_prime in p.bd_swap(b, e2, to_left=False).items():
-                    p.d_mul(result.setdefault(nb, dict()), d1, p2_prime)
-            result = {k: v for k, v in result.items() if v}
+                    p.d_mul(res_dl[nb], d1, p2_prime)
+            result = {nb: rb for nb, dl in res_dl.items() if (rb := _sum_dl(dl))}
             return WMWrapper(p, result, False)
 
         if is_f2:
             if not other.b_left:
                 for b, d in e2.items():
-                    res_b = dict()
-                    p.d_mul(res_b, e1, d)
-                    if res_b:
+                    res_dl = defaultdict(list)
+                    p.d_mul(res_dl, e1, d)
+                    if (res_b := _sum_dl(res_dl)):
                         result[b] = res_b
                 return WMWrapper(p, result, False)
+            res_dl = defaultdict(lambda: defaultdict(list))
             for b, d2 in e2.items():
                 for nb, p1_prime in p.bd_swap(b, e1, to_left=True).items():
-                    p.d_mul(result.setdefault(nb, dict()), p1_prime, d2)
-            result = {k: v for k, v in result.items() if v}
+                    p.d_mul(res_dl[nb], p1_prime, d2)
+            result = {nb: rb for nb, dl in res_dl.items() if (rb := _sum_dl(dl))}
             return WMWrapper(p, result, True)
 
-        p.d_mul(result, e1, e2)
-        return WMWrapper(p, result, None)
-
-    def __rmul__(self, other) -> 'WMWrapper':
-        return WMWrapper.from_val(other, self.processor).__mul__(self)
-
-    def __matmul__(self, other) -> 'WMWrapper':
-        other = WMWrapper.from_val(other, self.processor)
-        p = self.processor
-        if not self or not other:
-            return WMWrapper(p, {}, None)
-        if self.b_left is None or other.b_left is None:
-            return self.__mul__(other)
-        if self.parity == other.parity:
-            raise ValueError('Solution parity unbalanced')
-        e1 = (self.flip() if self.b_left else self).dict_repr
-        e2 = (other if other.b_left else other.flip()).dict_repr
-        result = dict()
-        for (b1, d1), (b2, d2) in product(e1.items(), e2.items()):
-            if b1 == Dagger(b2):
-                bn = (BosonNum(b1.name) + S.One) if b1.is_annihilation else BosonNum(b1.name)
-                p.d_mul(result, d1, d2, bn)
-            else:
-                bs_cop = (b2, b1) if b1.compare(b2) == 1 else (b1, b2)
-                p.d_mul(result, d1, d2, PF({(bs_cop, ()): S.One}))
-        return WMWrapper(p, result, None)
+        res_dl = defaultdict(list)
+        p.d_mul(res_dl, e1, e2)
+        return WMWrapper(p, _sum_dl(res_dl), None)
 
     def __rmatmul__(self, other) -> 'WMWrapper':
         return WMWrapper.from_val(other, self.processor).__matmul__(self)
@@ -579,7 +551,7 @@ class WMWrapper:
         denom = other.as_scalar
         if denom is not None:
             inv_w = WMWrapper(self.processor, {(None,): PF({_vpk: denom ** S.NegativeOne})}, None)
-            return self.__mul__(inv_w)
+            return self.__matmul__(inv_w)
         raise ValueError("Division is only supported by scalar or number-operator expressions.")
 
     def __rtruediv__(self, other) -> 'WMWrapper':
@@ -617,10 +589,10 @@ class WMWrapper:
             exp_n = n_int
             while exp_n > 0:
                 if exp_n & 1:
-                    res = base if res is None else (res * base)
+                    res = base if res is None else (res @ base)
                 exp_n >>= 1
                 if exp_n > 0:
-                    base = base * base
+                    base = base @ base
             return res
 
         if self.b_left is None:
@@ -678,7 +650,3 @@ class WMWrapper:
         return self.apply(lambda v: diff(v, var, *rest_args, **kwargs))
 
     Derivative = diff
-
-
-for _proc in wm_processors:
-    _proc.init_ops

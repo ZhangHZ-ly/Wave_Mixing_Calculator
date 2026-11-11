@@ -3,7 +3,7 @@ from sympy.core.singleton import S
 from sympy.core.sympify import sympify
 from sympy.core.expr import Expr
 from sympy.core.numbers import Integer
-from sympy.core.symbol import Symbol
+from sympy.core.symbol import Symbol, Dummy
 from sympy.core.add import Add
 from sympy.core.mul import Mul
 from sympy.core.power import Pow
@@ -14,18 +14,20 @@ from sympy.concrete.expr_with_limits import AddWithLimits
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.fermion import FermionOp
 from sympy.core.function import diff as sympy_diff
+from sympy.core.exprtools import factor_terms
 from sympy.physics.quantum.commutator import Commutator
 from sympy.physics.quantum.anticommutator import AntiCommutator
+from sympy.core.traversal import bottom_up
 from ..op_pattern.boson_pattern import BosonPat, BosonNum, NumShift
 from ..op_pattern.fermion_pattern import FermionPat, m1_base, UidCommutator
 from ..op_pattern.tools import mul_pattern, extract_modes, check_num, redo_mul
 from sortedcontainers import SortedDict
 import warnings
 
-__all__ = ['is_pattern_form', 'pf', 'PF', 'pf_add', 'PF0', 'PF1', 'BSC', 'FSC']
+__all__ = ['bn_simp', 'is_pattern_form', 'pf', 'PF', 'pf_add', 'PF0', 'PF1', 'BSC', 'FSC']
 
 _k_cache = dict()
-def key(a):
+def _key(a):
     if isinstance(a, (BosonPat, FermionPat)):
         na = a.name
         if na is None:
@@ -91,7 +93,7 @@ class BSC:
             sd = SortedDict()
             tail = []
             for a in reversed(self.pats):
-                k = key(a)
+                k = _key(a)
                 if k in sd:
                     new = mul_pattern(a, sd[k])[0]
                     sd[k] = new
@@ -123,10 +125,10 @@ class BSC:
         new = []
         tail = [NumShift(self.tail, 1, R).doit(deep=False)]
         while i < l and j < r:
-            if key(L[i]) < key(R[j]):
+            if _key(L[i]) < _key(R[j]):
                 new.append(L[i])
                 i += 1
-            elif key(L[i]) > key(R[j]):
+            elif _key(L[i]) > _key(R[j]):
                 new.append(R[j])
                 j += 1
             else:
@@ -226,7 +228,7 @@ class BSC:
         l, r = len(L), len(R)
         i = j = j_prev = 0
         while i < l and j < r:
-            if key(L[i]) < key(R[j]):
+            if _key(L[i]) < _key(R[j]):
                 if j_prev != j:
                     c = Commutator(Mul(*L[i:], evaluate=False),
                                     Mul(*R[j_prev:j], evaluate=False))
@@ -234,7 +236,7 @@ class BSC:
                     j_prev =j
                 new.append(L[i])
                 i += 1
-            elif key(L[i]) > key(R[j]):
+            elif _key(L[i]) > _key(R[j]):
                 new.append(R[j])
                 j += 1
             else:
@@ -308,7 +310,6 @@ class FSC:
                 self.remainder = S.Zero
             else:
                 self.pats = tuple(pats)
-                self._rem_cache = dict()
 
     def expr(self) -> Expr:
         if hasattr(self, 'pats'):
@@ -352,12 +353,12 @@ class FSC:
                 tail_args.append(l_arg * Add(*(m1_base(p.comm_symm)
                                              for p in R[j_prev:j])))
         while i < l and j < r:
-            if key(L[i]) < key(R[j]):
+            if _key(L[i]) < _key(R[j]):
                 update()
                 new.append(L[i])
                 j_prev = j
                 i += 1
-            elif key(L[i]) > key(R[j]):
+            elif _key(L[i]) > _key(R[j]):
                 new.append(R[j])
                 j += 1
             else:
@@ -400,13 +401,13 @@ class FSC:
             elif isinstance(c, UidCommutator):
                 tail.append(c.comm_sign)
         while i < l and j < r:
-            if key(L[i]) < key(R[j]):
+            if _key(L[i]) < _key(R[j]):
                 if j_prev != j:
                     record()
                     j_prev =j
                 new.append(L[i])
                 i += 1
-            elif key(L[i]) > key(R[j]):
+            elif _key(L[i]) > _key(R[j]):
                 new.append(R[j])
                 j += 1
             else:
@@ -490,8 +491,52 @@ def is_pattern_form(*exprs: Expr) -> bool:
 
 _vpk = ((), ())
 
-def make_contexts(pf: PF):
-    return pf.make_context()
+# A light function that collapses multiple exponents
+def _ps(expr):
+    if expr.is_Pow and expr.base.is_Pow:
+        return _ps(expr.base.base**(expr.exp*expr.base.exp))
+    return expr
+
+def _mps(expr, sd=None):
+    if sd is None:
+        sd = {}
+    rsd = {v: k for k, v in sd.items()}
+    if expr.is_Mul:
+        exp_dict = dict()
+        for arg in Mul.make_args(expr.subs(sd)):
+            if arg.is_Pow:
+                if arg.base in exp_dict:
+                    exp_dict[arg.base] += arg.exp
+                else:
+                    exp_dict[arg.base] = arg.exp
+            elif arg in exp_dict:
+                exp_dict[arg] += S.One
+            else:
+                exp_dict[arg] = S.One
+        n_part = []
+        other = []
+        for k, v in exp_dict.items():
+            if v != 0:
+                if k.has(*rsd):
+                    n_part.append(k ** v)
+                else:
+                    other.append(k ** v)
+        return Mul(*other, Mul(*n_part).subs(rsd))
+
+def bn_simp(expr, on_self=False):
+    """
+    Simplifies BosonNum expressions by:
+    1. Extracting common factors from Add expressions inside Mul;
+    2. Merging powers using dummy commutative substitution;
+    """
+    if not isinstance(expr, Expr):
+        return expr.apply(bn_simp, self_update=on_self) if hasattr(expr, 'apply') else expr
+    sub_dict = {a: Dummy() for a in sorted(
+        (x for x in expr.atoms(Expr) if getattr(x, 'bn_coeffs', False)),
+        key=lambda x: x.sort_key(), reverse=True
+    )}
+    return bottom_up(expr, lambda x: _mps(x, sub_dict)
+                     if x.is_Mul else _ps(x))
 
 class PF:
     """
@@ -501,13 +546,7 @@ class PF:
         'table', 'npf', '_rem_cache', 'rem'
     )
 
-    def __init__(
-        self,
-        table: dict = None,
-        npf=S.Zero,
-        cache=None,
-        rem=S.Zero,
-    ):
+    def __init__(self, table: dict = None, npf=S.Zero, cache=None, rem=S.Zero):
         self.table = dict() if table is None else table
         self.npf = sympify(npf)
         self._rem_cache = dict() if cache is None else cache
@@ -516,13 +555,20 @@ class PF:
     def __repr__(self):
         return f"PatternForm({self.table}, {self.npf})"
 
-    def __eq__(self, value):
-        if isinstance(value, PF):
-            return self.table == value.table and self.npf == value.npf
-        return False
+    def __eq__(self, other):
+        if not isinstance(other, PF):
+            try:
+                other = self.from_val(other)
+            except Exception:
+                return NotImplemented
+        if not isinstance(other, PF) or not self.npf == other.npf:
+            return False
+        keys = self.table.keys() | other.table.keys()
+        return all(bn_simp(self.table.get(k, S.Zero))
+                   == bn_simp(other.table.get(k, S.Zero)) for k in keys)
     
     def __bool__(self) -> bool:
-        return bool(self.table or self.npf != 0 or self.rem != 0)
+        return self != 0
 
     def expr(self, with_npf=True) -> Expr:
         if with_npf:
@@ -553,7 +599,7 @@ class PF:
             return pf_obj
         return pf_res
 
-    def make_context(self):
+    def make_contexts(self):
         rem = getattr(self, 'rem', S.Zero)
         for (bs, fs), n in self.table.items():
             bsc = object.__new__(BSC)
@@ -566,8 +612,6 @@ class PF:
             fsc.tail = S.One
             fsc.remainder = S.Zero
             yield bsc, fsc
-
-    make_contexts = make_context
 
     def __add__(self, other):
         if not isinstance(other, PF):
@@ -603,21 +647,12 @@ class PF:
         return self.__sub__(other)
 
     def __mul__(self, other):
-        if isinstance(other, (int, Integer)):
-            if other == 0:
+        if hasattr(other, '__rmul__'):
+            if not other:
                 return PF0
-            if other == 1:
+            if other == 1 or other == PF1:
                 return self
-            return PF(
-                {k: v * other for k, v in self.table.items()},
-                self.npf * other,
-                dict(self._rem_cache)
-            )
-        if isinstance(other, Expr) and getattr(other, 'is_commutative', False):
-            if other == 0 or other is S.Zero:
-                return PF0
-            if other == 1 or other is S.One:
-                return self
+        if isinstance(other, Expr) and check_num(other):
             return PF(
                 {k: v * other for k, v in self.table.items()},
                 self.npf * other,
@@ -626,7 +661,7 @@ class PF:
         if not isinstance(other, PF):
             other = PF.from_val(other)
         sf = dict()
-        for bsc, fsc in self.make_context():
+        for bsc, fsc in self.make_contexts():
             for (bs, fs), t in other.table.items():
                 bp, bt = bsc.merge_ind(bs)
                 fp, ft = fsc.merge_ind(fs)
@@ -635,25 +670,22 @@ class PF:
                     sf[a] = sf.get(a, 0) + Mul(ft, bt, t)
         cache = dict(self._rem_cache)
         _rem_cache_update(cache, other._rem_cache)
-        return PF(
-            sf,
-            Add(Mul(self.expr(), other.npf), Mul(self.npf, other.expr(False))),
-            cache
-        )
+        return PF(sf, Add(Mul(self.expr(), other.npf),
+                          Mul(self.npf, other.expr(False))), cache)
 
     def __rmul__(self, other):
-        if isinstance(other, (int, Integer)):
+        if hasattr(other, '__mul__'):
+            if not other:
+                return PF0
+            if other == 1 or other == PF1:
+                return self
+        if isinstance(other, Expr) and other.is_commutative:
             return self.__mul__(other)
-        if isinstance(other, Expr) and getattr(other, 'is_commutative', False):
-            return self.__mul__(other)
-        return PF.from_val(other) * self
-
-    def __imul__(self, other):
-        return self.__mul__(other)
+        return PF.from_val(other).__mul__(self)
 
     def _mul_rem(self, other: PF, reserve_unshifted=False):
         sf, rem = dict(), []
-        for bsc, fsc in self.make_context():
+        for bsc, fsc in self.make_contexts():
             for (bs, fs), t in other.table.items():
                 nbsc = object.__new__(BSC)
                 (nbsc.pat_sorted,
@@ -782,12 +814,16 @@ class PF:
             rem=getattr(self, 'rem', S.Zero)
         )
 
-    def n_apply(self, f, on_npf: bool = False) -> PF:
+    def apply(self, f, on_npf: bool = False, self_update=False) -> PF:
         sf = dict()
         for k, t in self.table.items():
             if (nt := f(t)) != 0:
                 sf[k] = nt
         npf = f(self.npf) if on_npf else self.npf
+        if self_update:
+            self.table = sf
+            self.npf = npf
+            return self
         return PF(
             sf, npf, self._rem_cache,
             rem=getattr(self, 'rem', S.Zero)
@@ -845,8 +881,6 @@ def pf_add(*pfs):
         else:
             del result[p]
     return PF(result, Add(*(pf.npf for pf in pfs if pf.npf is not S.Zero)), cache)
-
-PF.add = staticmethod(pf_add)
 
 def clear_cache():
     _k_cache.clear()
@@ -1072,7 +1106,8 @@ class PFTreeNode:
         Pattern-formed result with remainder due to non-commutativity among modes,
         operators reordered canonically
 
-        Non-num_only args of Pow/Function will not be treated further;
+        Pow/Function args with non-BosonNum expressions
+        will not be treated further;
         if the number operators in different modes appear
         in the args of a single Pow/Function,
         they will be temporarily considered as independent.

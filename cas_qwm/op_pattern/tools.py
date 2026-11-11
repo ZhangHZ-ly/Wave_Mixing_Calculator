@@ -73,7 +73,7 @@ def check_num(expr: Expr, cache=None) -> bool:
     """
     Checks whether the expression is represented only in boson number operators
     """
-    if expr.is_commutative or getattr(expr, 'boson_num_only', False):
+    if expr.is_commutative or getattr(expr, 'bn_coeffs', False):
         return True
     if isinstance(expr, (BosonPat, FermionPat, Symbol)):
         return False

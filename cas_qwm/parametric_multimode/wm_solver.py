@@ -6,22 +6,23 @@ from sympy.core.symbol import Symbol
 from sympy.core.mul import Mul
 from sympy.functions.elementary.exponential import exp
 from sympy.physics.quantum.dagger import Dagger
-from ..pattern_perturb.pattern_form import PF, pf_add, _vpk
-from .dsolve_pm import dsd1, dsd2
+from ..pattern_perturb.pattern_form import PF, _vpk
+from ..dsolve_pm import dsd1, dsd2
 from .multimode import MultimodeNum2
 from .wm_processor import wm_processors, a_p, a_s, a_i, t_, nlc, _g
 from .wm_wrapper import WMWrapper
 
-__all__ = ['pm', 'PMSolver', 'TWMSolver', 'FWMSolver']
+__all__ = ['pm', 'WMSolver', 'TWMSolver', 'FWMSolver']
 
 pm = Symbol('Δk', real=True)
 
 
-class PMSolver(Sequence):
+class WMSolver(Sequence):
     """
     Protected list-like container storing perturbative wave-mixing solutions
     as 3-tuples of WMWrapper objects per order.
     """
+    __slots__ = ('processor', 'pm', '_sol')
 
     def __init__(self, dc=True, mismatch=False):
         self.processor = wm_processors[bool(dc)]
@@ -56,7 +57,7 @@ class PMSolver(Sequence):
         raise NotImplementedError
 
 
-class TWMSolver(PMSolver):
+class TWMSolver(WMSolver):
     """
     Three-wave mixing quantum multimode parametric process perturbation solver.
 
@@ -116,48 +117,41 @@ class TWMSolver(PMSolver):
         last_sol = self.get_sol(order - 1)
         p = self.processor
         dc = self.dc
+        self.reset_pe()
         gc_m2 = self.gc**(-2)
         if i & 1:
-            def _d2ts(mode, n0, b):
-                s1 = S.NegativeOne if mode == 0 else S.One
-                s3 = S.NegativeOne if dc else S.One
-                t1_b = term1.dict_repr.get(b, {})
-                t2_b = term2.dict_repr.get(b, {})
-                last_b = last_sol[mode].dict_repr.get(b, {})
-                raw_b = {}
-                for k in t1_b.keys() | t2_b.keys() | last_b.keys():
-                    pfs = []
-                    if k in t1_b:
-                        pfs.append(s1 * t1_b[k])
-                    if k in t2_b:
-                        pfs.append(-t2_b[k])
-                    if k in last_b:
-                        pfs.append(last_b[k] * (s3 * self.nd))
-                    raw_b[k] = pf_add(*pfs) * Mul(nlc**2, gc_m2)
-                out_b = WMWrapper(p, raw_b).expand(order, True, self.gc).apply(
+            s3 = S.NegativeOne if dc else S.One
+            gc2 = Mul(nlc**2, gc_m2)
+
+            def _d2ts(mode, b_t, b_f, term1, term2):
+                init = (self._sol[1][mode] if order > 0 else
+                        WMWrapper(p, {b_t: {(None,): self.fdf0(True, mode)},
+                                      b_f: {(None,): self.fdf0(False, mode)}}))
+                t1 = -term1 if mode == 0 else term1
+                rhs = p.d_add(t1, -term2, last_sol[mode] @ (s3 * self.nd))
+                w_rhs = (rhs @ gc2).expand(order, True, self.gc)
+                sol = w_rhs.apply(
                     lambda t: p.n_simp(dsd2(_g, p.p2s_group(t), dc, subs=self.gc * t_))
-                ).dict_repr
-                out_b[(None,)] = (pf_add(out_b[(None,)], self.fdf0(n0, mode))
-                                  if (None,) in out_b else self.fdf0(n0, mode))
-                return out_b
+                )
+                return sol + init
 
             if dc:
                 pd = last_sol[0].adjoint()
-                term1 = last_sol[0] * pd * last_sol[1]
-                term2 = self.dd_last * last_sol[2].adjoint()
-                sol1 = WMWrapper(p, {a_s: _d2ts(1, True, a_s), Dagger(a_i): _d2ts(1, False, Dagger(a_i))})
-                term1 = last_sol[2] * (pd * last_sol[0])
-                term2 = last_sol[1].adjoint() * self.dd_last
-                sol2 = WMWrapper(p, {Dagger(a_s): _d2ts(2, False, Dagger(a_s)), a_i: _d2ts(2, True, a_i)})
+                sol1 = _d2ts(1, a_s, Dagger(a_i),
+                             last_sol[0] @ pd @ last_sol[1],
+                             self.dd_last @ last_sol[2].adjoint())
+                sol2 = _d2ts(2, a_i, Dagger(a_s),
+                             last_sol[2] @ (pd @ last_sol[0]),
+                             last_sol[1].adjoint() @ self.dd_last)
                 self._sol.append((last_sol[0], sol1, sol2))
             else:
                 id_ = last_sol[2].adjoint()
-                term1 = last_sol[0] * (id_ * last_sol[2])
-                term2 = last_sol[1] * self.dd_last
-                sol0 = WMWrapper(p, {a_p: _d2ts(0, True, a_p), a_s: _d2ts(0, False, a_s)})
-                term1 = last_sol[0] * self.dd_last.adjoint()
-                term2 = last_sol[1] * (last_sol[2] * id_)
-                sol1 = WMWrapper(p, {a_s: _d2ts(1, True, a_s), a_p: _d2ts(1, False, a_p)})
+                sol0 = _d2ts(0, a_p, a_s,
+                             last_sol[0] @ (id_ @ last_sol[2]),
+                             last_sol[1] @ self.dd_last)
+                sol1 = _d2ts(1, a_s, a_p,
+                             last_sol[0] @ self.dd_last.adjoint(),
+                             last_sol[1] @ (last_sol[2] @ id_))
                 self._sol.append((sol0, sol1, last_sol[2]))
         else:
             def _d1ts():
@@ -167,10 +161,10 @@ class TWMSolver(PMSolver):
                 return s0 + b
 
             if dc:
-                self.dd_last = last_sol[1] * last_sol[2]
+                self.dd_last = last_sol[1] @ last_sol[2]
                 self._sol.append((_d1ts(), *last_sol[1:]))
             else:
-                self.dd_last = last_sol[1].adjoint() * last_sol[0]
+                self.dd_last = last_sol[1].adjoint() @ last_sol[0]
                 self._sol.append((*last_sol[:2], _d1ts()))
         return self._sol[i]
 
@@ -187,8 +181,13 @@ class TWMSolver(PMSolver):
             p = self.half_p_factor
         return p * sol.expr
 
+    def reset_pe(self):
+        p = self.processor
+        p.pe.update({name: S.Zero for name in p.a[0].names})
+        p.pe.update({p.nd.name: S.NegativeOne})
 
-class FWMSolver(PMSolver):
+
+class FWMSolver(WMSolver):
     """
     Four-wave mixing quantum multimode parametric process perturbation solver.
     """
@@ -224,13 +223,12 @@ class FWMSolver(PMSolver):
 
         xpm_c = WMWrapper(p, {(None,): PF({((a_p,), ()): S.Half * MultimodeNum2(a_s.name, a_i.name)})})
         coeff = WMWrapper(p, {(None,): PF({((a_p,), ()): S.Half})})
-        xpm_t = sol_0[1] * sol_0[1].adjoint() + sol_0[2].adjoint() * sol_0[2]
-        dd2 = sol_0[1] * sol_0[0].adjoint() * sol_0[2]
+        xpm_t = sol_0[1] @ sol_0[1].adjoint() + sol_0[2].adjoint() @ sol_0[2]
+        dd2 = sol_0[1] @ sol_0[0].adjoint() @ sol_0[2]
 
-        p.pe.update({a_p.name: -S.Half})
-        w_rhs = ((dd2 + xpm_c + coeff * xpm_t) * (-2 * I * nlc / self.gc)).expand(1, True, self.gc)
+        self.reset_pe()
+        w_rhs = ((dd2 + xpm_c + coeff @ xpm_t) @ (-2 * I * nlc / self.gc)).expand(1, True, self.gc)
         s0 = w_rhs.apply(lambda t: p.n_simp(dsd1(_g, p.p2s_group(t), subs=self.gc * t_)))
-        p.pe.update({a_p.name: S.NegativeOne})
 
         sol_1 = (sol_0[0] + s0, sol_0[1], sol_0[2])
         self._sol = [sol_m1, sol_0, sol_1]
@@ -249,3 +247,6 @@ class FWMSolver(PMSolver):
     def _zq(self, obj):
         f = lambda x: x.subs({self.pm: 2 * nlc * self.nd})
         return obj.apply(f) if isinstance(obj, WMWrapper) else f(obj)
+
+    def reset_pe(self):
+        self.processor.pe.update({a_p.name: -S.Half, a_s.name: S.Zero, a_i.name: S.Zero})

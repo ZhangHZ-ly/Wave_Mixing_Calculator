@@ -4,17 +4,15 @@ from sympy.core.expr import Expr
 from sympy.core.numbers import Integer
 from sympy.core.symbol import Dummy
 from sympy.core.mul import Mul
+from sympy.core.containers import Dict
 from sympy.concrete.summations import Sum
 from sympy.physics.quantum.operator import Operator, HermitianOperator
-from sympy.core.traversal import bottom_up
-from ..op_pattern import BosonNum, NumShift
-from ..pattern_perturb import PF, pf_add
+from ..op_pattern import BosonNum
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.dagger import Dagger
-from .dsolve_pm import _ps
 from functools import cached_property, lru_cache
 
-__all__ = ['MultimodeCOP', 'MultimodeNum', 'MultimodeNum2', 'mmn_shift', 'nd_simp']
+__all__ = ['MultimodeCOP', 'MultimodeNum', 'MultimodeNum2']
 
 _mcc_indices = tuple(Dummy(integer=True, nonnegative=True) for _ in range(2))
 @lru_cache(8)  # The number of terms EXPONENTIALLY EXPLODES!
@@ -68,7 +66,8 @@ class MultimodeCOP(Operator):
         return self.annih1 ^ bool(self.parity)
     @property
     def mode_expr(self):
-        return Mul(BosonOp(self.names[0], self.annih1), BosonOp(self.names[1], self.annih2))
+        return Mul(BosonOp(self.names[0], self.annih1),
+                   BosonOp(self.names[1], self.annih2))
 
     def swap_exps(self, exp1, exp2, order=None, left_p=True):
         """
@@ -186,6 +185,9 @@ class MultimodeNum(HermitianOperator):
     @cached_property
     def mode_expr(self):
         return (BosonNum(self.name) + self.displacement)
+    @property
+    def bn_coeffs(self):
+        return Dict({self.name: S.One})
     
     def _eval_commutator_BosonPat(self, other, **options):
         if other.name == self.name:
@@ -238,6 +240,10 @@ class MultimodeNum2(HermitianOperator):
         a_1, a_2 = self.names
         return (BosonNum(a_2) - BosonNum(a_1) if self.parity
                 else BosonNum(a_1) + BosonNum(a_2) + 1)
+    @property
+    def bn_coeffs(self):
+        a_1, a_2 = self.names
+        return Dict({a_1: S.NegativeOne**self.parity, a_2: S.One})
     
     def _eval_commutator_BosonPat(self, other, **options):
         n1, n2 = self.args[:2]
@@ -256,129 +262,3 @@ class MultimodeNum2(HermitianOperator):
         return r'Σ(%s)' % str(self.mode_expr)
     def _print_contents_latex(self, printer, *args):
         return r'\sum_\text{modes}\left({%s}\right)' % printer._print(self.mode_expr)
-
-def mmn_shift(expr, op: BosonOp | MultimodeCOP, pd, dr=1):
-    if (not pd or not isinstance(expr, Expr) or expr.is_commutative):
-        return expr
-    if isinstance(op, BosonOp):
-        sd = {op.name: pd*op.parity_diff} 
-    elif isinstance(op, MultimodeCOP):
-        bs = op.mode_expr.args
-        sd = {b.name: pd*b.parity_diff for b in bs}
-    else:
-        return expr
-    if isinstance(expr, BosonNum):
-        return NumShift(expr, dr, sd).doit(deep=False)
-    elif isinstance(expr, MultimodeNum):
-        if expr.name in sd:
-            return expr + sd[expr.name]*dr
-    elif isinstance(expr, MultimodeNum2):
-        *ns, p = expr.args
-        if isinstance(op, MultimodeCOP):
-            if op.names == tuple(ns) and op.parity == p:
-                return expr - 2*pd*dr if op.annih2 else expr + 2*pd*dr
-        else:
-            nb = next(iter(sd))
-            if nb == ns[1]:
-                return expr + sd[nb]*dr
-            if nb == ns[0]:
-                return expr - sd[nb]*dr if expr.parity else expr + sd[nb]*dr
-    elif hasattr(expr, 'args'):
-        return expr.func(*(mmn_shift(arg, op, pd, dr) for arg in expr.args))
-    return expr
-
-def t_mul(t1, t2, mid=None):
-    i1, *exps1 = t1
-    if not exps1:
-        if mid is None:
-            return t2
-        i1 = mid
-        exps1 = [1]
-    elif mid is not None:
-        if i1^(len(exps1)&1)^mid:
-            # the annih1 of last multimode operator in t1 equals mid
-            exps1[-1] += 1
-        else:
-            exps1.append(1)
-    i2, *exps2 = t2
-    if not exps2:
-        return (i1, *exps1)
-    if i1^(len(exps1)&1)^i2:
-        return (i1, *exps1[:-1], exps1[-1]+ exps2[0], *exps2[1:])
-    return (i1, *exps1, *exps2)
-
-def _tdz(i, exps):
-    """Drops the zeros in a multimode exponent tuple"""
-    i = bool(i)
-    lz = False
-    new_exps = []
-    for e in exps:
-        if lz:
-            new_exps[-1] += sympify(e)
-            lz = False
-        elif e == 0:
-            if not new_exps:
-                i = not i
-            else:
-                lz = True
-        else:
-            new_exps.append(sympify(e))
-    if new_exps:
-        return (i, *new_exps)
-    return (None,)
-
-def _pd(t: tuple):
-    """Parity difference of the multimode exponent tuple"""
-    total = 0
-    es = iter(t)
-    temp = next(es)
-    for j in es:
-        if temp:
-            total -= j
-        else:
-            total += j
-        temp = not temp
-    return total
-
-def _mps(_m: Mul, nd, _nd=None):
-    exp_dict = dict()
-    args = _m.args if _nd is None else Mul.make_args(_m.subs({nd: _nd}))
-    for arg in args:
-        if arg.is_Pow:
-            if arg.base in exp_dict:
-                exp_dict[arg.base] += arg.exp
-            else:
-                exp_dict[arg.base] = arg.exp
-        elif arg in exp_dict:
-            exp_dict[arg] += S.One
-        else:
-            exp_dict[arg] = S.One
-    n_part = []
-    other = []
-    target = nd if _nd is None else _nd
-    for k, v in exp_dict.items():
-        if v != 0:
-            if k.has(target):
-                n_part.append(k ** v)
-            else:
-                other.append(k ** v)
-    if _nd is not None:
-        return Mul(*other, Mul(*n_part).subs({_nd: nd}))
-    return Mul(*other, Mul(*n_part))
-def nd_simp(expr, nd):
-    """
-    Simplifies expressions involving powers of nd (such as BosonNum,
-    Symbol, or Abs(alpha)**2) by:
-    1. Extracting common factors of nd from Add expressions inside Mul;
-    2. Merging powers of nd (using dummy commutative substitution if nd is non-commutative or composite);
-    """
-    if not isinstance(expr, Expr):
-        if hasattr(expr, 'apply'):
-            return expr.apply(lambda x: nd_simp(x, nd))
-        if isinstance(expr, PF):
-            return expr.n_apply(lambda x: nd_simp(x, nd), on_npf=True)
-    nd = nd.base if nd.is_Pow else nd
-    if not expr.has(nd):
-        return expr
-    _nd = None if nd.is_commutative else Dummy()
-    return bottom_up(expr, lambda x: _mps(x, nd, _nd) if x.is_Mul else _ps(x))

@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from cas_qwm.op_pattern import BosonNum, BosonPat, FermionPat
-from cas_qwm.pattern_perturb import PF
+from cas_qwm.pattern_perturb import PF, pf
 from sympy.core.function import diff
 from sympy.core.numbers import I, pi
 from sympy.core.singleton import S
@@ -24,10 +24,24 @@ PF_VARIABLES: Dict[str, PF] = {}
 LAST_EVAL_PF: Dict[str, Any] = {}
 
 
-def save_pf_variable(name: str, pf: Any, rem: Any = None, use_rem: bool = False, **kwargs) -> PF:
+def _to_pf(val: Any, use_rem: bool = False) -> PF:
+    if isinstance(val, PF):
+        return val
+    if isinstance(val, tuple) and len(val) == 2 and isinstance(val[0], PF):
+        return PF.from_val(val)
+    if not use_rem:
+        return PF.from_val(val)
+    expr = sympify(val)
+    if getattr(expr, 'is_commutative', True) or not expr.has(BosonOp, BosonPat, FermionOp, FermionPat):
+        return PF({((), ()): expr}, rem=S.Zero)
+    return PF.from_val(pf(expr, as_dict=None, rem=True))
+
+
+def save_pf_variable(name: str, pf_val: Any, rem: Any = None, use_rem: bool = False, **kwargs) -> PF:
     val_rem = rem if rem is not None else S.Zero
-    p = PF.from_val(pf, use_rem=use_rem)
-    p.rem = sympify(val_rem)
+    p = _to_pf(pf_val, use_rem=use_rem)
+    if rem is not None or not hasattr(p, 'rem'):
+        p.rem = sympify(val_rem)
     PF_VARIABLES[name] = p
     return p
 
@@ -74,7 +88,8 @@ def eval_pf_form(
             name = str(item.name)
         else:
             name = str(item)
-        return PF.from_val(BosonNum(name), use_rem)
+        bn = BosonNum(name)
+        return bn if use_rem else PF.from_val(bn)
 
     mode_kind_map = {op.get('name', '').strip(): op.get('kind', 'boson') for op in operators if op.get('name')}
     op_mode_map = {
@@ -87,9 +102,10 @@ def eval_pf_form(
             if isinstance(item, PF):
                 if item.npf == S.Zero and set(item.table.keys()).issubset({((), ())}):
                     arg = item.table.get(((), ()), S.Zero)
-                    return PF({((), ()): sympify(fn(arg))}, rem=item.rem, use_rem=use_rem)
-                return PF.from_val(fn(item.expr()), use_rem)
-            return PF.from_val(fn(sympify(item)), use_rem)
+                    return PF({((), ()): sympify(fn(arg))}, rem=item.rem if use_rem else S.Zero)
+                return _to_pf(fn(item.expr()), use_rem)
+            res = fn(sympify(item))
+            return res if use_rem else PF.from_val(res)
         return _inner
 
     def _unwrap_args(args):
@@ -105,7 +121,8 @@ def eval_pf_form(
         name = item.name if hasattr(item, 'name') else str(item)
         if op_mode_map and name in op_mode_map:
             name = str(op_mode_map[name])
-        return PF.from_val(pat_cls(name, *_unwrap_args(args)), use_rem)
+        pat = pat_cls(name, *_unwrap_args(args))
+        return pat if use_rem else PF.from_val(pat)
 
     def _make_pat(item, *args):
         if isinstance(item, PF) and item.table:
@@ -134,12 +151,21 @@ def eval_pf_form(
 
         is_fermion = (mode_kind_map.get(name) == 'fermion') if mode_kind_map else isinstance(inner, (FermionOp, FermionPat))
         if is_fermion:
-            return PF.from_val(FermionPat(name, is_ann, *exps), use_rem)
+            fp = FermionPat(name, is_ann, *exps)
+            return fp if use_rem else PF.from_val(fp)
 
         bp = BosonPat(name, is_ann, *exps)
+        if use_rem:
+            return bp
         a_op, tail = bp.num_repr()
         b_key = (a_op,) if a_op is not S.One else ()
-        return PF({(b_key, ()): tail}, rem=S.Zero, use_rem=use_rem)
+        return PF({(b_key, ()): tail}, rem=S.Zero)
+
+    from sympy.physics.quantum.dagger import Dagger as _Dagger
+    _dag_fn = ((lambda item: _Dagger(item)) if use_rem
+               else (lambda item: PF.from_val(item).adjoint()))
+    _pow_fn = ((lambda b, e: b ** e) if use_rem
+               else (lambda b, e: (b ** e) if isinstance(b, PF) else ((PF.from_val(b)) ** e)))
 
     local_dict: Dict[str, Any] = {
         'i': I,
@@ -153,9 +179,9 @@ def eval_pf_form(
         'cosh': _wrap_fn(cosh),
         'tanh': _wrap_fn(tanh),
         'sqrt': _wrap_fn(sqrt),
-        'dag': lambda item: PF.from_val(item, use_rem).adjoint(),
-        'Dagger': lambda item: PF.from_val(item, use_rem).adjoint(),
-        'dagger': lambda item: PF.from_val(item, use_rem).adjoint(),
+        'dag': _dag_fn,
+        'Dagger': _dag_fn,
+        'dagger': _dag_fn,
         'N_': _make_boson_num,
         'BosonNum': _make_boson_num,
         'Pat': _make_pat,
@@ -164,15 +190,15 @@ def eval_pf_form(
         'BosonPat': lambda item, *args: _make_op_pat(BosonPat, item, *args),
         'FP': lambda item, *args: _make_op_pat(FermionPat, item, *args),
         'FermionPat': lambda item, *args: _make_op_pat(FermionPat, item, *args),
-        'Pow': lambda b, e: (b ** e) if isinstance(b, PF) else ((PF.from_val(b, use_rem)) ** e),
-        'pow': lambda b, e: (b ** e) if isinstance(b, PF) else ((PF.from_val(b, use_rem)) ** e),
+        'Pow': _pow_fn,
+        'pow': _pow_fn,
         'diff': lambda expr, *args, **kwargs: expr.diff(*args, **kwargs) if hasattr(expr, 'diff') else diff(expr, *args, **kwargs),
         'Derivative': lambda expr, *args, **kwargs: expr.diff(*args, **kwargs) if hasattr(expr, 'diff') else diff(expr, *args, **kwargs),
     }
 
     disp_subs = {}
 
-    # Register symbols as scalar PF
+    # Register symbols as scalar PF (or Expr when use_rem=True)
     for s in symbols:
         s_name = s.get('name', '').strip()
         valid, err_msg = is_valid_variable_name(s_name)
@@ -184,7 +210,7 @@ def eval_pf_form(
         elif s.get('is_integer'): kwargs['integer'] = True
         elif s.get('is_real'): kwargs['real'] = True
         sym_obj = Symbol(s_name, **kwargs)
-        local_dict[s_name] = PF.from_val(sym_obj, use_rem)
+        local_dict[s_name] = sym_obj if use_rem else PF.from_val(sym_obj)
 
         d_name = (s.get('display_name') or '').strip()
         if d_name and d_name != s_name:
@@ -198,9 +224,7 @@ def eval_pf_form(
             raise ValueError(f"Invalid operator identifier: {err_msg}")
         kind = op.get('kind', 'boson')
         op_obj = BosonOp(op_name) if kind == 'boson' else FermionOp(op_name)
-        p_op = PF.from_val(op_obj, use_rem)
-
-        local_dict[op_name] = p_op
+        local_dict[op_name] = op_obj if use_rem else PF.from_val(op_obj)
 
         d_name = (op.get('display_name') or '').strip()
         if d_name and d_name != op_name:
@@ -215,28 +239,29 @@ def eval_pf_form(
 
         if 'val' in ne and ne['val'] is not None:
             val_obj = ne['val']
-            p_ne = PF.from_val(val_obj, use_rem=use_rem)
+            p_ne = _to_pf(val_obj, use_rem)
             if 'rem' in ne and ne['rem'] is not None:
                 p_ne.rem = sympify(ne['rem'])
-            local_dict[ne_name] = p_ne
+            local_dict[ne_name] = (p_ne.expr() + p_ne.rem) if use_rem else p_ne
             save_pf_variable(ne_name, p_ne, rem=p_ne.rem)
         elif ne_name in PF_VARIABLES:
-            local_dict[ne_name] = PF_VARIABLES[ne_name]
+            p_ne = PF_VARIABLES[ne_name]
+            local_dict[ne_name] = (p_ne.expr() + getattr(p_ne, 'rem', S.Zero)) if use_rem else p_ne
         else:
             ne_str = (ne.get('expr_str') or ne.get('source_input') or ne.get('sourceInput') or '').strip()
             if not ne_str:
                 continue
             try:
                 parsed_ne = parse_expr(ne_str, local_dict=local_dict, transformations=TRANSFORMS)
-                p_ne = PF.from_val(parsed_ne, use_rem)
-                local_dict[ne_name] = p_ne
+                p_ne = _to_pf(parsed_ne, use_rem)
+                local_dict[ne_name] = (p_ne.expr() + getattr(p_ne, 'rem', S.Zero)) if use_rem else p_ne
                 save_pf_variable(ne_name, p_ne, rem=p_ne.rem)
             except Exception as e:
                 raise ValueError(f"Failed to evaluate named expression '{ne_name}': {e}")
 
     try:
         parsed_target = parse_expr(text, local_dict=local_dict, transformations=TRANSFORMS)
-        pf_result = PF.from_val(parsed_target, use_rem)
+        pf_result = _to_pf(parsed_target, use_rem)
     except Exception as e:
         raise ValueError(f"Calculation failed: {e}")
 

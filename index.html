@@ -278,8 +278,8 @@ window.addEventListener('error', function(e) {
       </div>
       <div class="form-group">
         <label for="wm-input">WM Expression Input</label>
-        <textarea id="wm-input" rows="3" placeholder="e.g. dag(a_p) * a_p - N_(a_p) or a_s * dag(a_s) + dag(a_i) * a_i or a_s * a_i" style="font-family: monospace; font-size: 1rem;">dag(a_p) * a_p - N_(a_p)</textarea>
-        <span class="form-tip">Shortcuts: <code>dag(op)</code> for adjoint \((\dots)^\dagger\), <code>a_0, a_1, a_2</code> for initial (\(t=0\)) operators, <code>N_(…)</code> for initial number operator, <code>t</code> for time, <code>g</code> for parametric gain.</span>
+        <textarea id="wm-input" rows="3" placeholder="e.g. dag(a_p) a_p - N_(a_p) or a_s dag(a_s) + dag(a_i) a_i or a_s a_i" style="font-family: monospace; font-size: 1rem;">dag(a_p) a_p - N_(a_p)</textarea>
+        <span class="form-tip">Shortcuts: space or <code>@</code> for multimode multiplication, <code>*</code> for single-mode multiplication, <code>dag(op)</code> for adjoint \((\dots)^\dagger\), <code>a_0, a_1, a_2</code> for initial (\(t=0\)) operators, <code>N_(…)</code> for initial number operator, <code>t</code> for time, <code>g</code> for parametric gain.</span>
       </div>
 
       <div class="btn-group" style="margin-top: 1rem;">

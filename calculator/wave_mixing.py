@@ -1,9 +1,10 @@
 from __future__ import annotations
 import ast
 import math
+import re
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from cas_qwm.parametric_multimode.dsolve_pm import d_p2s
+from cas_qwm.dsolve_pm import d_p2s
 from cas_qwm.op_pattern import BosonNum, BosonPat, FermionPat
 from cas_qwm.pattern_perturb.pattern_form import _vpk
 from cas_qwm.parametric_multimode import *
@@ -46,14 +47,14 @@ TWM_SOLVERS = (
 FWM_SOLVER = FWMSolver()
 
 
-def get_wm_solver(process: Optional[str] = None, mismatch: bool = False, dc: Optional[bool] = None) -> PMSolver:
+def get_wm_solver(process: Optional[str] = None, mismatch: bool = False, dc: Optional[bool] = None) -> WMSolver:
     proc = normalize_process(process, dc)
     if proc == 'fwm':
         return FWM_SOLVER
     return TWM_SOLVERS[1 if proc == 'twm_dc' else 0][1 if mismatch else 0]
 
 
-def _solver_process(s: PMSolver) -> str:
+def _solver_process(s: WMSolver) -> str:
     if isinstance(s, FWMSolver):
         return 'fwm'
     return 'twm_dc' if s.dc else 'twm_fc'
@@ -102,7 +103,7 @@ def save_wm_variable(
     **kwargs
 ) -> WMWrapper:
     proc = normalize_process(kwargs.get('process'), kwargs.get('dc'))
-    s = solver if isinstance(solver, PMSolver) else get_wm_solver(proc, mismatch=bool(kwargs.get('mismatch', False)))
+    s = solver if isinstance(solver, WMSolver) else get_wm_solver(proc, mismatch=bool(kwargs.get('mismatch', False)))
     w = WMWrapper.from_val(val_t, s.processor)
     w = WMWrapper(w.processor, dict(w.dict_repr), w.b_left)
     w.name = name
@@ -159,7 +160,7 @@ def _format_order_num(val) -> Union[int, float]:
 
 def compute_val_leading_order(
     val: Any,
-    s: PMSolver,
+    s: WMSolver,
     dc: Optional[bool] = None,
     process: Optional[str] = None,
 ) -> Union[int, float]:
@@ -255,6 +256,22 @@ def analyze_expression_terms(
                     except (ValueError, TypeError):
                         sym_orders[name] = 0.0
 
+    def _terms_lo(expr_node, mult: float) -> Tuple[bool, float, str, Any]:
+        inner_terms = expand_additive_products(expr_node)
+        min_lo = 0.0
+        has_evolved = False
+        evolved_ref = None
+        for t in inner_terms:
+            t_lo = sum(get_factor_info(fn)[1] * sm for fn, sm in t)
+            min_lo = min(min_lo, t_lo)
+            for fn, _ in t:
+                _, _, cat, ref = get_factor_info(fn)
+                if cat == 'evolved':
+                    has_evolved = True
+                    evolved_ref = ref
+        lo = min_lo * mult
+        return (False, lo, 'evolved', evolved_ref) if has_evolved else (True, lo, 'exact', None)
+
     def get_factor_info(node) -> Tuple[bool, float, str, Any]:
         if isinstance(node, ast.Constant):
             return True, 0.0, 'exact', None
@@ -289,20 +306,7 @@ def analyze_expression_terms(
                 lo = strong_nd_lo if arg_name in strong_names else 0.0
                 return True, lo, 'exact', None
             if func_name == 'sqrt' and node.args:
-                inner_terms = expand_additive_products(node.args[0])
-                min_lo = 0.0
-                has_evolved = False
-                evolved_ref = None
-                for t in inner_terms:
-                    t_lo = sum(get_factor_info(fn)[1] * sm for fn, sm in t)
-                    min_lo = min(min_lo, t_lo)
-                    for fn, _ in t:
-                        _, _, cat, ref = get_factor_info(fn)
-                        if cat == 'evolved':
-                            has_evolved = True
-                            evolved_ref = ref
-                lo = min_lo * 0.5
-                return (False, lo, 'evolved', evolved_ref) if has_evolved else (True, lo, 'exact', None)
+                return _terms_lo(node.args[0], 0.5)
             return True, 0.0, 'exact', None
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
             exp_val = 1.0
@@ -314,21 +318,8 @@ def analyze_expression_terms(
                 if isinstance(node.right.left, ast.Constant) and isinstance(node.right.right, ast.Constant):
                     exp_val = float(node.right.left.value) / float(node.right.right.value)
 
-            if isinstance(node.left, ast.BinOp) and isinstance(node.left.op, ast.Mult):
-                inner_terms = expand_additive_products(node.left)
-                min_lo = 0.0
-                has_evolved = False
-                evolved_ref = None
-                for t in inner_terms:
-                    t_lo = sum(get_factor_info(fn)[1] * sm for fn, sm in t)
-                    min_lo = min(min_lo, t_lo)
-                    for fn, _ in t:
-                        _, _, cat, ref = get_factor_info(fn)
-                        if cat == 'evolved':
-                            has_evolved = True
-                            evolved_ref = ref
-                lo = min_lo * exp_val
-                return (False, lo, 'evolved', evolved_ref) if has_evolved else (True, lo, 'exact', None)
+            if isinstance(node.left, ast.BinOp) and isinstance(node.left.op, (ast.Mult, ast.MatMult)):
+                return _terms_lo(node.left, exp_val)
             base_exact, base_lo, cat, ref = get_factor_info(node.left)
             return base_exact, base_lo * exp_val, cat, ref
         return True, 0.0, 'exact', None
@@ -346,7 +337,7 @@ def analyze_expression_terms(
                 inner_terms = expand_additive_products(node.args[0])
                 if len(inner_terms) > 1 or (len(inner_terms) == 1 and len(inner_terms[0]) > 1):
                     return inner_terms
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Mult, ast.MatMult)):
             left_terms = expand_additive_products(node.left)
             right_terms = expand_additive_products(node.right)
             if len(left_terms) * len(right_terms) <= 64:
@@ -377,7 +368,11 @@ def analyze_expression_terms(
         return [[(node, 1)]]
 
     try:
-        tree = ast.parse(expr_str, mode='eval')
+        s = expr_str.replace('^', '**')
+        s = re.sub(r'\)\s*(?=[A-Za-z0-9_(])', ')*', s)
+        s = re.sub(r'(\d)\s*(?=[A-Za-z_(])', r'\1*', s)
+        s = re.sub(r'([A-Za-z0-9_])\s+(?=[A-Za-z0-9_])', r'\1*', s)
+        tree = ast.parse(s, mode='eval')
         expanded_terms = expand_additive_products(tree)
     except Exception:
         return -1, []
@@ -465,7 +460,7 @@ def validate_input_identifiers(expr_str: str, local_dict: dict):
             name = tok.string
             if name.count('_') >= 2 and name not in local_dict and name not in RESERVED_NAMES:
                 raise ValueError(
-                    f"不规范输入：未定义的复合变量名 '{name}'。若要执行乘法运算，请在变量之间使用空格（单模乘法）或'*'（多模乘法）分隔。"
+                    f"不规范输入：未定义的复合变量名 '{name}'。若要执行乘法运算，请在变量之间使用空格/'@'（多模乘法）或'*'（单模乘法）分隔。"
                 )
 
 
@@ -490,7 +485,7 @@ def _prepare_wm_evaluation(
     mismatch = bool(mismatch)
     s = get_wm_solver(proc, mismatch=mismatch)
     p = s.processor
-    p.reset_pe(fwm=(proc == 'fwm'))
+    s.reset_pe()
 
     needed_evolved_order, _ = analyze_expression_terms(
         text,
@@ -509,7 +504,7 @@ def _prepare_wm_evaluation(
 
     if proc == 'fwm' and evolved_order >= 0:
         spm_w = WMWrapper(p, {(None,): PF({((), ()): exp(-I * nlc * s.nd * t_)})})
-        sol = (sol[0] * spm_w, sol[1], sol[2])
+        sol = (sol[0] @ spm_w, sol[1], sol[2])
 
     init_ops = p.init_ops
 
@@ -600,7 +595,7 @@ def _prepare_wm_evaluation(
             res = WMWrapper(p, PF1)
             for e in exps:
                 cur = op_ann if is_a else op_ann.adjoint()
-                res = res * (cur ** int(sympify(e)))
+                res = res @ (cur ** int(sympify(e)))
                 is_a = not is_a
             return res
 
@@ -663,10 +658,10 @@ def _prepare_wm_evaluation(
     pm_internal = s.pm if proc == 'fwm' else (pm if mismatch else S.Zero)
 
     local_dict: Dict[str, Any] = {
-        'i': I,
-        'I': I,
-        'pi': pi,
-        'e': exp(1),
+        'i': WMWrapper.from_val(I, p),
+        'I': WMWrapper.from_val(I, p),
+        'pi': WMWrapper.from_val(pi, p),
+        'e': WMWrapper.from_val(exp(1), p),
         'exp': _wrap_fn(exp),
         'sin': _wrap_fn(sin),
         'cos': _wrap_fn(cos),
@@ -897,12 +892,12 @@ def eval_combination_assertions(
             if not pf_item:
                 return pf_item
             if order >= 0 or pf_item.expr(False).has(t_):
-                return pf_item.n_apply(
+                return pf_item.apply(
                     lambda t: p.n_simp(d_p2s(_g, p.p2s_group(t)).subs({_g: s.gc * t_}))
                 )
-            return pf_item.n_apply(p.n_simp)
+            return pf_item.apply(p.n_simp)
 
-        val = val.expand(order).apply(_postprocess_pf)
+        val = val.expand(order, True, s.gc).apply(_postprocess_pf)
         if proc == 'fwm' and not mismatch:
             val = s._zq(val)
         if single_mode:

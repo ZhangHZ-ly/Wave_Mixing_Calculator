@@ -14,14 +14,14 @@ from sympy.core.function import _mexpand
 from sympy.core.traversal import bottom_up
 from sympy.core.exprtools import factor_terms
 from sympy.physics.quantum.boson import BosonOp
+from sympy.physics.quantum.commutator import Commutator
 from ..wm_variables import *
+from ..op_pattern import BosonPat, BosonNum, FermionPat, NumShift
 from ..pattern_perturb import BSC, PF, pf, PF0, PF1, PE
-from ..op_pattern import BosonPat, BosonNum, FermionPat
-from ..pattern_perturb.pattern_form import pf_add, _vpk
+from ..pattern_perturb.pattern_form import pf_add, _vpk, _ps, _mps, _key
 from ..pattern_perturb.perturb_expander import perturb_rec
-from .dsolve_pm import group_terms, _ps
-from .multimode import (MultimodeCOP, MultimodeNum, MultimodeNum2,
-                        t_mul, mmn_shift, _mps, _tdz, _pd)
+from ..dsolve_pm import group_terms
+from .multimode import (MultimodeCOP, MultimodeNum, MultimodeNum2)
 import warnings
 
 __all__ = ['WMProcessor', 'wm_processors', '_g', 'nm', 'vac_pf']
@@ -61,8 +61,7 @@ def vac_pf(p: PF, vac_mode) -> PF:
         if c_tail != 0:
             new_table[(bs, fs)] = c_tail
 
-    new_npf = _collapse_boson_num(p.npf, vac_names)
-    return PF(new_table, new_npf) if (new_table or new_npf != 0) else PF0
+    return PF(new_table, p.npf) if (new_table or p.npf != 0) else PF0
 
 def _merge_dicts(ds) -> dict:
     """Merges multiple {tuple_key: PF} dicts by summing PF values for identical keys."""
@@ -75,12 +74,11 @@ def _merge_dicts(ds) -> dict:
 # Dummy symbols for MultimodeNum, MultimodeNum2, driving BosonNum
 _n1, _n2, _nd = symbols('n_1 n_2 n_d', Dummy=True, nonnegative=True)
 _g = Dummy('g', real=True)  # Dummy symbol for the parametric gain
-
-# Mode count symbol n_m
-nm = Symbol('n_m', nonnegative=True)
+nm = Symbol('n_m', nonnegative=True)  # Mode count symbol n_m
 
 _e = lambda p: S.Zero if p == 1 else (p.exp if p.is_Pow else S.One)
-
+_simp_frac = lambda e: (Pow(factor_terms(e.base, fraction=True), e.exp)
+                        if e.is_Pow and e.base.is_Add else e)
 
 class WMProcessor:
     """
@@ -98,10 +96,7 @@ class WMProcessor:
                   if dc else (MultimodeCOP(a_p.name, a_s.name, 1, 0),
                               MultimodeCOP(a_p.name, a_s.name, 1)))
         self.mmn2 = MultimodeNum2(*self.a[0].args[:3])
-        self.reset_pe()
-
-    def reset_pe(self, fwm: bool = False):
-        self.pe = PE({nlc: S.One, self.nd.name: -S.Half if fwm else S.NegativeOne})
+        self.pe = PE({nlc: S.One,})
         self.pe.register(MultimodeNum)
         self.pe.register(MultimodeNum2)
         self.pe.register(MultimodeCOP)
@@ -130,6 +125,17 @@ class WMProcessor:
             'A': WMWrapper(self, {(True, 1): PF1}),
             'N_t': WMWrapper(self, {(None,): PF({_vpk: MultimodeNum2(a_p.name, a_s.name, S.One)})}),
         }
+    
+    def _t_expr(self, t: tuple) -> Expr:
+        i, *exps = t
+        factors = []
+        for j in exps:
+            factors.append(self.a[i]**j)
+            i = not i
+        return Mul(*factors)
+
+    def _d_expr(self, d: dict) -> Expr:
+        return Add(*(self._t_expr(k) * p.expr() for k, p in d.items()))
 
     def odag(self, b: BosonOp) -> BosonOp:
         """
@@ -174,7 +180,6 @@ class WMProcessor:
             w = WMWrapper.from_val(d, self)
             if w.b_left is not None:
                 raise ValueError('The expression does not support expand-with-func')
-
             odt = defaultdict(dict)
             for k, v in w.dict_repr.items():
                 for op, p in self.pe.expand_pf(v, order, True).items():
@@ -206,7 +211,6 @@ class WMProcessor:
             flo = fo
         if flo == fo and fle != fl:
             raise ValueError('The function is not properly defined')
-
         nol = order - flo
         if nol < 0:
             return WMWrapper(self, {}, None)
@@ -235,11 +239,6 @@ class WMProcessor:
                 return _n1 - _n2 + d * nm
             return MultimodeNum(n, d)
 
-        def _simp_frac(e):
-            if e.is_Pow and e.base.is_Add:
-                return Pow(factor_terms(e.base, fraction=True), e.exp)
-            return e
-
         def combine_n(expr):
             if expr.is_Add:
                 weak_in_expr = {m.name for m in expr.atoms(MultimodeNum) if m.name in (n1, n2)}
@@ -252,7 +251,7 @@ class WMProcessor:
                         warnings.warn('Failed to combine the weak-field multimode number operators')
                     expr = r.subs({_n1: MultimodeNum(n1), _n2: self.mmn2})
             if expr.is_Mul:
-                expr = _mps(expr, self.nd, _nd)
+                expr = _mps(expr, {self.nd: _nd})
             return _ps(expr)
 
         return bottom_up(expr, combine_n)
@@ -317,103 +316,79 @@ class WMProcessor:
 
         raise ValueError("Cannot add expressions with and without single-mode weak-field operators")
 
-    def d_mul(self, d0: dict, d1: dict, d2: dict, mid=None):
+    def d_mul(self, d0: defaultdict, d1: dict, d2: dict, mid=None, sc=False):
         if not d1 or not d2:
             return
-        if isinstance(mid, PF):
-            d1 = {k1: v for k1, v1 in d1.items() if (v := v1 * mid)}
-            if not d1:
-                return
-            mid = None
-        weak_names = set(self.a[0].names)
-        shift_n = lambda expr, pd: mmn_shift(expr, self.a[1], pd)
-        is_mmn = isinstance(mid, Expr)
-        t_join = (lambda k1, k2: t_mul(k1, k2)) if is_mmn else (lambda k1, k2: t_mul(k1, k2, mid))
+        if isinstance(mid, bool):
+            mid_op = self.a[mid].mode_expr if sc else None
+        else:
+            mid_op = mid
+            sc = False
+        use_mid_t = isinstance(mid, bool) and not sc
+        for k1, v1 in d1.items():
+            v1_mid = v1 if mid_op is None else v1 * mid_op
+            if not v1_mid:
+                continue
+            for k2, v2 in d2.items():
+                if not v2:
+                    continue
+                k_right = _t_mul((mid, 1), k2) if use_mid_t else k2
+                for k_new, p_new in self.tp_swap(k_right, v1_mid, to_left=True):
+                    if (prod := p_new * v2):
+                        d0[_t_mul(k1, k_new)].append(prod)
 
-        def _acc(k, p):
-            if k in d0:
-                p = d0[k] + p
-            if p:
-                d0[k] = p
-            elif k in d0:
-                del d0[k]
-
-        for k2, e2 in d2.items():
-            pd = _pd(k2)
-            for k1, e1 in d1.items():
-                has_weak_pair = False
-                for bs, _ in e1.table:
-                    bw = tuple(b for b in bs if b.name in weak_names)
-                    if bw:
-                        try:
-                            if self.match_cop(bw)[1] > 0:
-                                has_weak_pair = True
-                                break
-                        except ValueError:
-                            pass
-
-                if not has_weak_pair:
-                    new = e1.n_apply(lambda t: shift_n(mid * t if is_mmn else t, pd), on_npf=True)
-                    _acc(t_join(k1, k2), new * e2)
-                else:
-                    if e1.npf != 0:
-                        c_npf = shift_n(mid * e1.npf if is_mmn else e1.npf, pd)
-                        _acc(t_join(k1, k2), PF({}, c_npf) * e2)
-
-                    for (bs, fs), tail in e1.table.items():
-                        c_tail = shift_n(mid * tail if is_mmn else tail, pd)
-                        try:
-                            cop_a1, cop_exp, bs_other = self.match_cop(bs)
-                        except ValueError:
-                            cop_a1, cop_exp, bs_other = None, 0, bs
-
-                        if cop_exp == 0 or cop_a1 is None:
-                            _acc(t_join(k1, k2), PF({(bs, fs): c_tail}, S.Zero) * e2)
-                        else:
-                            for k_sub, new_m, P_num in self.tcp_swap(cop_a1, cop_exp, k2, to_left=False):
-                                if new_m == 0:
-                                    new_bw = ()
-                                else:
-                                    cop_tgt = self.a[1 if cop_a1 else 0]
-                                    op1 = BosonOp(cop_tgt.names[0], cop_tgt.annih1)
-                                    op2 = BosonOp(cop_tgt.names[1], cop_tgt.annih2)
-                                    new_bw = (op1, op2) if new_m == 1 else (op1**new_m, op2**new_m)
-                                p_term = PF({(bs_other + new_bw, fs): c_tail * P_num}, S.Zero) * e2
-                                _acc(t_join(k1, k_sub), p_term)
+    def tp_swap(self, k: tuple, p: PF, to_left=False):
+        """
+        Swaps a multimode exponent tuple k and a PatternForm p.
+        `to_left` is the movement direction of the tuple:
+        True for p * T_k -> sum T_k_new * p_new,
+        False for T_k * p -> sum p_new * T_k_new.
+        Yields (k_new, new_pf) pairs.
+        """
+        if not p:
+            return
+        if k == (None,):
+            yield k, p
+            return
+        pd = _pd(k)
+        if p.npf != 0:
+            npf_s = p.npf + (-1)**to_left*Commutator(self._t_expr(k), p.npf)
+            yield k, PF(npf=npf_s)
+        for (bs, fs), vp in p.table.items():
+            vp_s = (NumShift(vp, 1, {b: pd for b in self.a[0].mode_expr.args}).doit(deep=False)
+                    if to_left and pd else vp)
+            cop_a1, cop_exp, bs_other = self.match_cop(bs)
+            for k_new, ec, tail in self.tcp_swap(cop_a1, cop_exp, k, to_left=not to_left):
+                bs_new = (bs_other if ec == 0
+                          else tuple(bp if bp in bs_other else bp.left_base**ec
+                                     for bp in bs))
+                v_new = (tail * vp_s if to_left or not (pd_new := _pd(k_new))
+                         else NumShift(tail * vp_s, -1,
+                                       {b: pd_new for b in self.a[0].mode_expr.args}).doit(deep=False))
+                if v_new != 0:
+                    yield k_new, PF({(bs_new, fs): v_new})
 
     def bp_swap(self, a: BosonOp, p: PF, s, to_left=True):
         """
         Swaps the single-mode boson operator (a) and given PF (p) with Multimode operators.
         """
-        shift_n = lambda expr, b=a: s * mmn_shift(expr, b, 1, 1 if to_left else -1)
+        shift_n = lambda expr, b=a: s * NumShift(expr, 1 if to_left else -1, b).doit(deep=False)
         a_od = self.odag(a)
         table_a, table_od = dict(), dict()
-        new_npf = shift_n(p.npf)
+        new_npf = s*(p.npf + (-1)**to_left*Commutator(a, p.npf))
         pa = self.f_parity((a,))
         for (bs, fs), tail in p.table.items():
-            try:
-                annih1 = self.match_cop(bs)[0]
-            except ValueError:
-                annih1 = None
-            if annih1 is None or pa == annih1:
+            a1, ec, bs_other = self.match_cop(bs)
+            if a1 is None or pa == a1:
                 table_a[(bs, fs)] = shift_n(tail)
+            elif ec == 1:
+                n = BosonNum(a.name) + Integer(a.is_annihilation==to_left)
+                new_tail = n*shift_n(tail) if to_left else shift_n(n*tail, a_od)
+                table_od[(bs_other, fs)] = new_tail
             else:
-                if to_left:
-                    br = object.__new__(BSC)
-                    br.result = bs
-                    br.tail = S.One
-                    bs_merged, n = br.merge_ind((a,))
-                    tail_od = n * shift_n(tail)
-                else:
-                    bs_merged, n = BSC((a,)).merge_ind(bs)
-                    tail_od = shift_n(n * tail, a_od)
-                j, bp = next((j, bp) for j, bp in enumerate(bs_merged)
-                             if bp.name == a_od.name)
-                if bp == a_od:
-                    table_od[((*bs_merged[:j], *bs_merged[j+1:]), fs)] = tail_od
-                else:
-                    nbpj = BosonPat(*bp.args[:2], bp.exps[0] - 1)
-                    table_od[((*bs_merged[:j], nbpj, *bs_merged[j+1:]), fs)] = tail_od
+                new_bs = tuple(bp if bp in bs_other else bp.left_base**(ec-1)
+                               for bp in bs)
+                table_od[(new_bs, fs)] = new_tail
         p_a = PF(table_a, new_npf) if (table_a or new_npf != 0) else PF0
         p_od = PF(table_od) if table_od else PF0
         return p_a, p_od
@@ -460,7 +435,7 @@ class WMProcessor:
         single-mode canonical operators defined in self.a.
         """
         *names, p = self.a[0].args[:3]
-        b_exps = dict(zip(names, (0, 0)))
+        b_exps = dict(zip(names, (S.Zero, S.Zero)))
         bs_other = []
         for b in bs:
             if b.name in b_exps:
@@ -478,6 +453,9 @@ class WMProcessor:
         """
         Swaps a single-mode weak-field coherent operator product (COP) power
         with a multimode exponent tuple k = (i, *exps).
+
+        Yields a tuple with three elements — resulting multimode exponent tuple,
+        output COP exp and number-operator tail.
         """
         if k == (None,):
             yield (None,), cop_exp, _tail
@@ -502,7 +480,8 @@ class WMProcessor:
                     new_cop_exp = _e(m1)
                     new_b_exp = _e(m2)
                     new_head = (new_b_exp,) + _head
-                    t_shift = mmn_shift(t, self.a[0], _pd((not nj, *_head))) if _head else t
+                    t_shift = (NumShift(t, 1, {b: pd_h for b in self.a[0].mode_expr.args}).doit(deep=False)
+                               if _head and (pd_h := _pd((not nj, *_head))) else t)
                     new_tail = t_shift * _tail
 
                     if new_cop_exp == 0 or not exps:
@@ -523,7 +502,8 @@ class WMProcessor:
                     new_b_exp = _e(m1)
                     new_cop_exp = _e(m2)
                     new_head = _head + (new_b_exp,)
-                    t_shift = mmn_shift(t, self.a[0], _pd((not i, *exps))) if exps else t
+                    t_shift = (NumShift(t, 1, {b: pd_e for b in self.a[0].mode_expr.args}).doit(deep=False)
+                               if exps and (pd_e := _pd((not i, *exps))) else t)
                     new_tail = t_shift * _tail
 
                     if new_cop_exp == 0 or not exps:
@@ -643,11 +623,61 @@ def _dr_prep(d: dict):
             return None
         if v:
             new_d[new_k].append(v)
-    res = dict()
-    for k, vs in new_d.items():
-        v = pf_add(*vs)
-        if v:
-            res[k] = v
-    return res
+    return {k: vs for k, v in new_d.items() if (vs := pf_add(*v))}
 
 wm_processors = (WMProcessor(False), WMProcessor())
+
+def _t_mul(t1, t2, mid=None):
+    if not isinstance(mid, bool):
+        mid = None
+    i1, *exps1 = t1
+    if not exps1:
+        if mid is None:
+            return t2
+        i1 = mid
+        exps1 = [1]
+    elif mid is not None:
+        if i1^(len(exps1)&1)^mid:
+            # the annih1 of last multimode operator in t1 equals mid
+            exps1[-1] += 1
+        else:
+            exps1.append(1)
+    i2, *exps2 = t2
+    if not exps2:
+        return (i1, *exps1)
+    if i1^(len(exps1)&1)^i2:
+        return (i1, *exps1[:-1], exps1[-1]+ exps2[0], *exps2[1:])
+    return (i1, *exps1, *exps2)
+
+def _tdz(i, exps):
+    """Drops the zeros in a multimode exponent tuple"""
+    i = bool(i)
+    lz = False
+    new_exps = []
+    for e in exps:
+        if lz:
+            new_exps[-1] += sympify(e)
+            lz = False
+        elif e == 0:
+            if not new_exps:
+                i = not i
+            else:
+                lz = True
+        else:
+            new_exps.append(sympify(e))
+    if new_exps:
+        return (i, *new_exps)
+    return (None,)
+
+def _pd(t: tuple):
+    """Parity difference of the multimode exponent tuple"""
+    total = S.Zero
+    es = iter(t)
+    temp = next(es)
+    for j in es:
+        if temp:
+            total -= j
+        else:
+            total += j
+        temp = not temp
+    return total

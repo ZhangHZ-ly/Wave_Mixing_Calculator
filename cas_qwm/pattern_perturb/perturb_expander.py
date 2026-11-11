@@ -1,5 +1,4 @@
 from sympy.core.containers import Tuple, Dict
-from sympy.core.expr import Expr
 from sympy.core.singleton import S
 from sympy.core.add import Add
 from sympy.core.mul import Mul
@@ -418,7 +417,11 @@ class PE:
                 if v is not None:
                     if assumptions.get(k, v) != sympify(v):
                         clr = True
-                    assumptions[k] = sympify(v)
+                    if v == 0:
+                        if k in assumptions:
+                            del assumptions[k]
+                    else:
+                        assumptions[k] = sympify(v)
         self.assumptions = Dict(assumptions)
         if clr:
             self._lo_cache.clear()

@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Optional
 
 from cas_qwm.op_pattern import BosonNum
-from cas_qwm.parametric_multimode.multimode import _ps, nd_simp
+from cas_qwm.pattern_perturb.pattern_form import _ps, bn_simp
 from cas_qwm.parametric_multimode.wm_processor import t_, _g, nlc, a_p, a_i
 from cas_qwm.parametric_multimode.wm_solver import pm
 from sympy.core.singleton import S
@@ -54,5 +54,5 @@ def t_to_g(
         inv_gc = bottom_up(1 / gc, _ps)
         sub_dict = {t_: g_hat * inv_gc, _g: g_hat}
 
-    f = lambda expr: nd_simp(expr.subs(sub_dict), nd_drive)
+    f = lambda expr: bn_simp(expr.subs(sub_dict))
     return obj.apply(f) if hasattr(obj, 'apply') else f(obj)

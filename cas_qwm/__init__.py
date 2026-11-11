@@ -64,7 +64,6 @@ _MODULE_EXPORTS: Dict[str, List[str]] = {
         'MultimodeCOP',
         'MultimodeNum',
         'MultimodeNum2',
-        'mmn_shift',
         'nd_simp',
         'PMProcessor',
         'wm_processors',

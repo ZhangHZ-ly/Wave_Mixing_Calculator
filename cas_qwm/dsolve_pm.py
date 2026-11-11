@@ -8,6 +8,7 @@ from sympy.core.function import _mexpand, expand_mul
 from sympy.core.traversal import bottom_up
 from sympy.core.exprtools import gcd_terms, factor_terms
 from collections import defaultdict
+from .pattern_perturb.pattern_form import _ps
 
 __all__ = ['p2s', 'dsolve_pm1', 'dsolve_pm2']
 
@@ -133,12 +134,6 @@ def TR8_selective(rv, x, first=True):
         return TR8_selective(expand_mul(Mul(*args)), x)
 
     return bottom_up(rv, f)
-
-# A light function that collapses multiple exponents
-def _ps(expr):
-    if expr.is_Pow and expr.base.is_Pow:
-        return _ps(expr.base.base**(expr.exp*expr.base.exp))
-    return expr
 
 def group_terms(expr, x, h=True):
     expr = (_mexpand(TR8h_selective(expr, x)) if h

@@ -232,30 +232,19 @@ function tokenizeExprJs(src) {
       i++;
       continue;
     }
-    if (ch === '+' || ch === '-' || ch === '*' || ch === '/') {
+    if ('+-*/@'.includes(ch)) {
       tokens.push({ type: 'OP', val: ch });
       i++;
       continue;
     }
-    if (ch === '(') {
-      tokens.push({ type: 'LP', val: '(' });
-      i++;
-      continue;
-    }
-    if (ch === ')') {
-      tokens.push({ type: 'RP', val: ')' });
-      i++;
-      continue;
-    }
-    if (ch === ',') {
-      tokens.push({ type: 'COMMA', val: ',' });
+    if ('(),'.includes(ch)) {
+      tokens.push({ type: ch === '(' ? 'LP' : ch === ')' ? 'RP' : 'COMMA', val: ch });
       i++;
       continue;
     }
     if (ch === "'" || ch === '"') {
-      const quote = ch;
       let j = i + 1;
-      while (j < src.length && src[j] !== quote) j++;
+      while (j < src.length && src[j] !== ch) j++;
       tokens.push({ type: 'STR', val: src.slice(i + 1, j) });
       i = j + 1;
       continue;
@@ -305,11 +294,19 @@ function parseExprJs(src) {
   function parseMul() {
     let left = parseUnary();
     if (!left) return null;
-    while (peek() && peek().type === 'OP' && (peek().val === '*' || peek().val === '/')) {
-      const op = consume().val;
-      const right = parseUnary();
-      if (!right) return null;
-      left = { kind: op === '*' ? 'mul' : 'div', left, right };
+    while (peek()) {
+      if (peek().type === 'OP' && '*/@'.includes(peek().val)) {
+        const op = consume().val;
+        const right = parseUnary();
+        if (!right) return null;
+        left = { kind: op === '/' ? 'div' : 'mul', left, right };
+      } else if (['ID', 'NUM', 'STR', 'LP'].includes(peek().type)) {
+        const right = parsePow();
+        if (!right) return null;
+        left = { kind: 'mul', left, right };
+      } else {
+        break;
+      }
     }
     return left;
   }

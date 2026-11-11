@@ -300,7 +300,6 @@ class BosonNum(HermitianOperator, BosonPat):
     _diff_wrt = True
     exps = (S.One, S.One)
     parity_diff = S.Zero
-    boson_num_only = True
 
     @classmethod
     def default_args(self):
@@ -324,6 +323,9 @@ class BosonNum(HermitianOperator, BosonPat):
     @property
     def right_base(self):
         return self.factors[1]
+    @property
+    def bn_coeffs(self):
+        return Dict({self.name: S.One})
     
     def __repr__(self):
         return f"N_({self.name})"
@@ -373,7 +375,7 @@ class NumShift(Expr):
     """
     The doit() method of NumShift shifts the boson number operators in expr_num
     according to the elements of "shift" parameter,
-    each of which should be given by a dict with {op: d} or Tuple(op, d) or Pow(op, d)
+    each of which should be given by a dict with {op: d} or Tuple(op, d)
 
     Each BosonNum in the corresponding base will be shifted by direction*d
     for creation boson operator or -direction*d for annihilation;
@@ -390,10 +392,10 @@ class NumShift(Expr):
             expr_num, direction, _shift = expr_num.args
         else:
             if shift and (shift[0] == 1 or shift[0] == -1):
-                direction = shift[0]
+                direction = S.One if shift[0] == 1 else S.NegativeOne
                 shift = shift[1:]
             else:
-                direction = 1
+                direction = S.One
             _shift = dict()
 
         scan_dict = hints.get('scan_dict', True)
@@ -421,7 +423,7 @@ class NumShift(Expr):
                         _shift[op] = _shift.get(op, 0) + d
             shift = Dict(_shift)
         else:
-            shift = Dict(shift)
+            shift = Dict(shift[0])
 
         obj = Expr.__new__(cls)
         obj._args = (expr_num, direction, shift)
@@ -438,13 +440,13 @@ class NumShift(Expr):
         return self.args[2]
 
     def doit(self, **hints):
-        sub = dict()
-        for b in self.shift:
-            n = BosonNum(b)
-            if self.shift[b] != 0:
-                sub[n] = n + self.direction * self.shift[b]
+        def _shift(op):
+            d = S.Zero
+            for name, coeff in op.bn_coeffs.items():
+                d += self.shift.get(name, S.Zero) * coeff
+            return op + self.direction * d
         f = self.function.doit(**hints) if hints.get('deep', True) else self.function
-        return f.subs(sub)
+        return f.replace(lambda op: hasattr(op, 'bn_coeffs'), _shift)
     
     def shift_dict(self):
         return dict(self.shift)
