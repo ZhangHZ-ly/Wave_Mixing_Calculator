@@ -271,7 +271,7 @@ def api_combination_assert(req: AssertionRequest):
 @app.post("/api/variable/save")
 def api_save_variable(req: SaveVarRequest):
     try:
-        if req.workspace in ('tab3', 'tab4'):
+        if req.workspace == 'tab3':
             save_latest_wm_variable(req.name, notes=req.notes or "")
         else:
             save_latest_pf_variable(req.name)

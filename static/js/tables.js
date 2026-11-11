@@ -2,7 +2,7 @@
 // tables.js - Table Rendering Engine & Interactive Modals
 // ====================================================
 function renderWorkspaceTable(ws) {
-  const isWm = (ws === 'tab3' || ws === 'tab4');
+  const isWm = (ws === 'tab3');
   const tbodyId = isWm ? 'wmTableBody' : 'symbolTableBody';
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
@@ -369,7 +369,7 @@ function startLeadingOrderInlineEdit(event, itemId, ws) {
       }
 
       saveWorkspaceToStorage(ws);
-      if (ws === 'tab3' || ws === 'tab4') {
+      if (ws === 'tab3') {
         renderWmTable();
       } else {
         renderTable();
@@ -404,7 +404,7 @@ function startLeadingOrderInlineEdit(event, itemId, ws) {
 
 function onOpKindChanged() {
   const kind = document.getElementById('op-kind')?.value;
-  const isWm = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
+  const isWm = (activeWorkspace === 'tab3');
   const opOrderGroup = document.getElementById('op-order-group');
   if (opOrderGroup) {
     opOrderGroup.style.display = (kind === 'boson' && isWm) ? 'block' : 'none';
@@ -415,7 +415,7 @@ function openSymbolModal(itemId, ws) {
   activeWorkspace = ws || 'tab2';
   document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
   const modal = document.getElementById('symbolModal');
-  const isWm = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
+  const isWm = (activeWorkspace === 'tab3');
   const symOrderGroup = document.getElementById('sym-order-group');
   const symOrderInput = document.getElementById('sym-order');
   const title = document.getElementById('symbolModalTitle');
@@ -484,7 +484,7 @@ function saveSymbol() {
   const isNonnegative = document.getElementById('sym-nonnegative').checked;
   const isPositive = document.getElementById('sym-positive').checked;
   const notes = document.getElementById('sym-notes').value.trim();
-  const isWm = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
+  const isWm = (activeWorkspace === 'tab3');
   const symOrderEl = document.getElementById('sym-order');
   const symOrder = (symOrderEl && isWm) ? (parseFloat(symOrderEl.value) || 0) : 0;
 
@@ -563,7 +563,7 @@ function openOperatorModal(defaultKind, itemId, ws) {
   const title = document.getElementById('operatorModalTitle');
   const kindGroup = document.getElementById('op-kind-group');
   const arr = getWorkspaceArray(activeWorkspace);
-  const isWm = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
+  const isWm = (activeWorkspace === 'tab3');
   const opOrderGroup = document.getElementById('op-order-group');
   const opOrderInput = document.getElementById('op-order');
   
@@ -628,7 +628,7 @@ function saveOperator() {
   const name = document.getElementById('op-var-name').value.trim();
   const disp = document.getElementById('op-disp').value.trim() || name;
   const notes = document.getElementById('op-notes').value.trim();
-  const isWm = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
+  const isWm = (activeWorkspace === 'tab3');
   const opOrderEl = document.getElementById('op-order');
   const opOrder = (opOrderEl && isWm && kind === 'boson') ? (parseFloat(opOrderEl.value) || 0) : 0;
 
@@ -777,7 +777,7 @@ function openSaveAnswerModal(ws) {
       't'
     );
     document.getElementById('saveAnswerModal').classList.add('active');
-  } else if (activeWorkspace === 'tab3' || activeWorkspace === 'tab4') {
+  } else if (activeWorkspace === 'tab3') {
     if (!currentWmLatex) {
       alert('Answer area has no evaluated combination result! Please enter an expression and compute it first.');
       return;
@@ -888,7 +888,7 @@ async function saveAnswerExpression() {
   }
 
   const arr = getWorkspaceArray(activeWorkspace);
-  const isWmWs = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
+  const isWmWs = (activeWorkspace === 'tab3');
   const currentWmOrder = (isWmWs && document.getElementById('wm-order'))
     ? parseInt(document.getElementById('wm-order').value)
     : null;
@@ -1037,7 +1037,7 @@ function openRenameModal(itemId, ws) {
   const srcGroup = document.getElementById('rename-source-group');
   const srcInput = document.getElementById('rename-source-input');
   if (srcGroup && srcInput) {
-    if (activeWorkspace !== 'tab3' && activeWorkspace !== 'tab4' && item.type === 'named_expr') {
+    if (activeWorkspace !== 'tab3' && item.type === 'named_expr') {
       srcGroup.style.display = 'block';
       const rawText = item.sourceInput || item.exprStr || localStorage.getItem('qc_tab2_source_input') || '';
       srcInput.value = rawText;
@@ -1094,7 +1094,7 @@ function openRenameModal(itemId, ws) {
   const detailsGroup = document.getElementById('rename-details-group');
   const detailsBody = document.getElementById('rename-details-body');
   if (detailsGroup && detailsBody) {
-    if (activeWorkspace === 'tab3' || activeWorkspace === 'tab4') {
+    if (activeWorkspace === 'tab3') {
       detailsGroup.style.display = 'block';
       renderItemDetailsTable(item, detailsBody, activeWorkspace);
     } else {
@@ -1145,7 +1145,7 @@ function editItem(id, ws) {
 
 function deleteItem(id, ws) {
   activeWorkspace = ws || 'tab2';
-  const isWm = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4');
+  const isWm = (activeWorkspace === 'tab3');
   const arr = isWm ? wmTableItems : tableItems;
   const item = arr.find(x => x.id === id);
   if (!item) return;

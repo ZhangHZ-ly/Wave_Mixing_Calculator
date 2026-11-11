@@ -153,7 +153,7 @@ function evaluateConditionCompatibility(rule, presetVal, exprVal) {
 
 // Unified definition extractor for backend evaluation endpoints
 function extractWorkspaceDefinitions(ws) {
-  const isWm = (ws === 'tab3' || ws === 'tab4');
+  const isWm = (ws === 'tab3');
   const items = isWm ? wmTableItems : tableItems;
 
   const symbols = items.filter(x => x.type === 'symbol').map(s => ({
@@ -235,11 +235,11 @@ function getWmSingleMode() {
 }
 
 function getWorkspaceArray(ws) {
-  return (ws === 'tab3' || ws === 'tab4') ? wmTableItems : tableItems;
+  return (ws === 'tab3') ? wmTableItems : tableItems;
 }
 
 function saveWorkspaceToStorage(ws) {
-  if (ws === 'tab3' || ws === 'tab4') {
+  if (ws === 'tab3') {
     saveWmTableItemsToStorage();
     renderWmTable();
   } else {
@@ -249,7 +249,7 @@ function saveWorkspaceToStorage(ws) {
 }
 
 function resetTableDefaults(ws) {
-  if (ws === 'tab3' || ws === 'tab4') {
+  if (ws === 'tab3') {
     if (!confirm('Reset Tab 3 table to default parametric symbols and operators?')) return;
     const isMismatch = getWmMismatch();
     let defaults = JSON.parse(JSON.stringify(DEFAULT_WM_TABLE_ITEMS));

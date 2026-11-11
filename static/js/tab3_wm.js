@@ -21,7 +21,7 @@ function onWmProcessChange() {
 
 function onWmPresetChange() {
   renderWmTable();
-  if (activeEditItem && (activeWorkspace === 'tab3' || activeWorkspace === 'tab4')) {
+  if (activeEditItem && activeWorkspace === 'tab3') {
     const symBody = document.getElementById('sym-details-body');
     const opBody = document.getElementById('op-details-body');
     const renBody = document.getElementById('rename-details-body');

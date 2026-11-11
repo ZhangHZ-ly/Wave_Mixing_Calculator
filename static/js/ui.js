@@ -485,8 +485,8 @@ window.addEventListener('click', (e) => {
 function showContextMenu(e, item, ws) {
   hideRowTooltip();
   activeWorkspace = ws || 'tab2';
-  const inputId = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4') ? 'wm-input' : 'pf-input';
-  const editLabel = (activeWorkspace === 'tab3' || activeWorkspace === 'tab4') ? 'Edit / View Details' : 'Edit';
+  const inputId = (activeWorkspace === 'tab3') ? 'wm-input' : 'pf-input';
+  const editLabel = (activeWorkspace === 'tab3') ? 'Edit / View Details' : 'Edit';
   const menu = document.getElementById('contextMenu');
   menu.innerHTML = `
     <button onclick="editItem('${item.id}', '${activeWorkspace}')">${editLabel}</button>
