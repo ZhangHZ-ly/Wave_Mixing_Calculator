@@ -19,10 +19,6 @@ function onWmProcessChange() {
   onWmPresetChange();
 }
 
-function onWmSingleModeChange() {
-  onWmPresetChange();
-}
-
 function onWmPresetChange() {
   renderWmTable();
   if (activeEditItem && (activeWorkspace === 'tab3' || activeWorkspace === 'tab4')) {

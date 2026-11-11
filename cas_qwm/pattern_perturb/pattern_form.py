@@ -683,6 +683,15 @@ class PF:
             return self.__mul__(other)
         return PF.from_val(other).__mul__(self)
 
+    def __imul__(self, other):
+        return self.__mul__(other)
+
+    def __matmul__(self, other):
+        return self.__mul__(other)
+    
+    def __rmatmul__(self, other):
+        return self.__rmul__(other)
+
     def _mul_rem(self, other: PF, reserve_unshifted=False):
         sf, rem = dict(), []
         for bsc, fsc in self.make_contexts():

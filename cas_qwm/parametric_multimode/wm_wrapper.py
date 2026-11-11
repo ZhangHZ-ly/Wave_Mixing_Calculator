@@ -12,11 +12,11 @@ from sympy.physics.quantum.dagger import Dagger
 from ..pattern_perturb import PF, PF0, PF1
 from ..op_pattern import BosonNum
 from ..op_pattern.boson_pattern import fac
-from ..pattern_perturb.pattern_form import pf_add, _vpk
+from ..pattern_perturb.pattern_form import pf_add, _vpk, bn_simp
 from ..pattern_perturb.perturb_expander import gperm
 from .multimode import MultimodeNum, MultimodeNum2
 from .wm_processor import (WMProcessor, wm_processors, vac_pf, _dr_prep,
-                           _t_mul, _tdz, _pd, a_s, t_, _g, nlc, nm)
+                           _t_mul, _tdz, a_s, t_, _g, nlc, nm)
 
 __all__ = ['WMWrapper']
 
@@ -401,7 +401,7 @@ class WMWrapper:
             pf_res = pf_add(*(p._smk(b) * _dict_sm(d) for b, d in self.dict_repr.items()))
         else:
             pf_res = pf_add(*(_dict_sm(d) * p._smk(b) for b, d in self.dict_repr.items()))
-        return WMWrapper(p, pf_res, None)
+        return WMWrapper(p, pf_res.apply(bn_simp), None)
 
     def adjoint(self) -> 'WMWrapper':
         """Takes the Hermitian adjoint of the operator representation."""

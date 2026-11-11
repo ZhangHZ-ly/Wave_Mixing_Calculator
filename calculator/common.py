@@ -14,9 +14,6 @@ from sympy.parsing.sympy_parser import (
     standard_transformations,
     _token_splittable,
 )
-from sympy.physics.quantum.boson import BosonOp
-from sympy.physics.quantum.dagger import Dagger
-from sympy.physics.quantum.fermion import FermionOp
 
 
 def custom_can_split(symbol: str) -> bool:
