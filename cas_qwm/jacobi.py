@@ -2,14 +2,11 @@ from sympy.core.singleton import S
 from sympy.core.function import DefinedFunction
 from sympy.functions.elementary.trigonometric import sin, cos
 from sympy.functions.elementary.hyperbolic import tanh, cosh
-from sympy.functions.elementary.miscellaneous import sqrt
 from sympy.functions.special.elliptic_integrals import elliptic_k
 from sympy.core.symbol import Dummy
 from sympy.integrals.integrals import Integral
-from sympy.simplify.simplify import simplify
+from .pattern_perturb import bn_simp
 import mpmath
-
-K = lambda m: elliptic_k(m)  # Complete elliptic integral of the first kind
 
 # ============ sn(u|m) ============
 class jacobi_sn(DefinedFunction):
@@ -25,13 +22,12 @@ class jacobi_sn(DefinedFunction):
         if m == 1:
             return tanh(u)
 
-        n = simplify(u / K(m))
+        n = bn_simp(u / elliptic_k(m))
         if n.is_integer:
-            n_int = simplify(n)
-            if n_int % 2 == 0:
+            if n % 2 == 0:
                 return S.Zero
             else:
-                return S.One if (n_int % 4 == 1) else -S.One
+                return S.One if (n % 4 == 1) else -S.One
         return None
 
     def fdiff(self, argindex=1):
@@ -65,10 +61,9 @@ class jacobi_cn(DefinedFunction):
         if m == 1:
             return 1 / cosh(u)
 
-        n = simplify(u / K(m))
+        n = bn_simp(u / elliptic_k(m))
         if n.is_integer:
-            n_int = simplify(n)
-            mod4 = n_int % 4
+            mod4 = n % 4
             if mod4 == 0:
                 return S.One
             elif mod4 == 1 or mod4 == 3:
@@ -108,10 +103,9 @@ class jacobi_dn(DefinedFunction):
         if m == 1:
             return 1 / cosh(u)
 
-        n = simplify(u / K(m))
+        n = bn_simp(u / elliptic_k(m))
         if n.is_integer:
-            n_int = simplify(n)
-            return S.One if n_int % 2 == 0 else sqrt(1 - m)
+            return S.One if n % 2 == 0 else (1 - m)**S.Half
         return None
 
     def fdiff(self, argindex=1):

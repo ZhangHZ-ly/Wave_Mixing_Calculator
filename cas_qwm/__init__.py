@@ -4,33 +4,83 @@ cas_qwm: Computer Algebra System for Quantum Wave Mixing.
 Layered architecture (in ascending order of abstraction, descending order of priority):
 1. op_pattern (highest priority / base layer):
    Elementary operator pattern representations (Boson, Fermion, commutators).
-2. pattern_form:
+2. pattern_perturb:
    PatternForm (PF) normal ordered polynomial representations and perturbation expansion (PE).
 3. parametric_multimode:
    Multimode processors, solvers (TWM, FWM), differential equations (dsolve_pm), and algebraic wrappers.
 
-Lazy loading is implemented via PEP 562 (__getattr__, __dir__) and an import hook.
+Lazy loading is implemented via PEP 562 (__getattr__, __dir__).
 Submodules and their exported symbols are loaded on demand upon first access,
-strictly following the priority order: op_pattern > pattern_form > parametric_multimode.
+strictly following the priority order: op_pattern > pattern_perturb > parametric_multimode.
 """
 
-from importlib.abc import MetaPathFinder
 import importlib
-from importlib.util import find_spec
 import sys
-from typing import Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, List, Set
+
+if TYPE_CHECKING:
+    from . import op_pattern
+    from . import pattern_perturb
+    from . import parametric_multimode
+
+    from .op_pattern import (
+        BosonNum,
+        BosonPat,
+        NumShift,
+        apply_num_shift,
+        FermionPat,
+        UidCommutator,
+        extract_modes,
+        check_num,
+        in_boson_num,
+        mul_pattern,
+        redo_mul,
+    )
+    from .pattern_perturb import (
+        BSC,
+        FSC,
+        PF,
+        pf,
+        pf_add,
+        PF0,
+        PF1,
+        PE,
+        perturb_rec,
+    )
+    from .parametric_multimode import (
+        a_p,
+        a_s,
+        a_i,
+        t_,
+        nlc,
+        p2s,
+        dsolve_pm1,
+        dsolve_pm2,
+        MultimodeCOP,
+        MultimodeNum,
+        MultimodeNum2,
+        WMProcessor,
+        wm_processors,
+        _g,
+        nm,
+        vac_pf,
+        WMWrapper,
+        pm,
+        WMSolver,
+        TWMSolver,
+        FWMSolver,
+    )
 
 # Submodules in priority order (op_pattern is the base layer with highest priority)
 _PRIORITY_MODULES: List[str] = [
     'cas_qwm.op_pattern',
-    'cas_qwm.pattern_form',
+    'cas_qwm.pattern_perturb',
     'cas_qwm.parametric_multimode',
 ]
 
 _SUBMODULES: Dict[str, str] = {
     'op_pattern': 'cas_qwm.op_pattern',
-    'op_patterns': 'cas_qwm.op_pattern',
-    'pattern_form': 'cas_qwm.pattern_form',
+    'pattern_perturb': 'cas_qwm.pattern_perturb',
     'parametric_multimode': 'cas_qwm.parametric_multimode',
 }
 
@@ -48,37 +98,37 @@ _MODULE_EXPORTS: Dict[str, List[str]] = {
         'mul_pattern',
         'redo_mul',
     ],
-    'cas_qwm.pattern_form': [
+    'cas_qwm.pattern_perturb': [
         'BSC',
         'FSC',
         'PF',
         'pf',
-        'PE',
+        'pf_add',
         'PF0',
         'PF1',
+        'PE',
+        'perturb_rec',
     ],
     'cas_qwm.parametric_multimode': [
+        'a_p',
+        'a_s',
+        'a_i',
+        't_',
+        'nlc',
         'p2s',
         'dsolve_pm1',
         'dsolve_pm2',
         'MultimodeCOP',
         'MultimodeNum',
         'MultimodeNum2',
-        'nd_simp',
-        'PMProcessor',
+        'WMProcessor',
         'wm_processors',
-        'a_p',
-        'a_s',
-        'a_i',
-        't_',
         '_g',
-        '_ps',
-        'nlc',
         'nm',
         'vac_pf',
-        'PMWrapper',
+        'WMWrapper',
         'pm',
-        'PMSolver',
+        'WMSolver',
         'TWMSolver',
         'FWMSolver',
     ],
@@ -94,8 +144,7 @@ for _mod_name in reversed(_PRIORITY_MODULES):
 # Construct __all__ containing submodules and symbols in priority order
 __all__: List[str] = [
     'op_pattern',
-    'op_patterns',
-    'pattern_form',
+    'pattern_perturb',
     'parametric_multimode',
 ]
 _seen: Set[str] = set(__all__)
@@ -106,37 +155,19 @@ for _mod_name in _PRIORITY_MODULES:
             __all__.append(_sym)
 
 
-class _OpPatternsAliasFinder(MetaPathFinder):
-    """Import hook alias: cas_qwm.op_patterns -> cas_qwm.op_pattern"""
-    def find_spec(self, fullname: str, path: Optional[Any], target: Optional[Any] = None) -> Any:
-        if fullname == 'cas_qwm.op_patterns':
-            return find_spec('cas_qwm.op_pattern')
-        return None
-
-
-if not any(isinstance(f, _OpPatternsAliasFinder) for f in sys.meta_path):
-    sys.meta_path.insert(0, _OpPatternsAliasFinder())
-
-
 def __getattr__(name: str) -> Any:
     """
     Lazy attribute and submodule loader adhering to PEP 562.
     Resolves attributes on demand following the priority order:
-    cas_qwm.op_pattern > cas_qwm.pattern_form > cas_qwm.parametric_multimode.
+    cas_qwm.op_pattern > cas_qwm.pattern_perturb > cas_qwm.parametric_multimode.
     """
     if name.startswith('__') and name.endswith('__'):
         raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
     # 1. Submodule access
     if name in _SUBMODULES:
-        target_mod = _SUBMODULES[name]
-        mod = importlib.import_module(target_mod)
+        mod = importlib.import_module(_SUBMODULES[name])
         globals()[name] = mod
-        if name in ('op_pattern', 'op_patterns'):
-            globals()['op_pattern'] = mod
-            globals()['op_patterns'] = mod
-            sys.modules.setdefault('cas_qwm.op_patterns', mod)
-            sys.modules.setdefault('cas_qwm.op_pattern', mod)
         return mod
 
     # 2. Known mapped symbols
@@ -147,7 +178,7 @@ def __getattr__(name: str) -> Any:
         globals()[name] = val
         return val
 
-    # 3. Dynamic search across layers in priority order (op_pattern -> pattern_form -> parametric_multimode)
+    # 3. Dynamic search across layers in priority order (op_pattern -> pattern_perturb -> parametric_multimode)
     for mod_name in _PRIORITY_MODULES:
         if mod_name in sys.modules:
             mod = sys.modules[mod_name]
@@ -177,4 +208,3 @@ def __dir__() -> List[str]:
         if mod_name in sys.modules:
             attrs.update(getattr(sys.modules[mod_name], '__all__', []))
     return sorted(attrs)
-

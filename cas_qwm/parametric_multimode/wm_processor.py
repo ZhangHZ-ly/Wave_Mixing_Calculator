@@ -96,7 +96,10 @@ class WMProcessor:
                   if dc else (MultimodeCOP(a_p.name, a_s.name, 1, 0),
                               MultimodeCOP(a_p.name, a_s.name, 1)))
         self.mmn2 = MultimodeNum2(*self.a[0].args[:3])
-        self.pe = PE({nlc: S.One,})
+        self._init_pe()
+
+    def _init_pe(self):
+        self.pe = PE({nlc: S.One})
         self.pe.register(MultimodeNum)
         self.pe.register(MultimodeNum2)
         self.pe.register(MultimodeCOP)

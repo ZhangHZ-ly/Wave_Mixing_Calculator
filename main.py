@@ -284,7 +284,7 @@ def api_save_variable(req: SaveVarRequest):
 def api_reset_combination():
     try:
         for s in (TWM_SOLVERS[0][0], TWM_SOLVERS[1][0]):
-            s.reset_pe()
+            s.processor._init_pe()
         return {"status": "success", "message": "WM processor PE reset to defaults"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -33,7 +33,6 @@ from .common import (
     WM_TRANSFORMS,
     is_valid_variable_name,
     RESERVED_NAMES,
-    g_hat,
 )
 from .conditions import normalize_process, process_is_dc
 from .wm_transforms import t_to_g

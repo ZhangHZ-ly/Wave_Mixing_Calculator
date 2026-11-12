@@ -248,7 +248,7 @@ function saveWorkspaceToStorage(ws) {
   }
 }
 
-function resetTableDefaults(ws) {
+async function resetTableDefaults(ws) {
   if (ws === 'tab3') {
     if (!confirm('Reset Tab 3 table to default parametric symbols and operators?')) return;
     const isMismatch = getWmMismatch();
@@ -259,6 +259,12 @@ function resetTableDefaults(ws) {
     wmTableItems = defaults;
     saveWmTableItemsToStorage();
     renderWmTable();
+    try {
+      const res = await fetch('/api/combination/reset', { method: 'POST' });
+      if (!res.ok) throw new Error('Reset failed');
+    } catch (e) {
+      console.error('Failed to reset WM processor PE:', e);
+    }
     showToast('Tab 3 table reset to defaults.');
   } else {
     if (!confirm('Reset Tab 2 table to default symbols and operators?')) return;
