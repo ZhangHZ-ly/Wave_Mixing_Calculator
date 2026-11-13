@@ -3,8 +3,9 @@ from itertools import product
 from sympy.core.singleton import S
 from sympy.core.sympify import sympify
 from sympy.core.expr import Expr
-from sympy.core.symbol import Symbol
+from sympy.core.symbol import Symbol, Dummy
 from sympy.core.add import Add
+from sympy.core.mul import Mul
 from sympy.core.power import Pow
 from sympy.core.function import diff, _mexpand
 from sympy.physics.quantum.boson import BosonOp
@@ -13,15 +14,40 @@ from ..pattern_perturb import PF, PF0, PF1
 from ..op_pattern import BosonNum
 from ..op_pattern.boson_pattern import fac
 from ..pattern_perturb.pattern_form import pf_add, _vpk, bn_simp
-from ..pattern_perturb.perturb_expander import gperm
 from .multimode import MultimodeNum, MultimodeNum2
 from .wm_processor import (WMProcessor, wm_processors, vac_pf, _dr_prep,
-                           _t_mul, _tdz, a_s, t_, _g, nlc, nm)
+                           _t_mul, _tdz, t_, _g, nlc, nm)
 
 __all__ = ['WMWrapper']
 
 def _sum_dl(dl: dict) -> dict:
     return {k: vs for k, ps in dl.items() if (vs := pf_add(*ps))}
+
+_lx = Dummy('x')  # ladder variable
+
+def _ladder(k: tuple, down: bool, start: int, sg: int):
+    """
+    Scans the multimode exponent tuple k block by block from the right, starting at
+    level `start` (`down`: index of the lowering COP). Returns (final level, P0, P1),
+    or None if the level goes below 0, with P0 / P1 the ladder products of
+    the j=0 / j=1 lowest-weight families.
+    """
+    m, f0, f1 = start, [], []
+    if k != (None,):
+        i, *exps = k
+        for j in range(len(exps) - 1, -1, -1):
+            e = int(exps[j])
+            if bool(i) ^ bool(j & 1) == down:
+                if (m := m - e) < 0:
+                    return None
+            else:
+                for l in range(m, m + e):
+                    f0.append((l + 1) * (_lx + sg * l))
+                    f1.append(l * (_lx + sg * (l + 1)))
+                m += e
+    return m, Mul(*f0), Mul(*f1)
+
+_pw = lambda b, e: PF({((b**e,), ()): S.One}) if e else PF1  # PF of b**e
 
 class WMWrapper:
     """
@@ -126,22 +152,25 @@ class WMWrapper:
             return None
         return self.processor.f_parity(tuple(self.dict_repr))
 
-    def apply(self, f, self_update=False) -> 'WMWrapper':
+    def apply(self, f, on_npf=False, self_update=False) -> 'WMWrapper':
         """
-        Applies f to every leaf PF (or its scalar/number-operator tails via PF.apply)
-        in dict_repr, returning a new WMWrapper.
+        Applies f to every scalar/number-operator tail of the leaf PFs (and npf if on_npf);
+        falls back to applying f to every leaf PF, then to every {tuple: PF} dict
+        when f raises TypeError / AttributeError. Returns a new WMWrapper.
         """
         def _apply_node(e):
-            if isinstance(e, dict):
-                return {k: nv for k, v in e.items() if (nv := _apply_node(v))}
-            if isinstance(e, PF):
+            try:
+                return {k: nv for k, v in e.items() if (nv := v.apply(f, on_npf))}
+            except (TypeError, AttributeError):
                 try:
-                    return e.apply(f, on_npf=True)
+                    return {k: nv for k, v in e.items() if (nv := f(v))}
                 except (TypeError, AttributeError):
-                    pass
-            return f(e)
+                    return f(e)
 
-        res = _apply_node(self.dict_repr)
+        res = (_apply_node(self.dict_repr) if self.b_left is None
+               else {b: dv for b, d in self.dict_repr.items()
+                     if (dv := _apply_node(d))})
+        
         if self_update:
             self.dict_repr = res
             if not res:
@@ -151,54 +180,16 @@ class WMWrapper:
 
     def expand(self, order, sub_g: bool = False, gc=None) -> 'WMWrapper':
         """Expands this WMWrapper to the given perturbative order."""
-        res = self.apply(lambda p: self.processor.pe.expand_pf(p, order))
+        res = self.apply(lambda p: self.processor.pe.expand_pf(p, order), on_npf=True)
         if sub_g and gc is not None:
-            return res.apply(lambda t: t.subs({t_: _g / gc}))
+            return res.apply(lambda t: t.subs({t_: _g / gc}), on_npf=True)
         return res
-
-    def _combine_tcp_vac(self, k, bs_weak):
-        """
-        Combines weak-field BosonPat operators with a multimode exponent tuple k
-        when acting on vacuum |0> on the right.
-        """
-        if not bs_weak:
-            yield S.One, k
-            return
-
-        p = self.processor
-        try:
-            cop_a1, cop_exp, bs_other = p.match_cop(bs_weak)
-        except ValueError:
-            cop_a1, cop_exp, bs_other = None, S.Zero, bs_weak
-
-        if cop_exp > 0 and not bs_other:
-            if cop_a1:
-                return
-            new_k = k
-            for _ in range(cop_exp):
-                new_k = _t_mul(new_k, (None,), 0)
-            s_comb = fac(cop_exp) / gperm(nm + cop_exp - 1, cop_exp)
-            yield s_comb, new_k
-            return
-
-        if len(bs_weak) == 1:
-            b = bs_weak[0]
-            if b.left_base.is_annihilation:
-                return
-            b_op = BosonOp(b.name, b.left_base.is_annihilation)
-            if k == (None,):
-                return
-            i, *exps = k
-            for s, _, nes in p.bt_swap(b_op, i, exps, to_left=True):
-                yield s, _tdz(i, nes)
-            return
-
-        yield S.One, k
 
     def eval_vacuum(self, vac_modes) -> 'WMWrapper':
         """
         Evaluates the partial or full expectation value of this WMWrapper
         under vacuum input assertions for the specified mode(s).
+        The npf parts are kept untouched.
         """
         p = self.processor
         vac_sets = set(), set()
@@ -211,148 +202,108 @@ class WMWrapper:
         if not vac_sets[0] and not vac_sets[1]:
             return self
 
-        def _collapse_mmn(name, displacement):
-            if name in vac_sets[1]:
-                return displacement * nm
-            return MultimodeNum(name, displacement)
+        _strong = lambda d: ({k: vp for k, v in d.items() if (vp := vac_pf(v, vac_sets[0]))}
+                             if vac_sets[0] else d)
+        if not vac_sets[1]:
+            return self.apply(_strong)
+        if self.b_left is not None and len(vac_sets[1]) == 2:
+            return WMWrapper(p, {}, None)  # odd parity
 
-        def _collapse_mmn2(n1, n2, par):
-            in1, in2 = n1 in vac_sets[1], n2 in vac_sets[1]
-            if not in1 and not in2:
-                return MultimodeNum2(n1, n2, par)
-            if not par:
-                return nm if (in1 and in2) else MultimodeNum(n2 if in1 else n1, 1)
-            if in1 and in2:
-                return S.Zero
-            return MultimodeNum(n2) if in1 else -MultimodeNum(n1)
+        vb = weak_names[1] if weak_names[1] in vac_sets[1] else weak_names[0]  # in vacuum
+        va = weak_names[weak_names[0] == vb]
+        full = va in vac_sets[1]
+        down = BosonOp(vb) in p.a[1].mode_expr.args  # index of the COP lowering vb
+        a_bar = next(b for b in p.a[down].mode_expr.args if b.name == va)
+        sg = 1 if p.dc else -1
+        x_op = MultimodeNum(va, int(p.dc))
 
-        _collapse_num = (lambda expr: sympify(expr).replace(MultimodeNum, _collapse_mmn)
-                         .replace(MultimodeNum2, _collapse_mmn2))
+        def _collapse(expr, occ=0):
+            """Collapses vacuum-field numbers; mode vb_1 holds `occ` quanta."""
+            oc = lambda n: occ if n == vb else S.Zero
+            _mm = lambda n, d: d * nm + oc(n) if n in vac_sets[1] else MultimodeNum(n, d)
 
-        def _clean_pf(pf_obj: PF) -> PF:
-            applied = pf_obj.apply(_collapse_num)
-            clean_table = {k: v for k, v in applied.table.items() if v != 0}
-            return PF(clean_table, applied.npf) if (clean_table or applied.npf != 0) else PF0
+            def _mm2(m1, m2, q):
+                in1, in2 = m1 in vac_sets[1], m2 in vac_sets[1]
+                if not (in1 or in2):
+                    return MultimodeNum2(m1, m2, q)
+                if q:  # Σ(N_2 - N_1)
+                    return ((oc(m2) if in2 else MultimodeNum(m2))
+                            - (oc(m1) if in1 else MultimodeNum(m1)))
+                if in1 and in2:
+                    return nm + oc(m1) + oc(m2)
+                return MultimodeNum(m2 if in1 else m1, 1) + oc(m1 if in1 else m2)
 
-        tuple_cache = {}
+            return expr if expr.is_number else (
+                expr.replace(lambda e: isinstance(e, BosonNum) and e.name in vac_sets[1],
+                             lambda e: oc(e.name))
+                .replace(MultimodeNum, _mm).replace(MultimodeNum2, _mm2))
 
-        def _vac_tuple(k: tuple):
-            if k in tuple_cache:
-                return tuple_cache[k]
-            if len(k) == 1:
-                tuple_cache[k] = S.One
-                return S.One
-            if not p.dc and len(vac_sets[1]) == 2:
-                tuple_cache[k] = S.Zero
-                return S.Zero
+        def _key_terms(k, q, p_left):
+            """⟨0_b| [b_1] T_k b_1†^q |0_b⟩ as a tuple of a-field PFs."""
+            scan = _ladder(k, down, q, sg)
+            if scan is None or scan[0] != p_left:  # final level 0, or 1 under b_1
+                return ()
+            _, p0, p1 = scan
+            pairs = ([(((p0 - p1) / _lx).expand(), _pw(Dagger(a_bar), 1) * _pw(a_bar, q)),
+                      (p1, _pw(a_bar, q - 1) if q else PF0)] if p_left
+                     else [(p0, _pw(a_bar, q))])
+            x = x_op - sg if p_left else x_op
+            return tuple(PF({_vpk: fac(q) * c.subs(_lx, x)}) * ops for c, ops in pairs if c != 0)
 
-            ann_idx = True if p.dc else (a_s.name not in vac_sets[1])
-            i, *exps = k
-            if bool(i) != ann_idx or (len(exps) & 1) or sum(exps[0::2]) != sum(exps[1::2]):
-                tuple_cache[k] = S.Zero
-                return S.Zero
-
-            B = p.a[ann_idx]
-            exps = list(exps)
-            acc = S.One
-            while exps:
-                c_r = exps.pop()
-                a_r = exps.pop()
-                if a_r > c_r:
-                    tuple_cache[k] = S.Zero
-                    return S.Zero
-                step_terms = [
-                    _collapse_num(factor)
-                    for _, e1_op, factor in B.swap_exps(a_r, c_r, order=a_r, left_p=True)
-                    if e1_op is S.One
-                ]
-                if not step_terms:
-                    tuple_cache[k] = S.Zero
-                    return S.Zero
-                step_op = _collapse_num(Add(*step_terms))
-                if step_op == 0:
-                    tuple_cache[k] = S.Zero
-                    return S.Zero
-                acc = _collapse_num(_mexpand(step_op * acc))
-                if acc == 0:
-                    tuple_cache[k] = S.Zero
-                    return S.Zero
-                rem_c = c_r - a_r
-                if rem_c > 0:
-                    if not exps:
-                        tuple_cache[k] = S.Zero
-                        return S.Zero
-                    exps[-1] += rem_c
-
-            tuple_cache[k] = acc
-            return acc
-
-        def _vac_dict(d: dict) -> dict:
-            if vac_sets[0]:
-                d = {k: vp for k, pf_v in d.items() if (vp := vac_pf(pf_v, vac_sets[0]))}
-                if not d:
-                    return {}
-
-            if not vac_sets[1]:
-                return {k: cp for k, pf_v in d.items() if (cp := _clean_pf(pf_v))}
-
-            pfs = []
-            for k, pf_v in d.items():
-                if not pf_v:
-                    continue
+        def _reduce(d: dict, occ: int = 0, p_left: bool = False):
+            """
+            Reduces {tuple: PF} (with b_1†^occ on the right and b_1 on the left if p_left)
+            into an a-field PF; returns it together with the untouched npf parts.
+            """
+            out, npfs = [], {}
+            for k, pf_v in _strong(d).items():
                 if pf_v.npf != 0:
-                    ck = _vac_tuple(k)
-                    if ck != 0 and (c_npf := _collapse_num(pf_v.npf)) != 0:
-                        pfs.append(PF({}, _collapse_num(ck * c_npf)))
-
+                    npfs[k] = PF(npf=pf_v.npf)
                 for (bs, fs), tail in pf_v.table.items():
-                    bs_weak = tuple(b for b in bs if b.name in weak_names)
-                    bs_strong = tuple(b for b in bs if b.name not in weak_names)
-                    vp = _clean_pf(PF({(bs_strong, fs): tail}, S.Zero))
-                    if not vp:
-                        continue
-                    if not bs_weak:
-                        ck = _vac_tuple(k)
-                        if ck != 0:
-                            pfs.append(_collapse_num(ck) * vp)
+                    q, bs_rest = occ, []
+                    for b in bs:
+                        if b.name != vb:
+                            bs_rest.append(b)
+                        elif not b.left_base.is_annihilation:
+                            q += b.exps[0]
+                        elif b.exps[0] > occ:  # b_1^e b_1†^occ |0_b⟩ = 0
+                            break
+                        else:                  # e == occ == 1
+                            q = 0
                     else:
-                        for s_comb, new_k in self._combine_tcp_vac(k, bs_weak):
-                            ck = _vac_tuple(new_k)
-                            if ck != 0:
-                                pfs.append(_collapse_num(s_comb * ck) * vp)
+                        if (t := _collapse(tail, occ)) != 0:
+                            rest = PF({(tuple(bs_rest), fs): t})
+                            out.extend(kp * rest for kp in _key_terms(k, q, p_left))
+            red = pf_add(*out) if out else PF0
+            return (vac_pf(red, [va]).apply(_collapse) if full else red).apply(_mexpand), npfs
 
-            if not pfs:
-                return {}
-            tot = pf_add(*pfs)
-            return {(None,): tot} if tot else {}
+        def _merged(d: dict) -> dict:
+            red, npfs = _reduce(d)
+            return {**npfs, (None,): pf_add(red, npfs.get((None,), PF0))}
 
         if self.b_left is None:
-            return WMWrapper(p, _vac_dict(self.dict_repr), None)
+            return self.apply(_merged)
 
-        if len(vac_sets[1]) == 2:
-            return WMWrapper(p, {}, None)
-        if not vac_sets[1]:
-            res = {b: vd for b, d in self.dict_repr.items() if (vd := _vac_dict(d))}
-            return WMWrapper(p, res, self.b_left if res else None)
+        def _extract(red: PF) -> 'WMWrapper':
+            """Pulls the unpaired a-field operator out of a (None,)-keyed PF as a single-mode key."""
+            grouped = defaultdict(list)
+            for (bs, fs), t in red.table.items():
+                j = next((j for j, b in enumerate(bs) if b.name == va), None)
+                if j is None:
+                    raise ValueError('Solution parity unbalanced')
+                o, e = bs[j].left_base, bs[j].exps[0]
+                grouped[o].append(PF({(bs[:j] + ((o**(e - 1),) if e > 1 else ()) + bs[j + 1:], fs): t}))
+            w = WMWrapper(p, {o: {(None,): pf_add(*ps)} for o, ps in grouped.items()}, True)
+            return w if w.b_left == self.b_left else w.flip().apply(_mexpand)
 
         ws = []
         for b, d in self.dict_repr.items():
-            if not d:
-                continue
-            if b.name in vac_sets[1]:
-                if (b.is_annihilation and not self.b_left) or (not b.is_annihilation and self.b_left):
-                    continue
-                swapped = p.bd_swap(b, d, to_left=not b.is_annihilation)
-                b_partner = p.odag(b)
-                d_partner = swapped.get(b_partner)
-                if d_partner and (vd := _vac_dict(d_partner)):
-                    w_part = WMWrapper(p, {b_partner: vd}, not b.is_annihilation)
-                    ws.append(w_part if w_part.b_left == self.b_left else w_part.flip())
-            else:
-                if (vd := _vac_dict(d)):
-                    ws.append(WMWrapper(p, {b: vd}, self.b_left))
-
-        return p.d_add(*ws) if ws else WMWrapper(p, {}, None)
+            if b.name != vb:
+                ws.append(WMWrapper(p, {b: _merged(d)}, self.b_left))
+            elif bool(b.is_annihilation) == bool(self.b_left):  # else ⟨0_b|b_1† = b_1|0_b⟩ = 0
+                red, npfs = _reduce(d, p_left=True) if self.b_left else _reduce(d, occ=1)
+                ws += [_extract(red), WMWrapper(p, {b: npfs}, self.b_left)]
+        return p.d_add(*ws)
 
     def eval_coherent(self, order: int = 0) -> 'WMWrapper':
         """
@@ -431,7 +382,7 @@ class WMWrapper:
         return WMWrapper.from_val(other, self.processor).__add__(self)
 
     def __neg__(self) -> 'WMWrapper':
-        return self.apply(lambda p: -p)
+        return self.apply(lambda p: -p, on_npf=True)
 
     def __sub__(self, other) -> 'WMWrapper':
         other = WMWrapper.from_val(other, self.processor)
@@ -643,10 +594,10 @@ class WMWrapper:
                 rest_args = rest_args[1:]
             gc_inv_n = gc ** (-order_n)
             return self.apply(
-                lambda v: p.n_simp(diff(v, t_, order_n, *rest_args, **kwargs) * gc_inv_n)
-            )
+                lambda v: p.n_simp(diff(v, t_, order_n, *rest_args, **kwargs) * gc_inv_n),
+                on_npf=True)
         if is_wrt_t:
             var = t_
-        return self.apply(lambda v: diff(v, var, *rest_args, **kwargs))
+        return self.apply(lambda v: diff(v, var, *rest_args, **kwargs), on_npf=True)
 
     Derivative = diff

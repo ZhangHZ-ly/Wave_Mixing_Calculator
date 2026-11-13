@@ -27,3 +27,6 @@ Desktop.ini
 # for test & debug & tutorial
 docs/
 scratch/
+
+# Claude Code local settings
+.claude/

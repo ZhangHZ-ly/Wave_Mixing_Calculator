@@ -99,8 +99,6 @@ def in_boson_num(expr: Expr, mode, prune=False):
     If multiple modes of BosonNums appears in the same Function
     or Pow with non-integer exponent, any of the modes in the included
     expression is considered as commute with each other
-
-    This design is to avoid scanning the same expression for more than once.
     """
     if expr.is_commutative:
         return True, True
@@ -155,8 +153,7 @@ def mul_pattern(e1, e2):
                           merge_ends=(e1.right_base==e2.left_base)),
     
     elif isinstance(e1, BosonPat) and isinstance(e2, BosonPat) and e1.name == e2.name:
-        return BosonPat(e1, e2.exps, eval_exp=False,
-                          merge_ends=(e1.right_base==e2.left_base)),
+        return BosonPat(e1, e2.exps, merge_ends=(e1.right_base==e2.left_base)),
 
     elif isinstance(e2, BosonPat) and in_boson_num(e1, e2.name)[1]:
         return e2, NumShift(e1, 1, e2).doit()

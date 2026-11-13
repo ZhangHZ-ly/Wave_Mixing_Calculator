@@ -228,7 +228,7 @@ class WMProcessor:
 
         res = self.d_add(*(t for t, _ in term(perturb_list, nol, dummies, f_sym)))
         if sub_g and gc is not None:
-            return res.apply(lambda t: t.subs({t_: _g / gc}))
+            return res.apply(lambda t: t.subs({t_: _g / gc}), on_npf=True)
         return res
 
     def n_simp(self, expr):

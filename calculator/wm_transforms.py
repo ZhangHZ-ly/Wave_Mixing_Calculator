@@ -55,4 +55,4 @@ def t_to_g(
         sub_dict = {t_: g_hat * inv_gc, _g: g_hat}
 
     f = lambda expr: bn_simp(expr.subs(sub_dict))
-    return obj.apply(f) if hasattr(obj, 'apply') else f(obj)
+    return obj.apply(f, on_npf=True) if hasattr(obj, 'apply') else f(obj)

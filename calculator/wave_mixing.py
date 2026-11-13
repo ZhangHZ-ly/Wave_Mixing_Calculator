@@ -175,7 +175,7 @@ def compute_val_leading_order(
         gc_eff = (nlc * s.nd) if (proc == 'fwm' and not expr_t.has(pm)) else s.gc
         return expr_t.subs({t_: _g / gc_eff})
 
-    w_sub = WMWrapper.from_val(val, s.processor).apply(_sub_t_for_order)
+    w_sub = WMWrapper.from_val(val, s.processor).apply(_sub_t_for_order, on_npf=True)
     orders: List[Any] = []
     if w_sub.b_left is None:
         for p in w_sub.dict_repr.values():
@@ -884,7 +884,7 @@ def eval_combination_assertions(
         if proc == 'fwm' and not mismatch:
             alpha_sym = Symbol('alpha_0')
             pm_cohr = 2 * nlc * (Abs(alpha_sym) ** 2)
-            val_t = val_t.apply(lambda x: bottom_up(x.subs({s.pm: pm_cohr}), _ps))
+            val_t = val_t.apply(lambda x: bottom_up(x.subs({s.pm: pm_cohr}), _ps), on_npf=True)
         val_g = t_to_g(val_t, process=proc, mismatch=mismatch, coherent=True)
     else:
         def _postprocess_pf(pf_item: PF) -> PF:

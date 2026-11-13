@@ -1,3 +1,9 @@
+"""
+Basic operations for pattern exponents of BosonPat and FermionPat
+
+See also: boson_pattern, fermion_pattern
+"""
+
 from sympy.core.expr import Expr
 from sympy.core.sympify import sympify
 from sympy.core.singleton import S
@@ -31,8 +37,8 @@ class PatExps(Expr):
     """
     Fermion/Boson pattern exponents container
     """
-    def __new__(cls, *args, **hints):
-        if hints.get('flatten', False):
+    def __new__(cls, *args, flatten=False):
+        if flatten:
             return Expr.__new__(cls, *_pe_flatten(args))
         elif len(args) == 1:
             if isinstance(args[0], cls):
@@ -42,7 +48,7 @@ class PatExps(Expr):
         return Expr.__new__(cls, *(sympify(a) for a in args))
     
     @property
-    def len(self):
+    def nargs(self):
         return len(self.args)
     
     def parity_diff(self, la=True):
@@ -56,14 +62,13 @@ class PatExps(Expr):
         return total
     
     def drop_zeros(self):
-        from itertools import takewhile
-        zero_count1 = sum(1 for _ in takewhile(lambda x: x == 0, self.args))
-        flip = (zero_count1) & 1
-        zero_count2 = sum(1 for _ in takewhile(lambda x: x == 0, reversed(self.args)))
+        fnz = next((i for i in range(self.nargs) if (self.args[i] != 0) == True), 0)
+        flip = (fnz) & 1
+        lnz = 1 + next((i for i in range(self.nargs - 1, -1, -1) if (self.args[i] != 0) == True), -1)
             
-        if zero_count1 + zero_count2 > 0:
-            return flip, PatExps(*self.args[zero_count1:(len(self.args)-zero_count2)])
-        return (flip, self)
+        if lnz - fnz < self.nargs:
+            return flip, PatExps(*self.args[fnz:lnz])
+        return flip, self
     
     def in_new(self, f=False):
         """
@@ -88,12 +93,12 @@ class PatExps(Expr):
                     raise ValueError("Fermionic operators can only be raised to a"
                         " positive integer power")
                 if (exponent > 1) == True and exponent.is_integer:
-                    return 0, None
+                    return None, None
                 if zero_end:
                     if exponent == 0:
-                        new.pop()
+                        del new[-1]
                     elif is_nat_n(new[-2], exponent):
-                        new.pop()
+                        del new[-1]
                         new[-1] += exponent
                         if (new[-1] > 1) == True:
                             return 0, None
@@ -105,7 +110,7 @@ class PatExps(Expr):
                     zero_end = False
                 elif new and exponent == new[-1]:
                     if equal_end:
-                        new.pop()
+                        del new[-1]
                         equal_end = False
                     else:
                         new.append(exponent)
@@ -121,7 +126,7 @@ class PatExps(Expr):
                 if not isinstance(exponent, Expr):
                     raise TypeError('Expect Expr as exponents, got %s' % type(exponent))
                 if exponent == 0:
-                    zero_end = True
+                    zero_end = not zero_end
                     continue
                 if zero_end:
                     new[-1] += exponent

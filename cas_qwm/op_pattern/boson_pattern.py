@@ -1,3 +1,19 @@
+"""
+Defines a unified class for multiplications of
+boson operators with the same mode — BosonPat,
+and monkey-patched the Pow of BosonOp
+to return an object in this class.
+
+The number operator BosonNum is made available
+for differentiate-with-respect-to in this moduel,
+and a class "num_shift" is defined 
+for the commutation relation between the BosonPat and BosonNum
+— this is not defined as a function for cache
+of the original expression in later processing.
+
+See also: .BosonPat, .BosonNum, .NumShift
+"""
+
 import sympy.physics.quantum.boson as boson
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.dagger import Dagger
@@ -10,7 +26,7 @@ from sympy.core.mul import Mul
 from sympy.core.power import Pow
 from sympy.core.containers import Tuple, Dict
 from sympy.core.sympify import sympify
-from .pattern_exponents import PatExps
+from .pattern_exponents import PatExps, _pe_flatten
 from collections.abc import Sequence
 from functools import cached_property, lru_cache
 
@@ -38,53 +54,77 @@ def ffc(x:Integer, y):
     return ffc(x, y - 1) * (x - y + 1)
 
 class BosonPat(Operator):
+    """
+    Class that collects the multiplication
+    from the same boson mode as a "pattern".
+
+    Supports multiple kinds of inputs
+    
+    — with merge_ends parameter set None and
+
+    - 1 or 2 inputs:
+    Creates a BosonOp with the same input (name, is_annihilation).
+
+    - 3 or more inputs:
+    Creates a "pattern" of the bosonic field,
+    where the first two arguments are converted into
+    the name and is_annihilation attributes of the left-most operator,
+    and the rest of the arguments are taken as the exponents
+    on the factors of the multiplication of  opreators,
+    flipping annihilation / creation case one after another.
+
+    — with 'merge_ends' set bool (or any value that supports "if"):
+
+    - Accepts the first argument with the same class (BosonPat), and
+
+    - returns itself if there no more input arguments; or
+
+    -  extends it with further exponents, and
+    the "merge_ends" option determines
+    whether to take sum at their contact elements.
+
+    This class also supports normal ordering of the pattern (to_normal_order), or
+    conbining as more BosonNums as possible in the expression (num_repr).
+    """
     @classmethod
     def default_args(self):
         return ('a', True)
 
-    def __new__(cls, *args, eval_exp=True, **hints):
-        if isinstance(args[0], cls) and 'merge_ends' in hints:
-            if len(args) == 1:
-                return args[0]
-            if isinstance(args[0], BosonOp):
-                la = args[0].args[1]
-                pe = PatExps(S.One)
-            elif isinstance(args[0], BosonNum):
-                la = S.Zero
-                pe = PatExps(S.One, S.One)
+    def __new__(cls, *args, merge_ends=None, **hints):
+        if not isinstance(args[0], cls) or merge_ends is None:
+            if len(args) == 1 or len(args) == 2:
+                return BosonOp(*args)
             else:
-                la = args[0].args[1]
-                pe =  args[0].args[2]
-            if len(args) == 2:
-                if isinstance(args[1], (PatExps, Sequence)):
-                    new_args = (args[0].name, la, pe.cat(args[1], hints['merge_ends']))
-            else:
-                new_args = (args[0].name, la, pe.cat(args[1:], hints['merge_ends']))
-            if not new_args[2].args:
-                return S.One
-            if new_args[2].args == (1,):
-                return BosonOp(args[0].name, new_args[1])
-            if not bool(new_args[1]) and new_args[2].args == (1, 1):
-                return BosonNum(args[0].name)
-            return Operator.__new__(cls, *new_args)
-        if len(args) == 1 or len(args) == 2:
-            return BosonOp(*args)
-        if len(args) == 3:
-            exponents = PatExps(args[2])
-        else:
-            exponents = PatExps(args[2:])
-        if eval_exp:
+                exponents = PatExps(args[2:], flatten=True)
             flip, new_exponents = exponents.in_new()
+            if not new_exponents.args:
+                return S.One
+            left = bool(Integer(args[1])) ^ flip
+            if new_exponents.args == (1,):
+                return BosonOp(args[0], left)
+            if not left and new_exponents.args == (1, 1):
+                return BosonNum(args[0])
+            return Operator.__new__(cls, args[0], left, new_exponents)
+        if len(args) == 1:
+            return args[0]
+        if isinstance(args[0], BosonOp):
+            la = args[0].args[1]
+            pe = PatExps(S.One)
+        elif isinstance(args[0], BosonNum):
+            la = S.Zero
+            pe = PatExps(S.One, S.One)
         else:
-            flip, new_exponents = exponents.drop_zeros()
-        if not new_exponents.args:
+            la = args[0].args[1]
+            pe =  args[0].args[2]
+        ext_exps = PatExps(args[1:], flatten=True)
+        new_args = (args[0].name, la, pe.cat(ext_exps, merge_ends))
+        if not new_args[2].args:
             return S.One
-        left = bool(Integer(args[1])) ^ flip
-        if new_exponents.args == (1,):
-            return BosonOp(args[0], left)
-        if not left and new_exponents.args == (1, 1):
-            return BosonNum(args[0])
-        return Operator.__new__(cls, args[0], left, new_exponents)
+        if new_args[2].args == (1,):
+            return BosonOp(args[0].name, new_args[1])
+        if not bool(new_args[1]) and new_args[2].args == (1, 1):
+            return BosonNum(args[0].name)
+        return Operator.__new__(cls, *new_args)
 
     @property
     def name(self):
@@ -120,7 +160,7 @@ class BosonPat(Operator):
     def _eval_adjoint(self):
         new_left_base = self.right_base._eval_adjoint()
         new_exponents = [Dagger(exp) for exp in self.exps]
-        return BosonPat(*new_left_base.args, new_exponents, eval_exp=False)
+        return BosonPat(*new_left_base.args, new_exponents)
     
     def _eval_power(self, exp):
         if len(self.exps) == 1:
@@ -140,10 +180,8 @@ class BosonPat(Operator):
                 return self if self.is_annihilation else self
             if self.is_hermitian and other.is_hermitian:
                 return S.Zero
-            return (BosonPat(self, other.exps, eval_exp=False,
-                             merge_ends=(self.right_base==other.left_base))
-                    - BosonPat(other, self.exps, eval_exp=False,
-                               merge_ends=(other.right_base==self.left_base)))
+            return (BosonPat(self, other.exps, merge_ends=(self.right_base==other.left_base))
+                    - BosonPat(other, self.exps, merge_ends=(other.right_base==self.left_base)))
         elif 'independent' in hints and hints['independent']:
             return S.Zero
         
@@ -220,10 +258,10 @@ class BosonPat(Operator):
         if left_p:
             # factors.reverse()
             num_prod = Mul(*factors).xreplace({n: BosonNum(base)})
-            return BosonPat(base, ia_temp, exp_temp, eval_exp=False), num_prod
+            return BosonPat(base, ia_temp, exp_temp), num_prod
         else:
             num_prod = Mul(*factors).xreplace({n: BosonNum(base)})
-            return num_prod, BosonPat(base, ia_temp, exp_temp, eval_exp=False)
+            return num_prod, BosonPat(base, ia_temp, exp_temp)
 
     def _eval_rewrite_as_BosonNum(self, *args, **kwargs):
         left_p = kwargs.get('left_p', True) 
@@ -294,7 +332,9 @@ boson.BosonOp.__bases__ = (BosonPat,)
 
 class BosonNum(HermitianOperator, BosonPat):
     """
-    Newly defined number operator class that supports diff function
+    Number operator class that supports differentiate-with-respect-to
+
+    :param name: name of the field
     """
 
     _diff_wrt = True
@@ -375,10 +415,10 @@ class NumShift(Expr):
     """
     The doit() method of NumShift shifts the boson number operators in expr_num
     according to the elements of "shift" parameter,
-    each of which should be given by a dict with {op: d} or Tuple(op, d)
+    each of which should be given by a dict with {op: d} or Sequence(op, d)
 
-    Each BosonNum in the corresponding base will be shifted by direction*d
-    for creation boson operator or -direction*d for annihilation;
+    Each BosonNum in the corresponding base will be shifted by direction * d
+    for creation boson operator or -direction * d for annihilation;
 
     This is equivalent to reordering f(N) * op^d into
     op^d * g(N) (direction = 1) assuming independent modes and that d is commutative.
@@ -463,14 +503,14 @@ class NumShift(Expr):
         return NumShift(self.function._eval_adjoint(),
                         self.direction, self.shift, scan_dict=False)
 
-def apply_num_shift(expr, depth=None, _current=0):
+def apply_num_shift(expr):
+    """
+    Collapses the Numshift classes in the expr with doit(deep) method
+    """
     if expr.is_Atom or isinstance(expr, (Operator, Dict)):
         return expr
-    if depth is None or _current < depth:
-        new_args = tuple(apply_num_shift(a, depth, _current+1)
-                         for a in expr.args)
-    else:
-        new_args = expr.args
+    new_args = tuple(apply_num_shift(a) for a in expr.args)
+
     if isinstance(expr, NumShift):
         if new_args == expr.args:
             new = expr.doit(deep=False)

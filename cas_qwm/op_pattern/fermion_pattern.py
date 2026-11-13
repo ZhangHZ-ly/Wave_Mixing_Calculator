@@ -1,3 +1,15 @@
+"""
+Defines a unified class for multiplications of
+fermion operators with the same mode — FermionPat,
+and monkey-patched the Pow of FermionOp
+to return an object in this class.
+
+Deploys unidentefied commutator for the swap of
+FermionPats with unidentified exponent(s).
+
+See also: .FermionPat, .UidCommutator
+"""
+
 from sympy.core.singleton import S
 from sympy.core.add import Add
 from sympy.core.mul import Mul
@@ -93,68 +105,94 @@ class FermionPat(Operator):
     Collects multiplication of fermionic operators from the same mode.
 
     Equivalent to ... * c^x * c†^y * c^z * ..., where the base of
-    the left_most factor is c^(†) = FermionOp(name, left_base) 
+    the left_most factor is c^(†) = FermionOp(name, left_base).
+
+    Supports multiple kinds of inputs
+    
+    — with merge_ends parameter set None,
+
+    - the 'eval_exp' parameter dictates whether to apply
+    a preliminary simplification on the input exponents.
+    
+    And besides this parameter, if the initializer receives
+
+    - 1 or 2 inputs, it will
+    create a FermionOp with the same input (name, is_annihilation).
+
+    - 3 or more inputs, it will
+    create a "pattern" of the fermonic field,
+    where the first two arguments are converted into
+    the name and is_annihilation attributes of the left-most operator,
+    and the rest of the arguments are taken as the exponents
+    on the factors of the multiplication of  opreators,
+    flipping annihilation / creation case one after another.
+
+    — with 'merge_ends' set bool (or any value that supports "if"):
+
+    - Accepts the first argument with the same class (FermionPat), and
+
+    - returns itself if there no more input arguments; or
+
+    -  extends it with further exponents, and
+    the "merge_ends" option determines
+    whether to take sum at their contact elements.
+
+    This class also supports further simplification of the exponents with doit() method.
+
     """
 
     @classmethod
     def default_args(self):
         return ('c', True)
     
-    def __new__(cls, *args, eval_exp=True, **hints):
-        if isinstance(args[0], cls) and 'merge_ends' in hints:
-            if len(args) == 1:
-                return args[0]
-            if isinstance(args[0], FermionOp):
-                pe = PatExps(S.One)
-            else:
-                pe = args[0].args[2]
-            if len(args) == 2:
-                if isinstance(args[1], (Sequence, PatExps)):
-                    new_args = (args[0].name, args[0].args[1],
-                                pe.cat(args[1], hints['merge_ends'], True))
-            else:
-                new_args = (args[0].name, args[0].args[1],
-                            pe.cat(args[1:], hints['merge_ends'], True))
-            if not isinstance(new_args[2], PatExps):
+    def __new__(cls, *args, eval_exp=True, merge_ends=None, **hints):
+        if not isinstance(args[0], cls) or merge_ends is None:
+            if len(args) == 1 or len(args) == 2:
+                return FermionOp(*args)
+            if len(args) == 3 and args[2] is None:
                 return S.Zero
-            if new_args[2].args == ():
+            else:
+                exponents = PatExps(args[2:], flatten=True)
+            if eval_exp:
+                flip, new_exponents = exponents.in_new(f=True)
+            else:
+                flip, new_exponents = exponents.drop_zeros()
+            if not isinstance(new_exponents, PatExps):
+                return S.Zero
+            if new_exponents.args == ():
                 return S.One
-            if new_args[2].args == (1,):
-                return FermionOp(args[0].name, new_args[1])
-            pd = new_args[2].parity_diff()
+            left = bool(Integer(args[1])) ^ flip
+            if new_exponents.args == (1,):
+                return FermionOp(args[0], left)
+            pd = new_exponents.parity_diff()
             if pd.is_integer == False:
                 raise ValueError("Fermionic operators can only be raised to a"
                 " positive integer power")
             if (pd < -1) == True or (pd > 1) == True:
                 return S.Zero
-            return Operator.__new__(cls, *new_args)
-        if len(args) == 1 or len(args) == 2:
-            return FermionOp(*args)
-        if len(args) == 3:
-            if args[2] is None:
-                return S.Zero
-            else:
-                exponents = PatExps(args[2])
+            return Operator.__new__(cls, args[0], left, new_exponents)
+        if len(args) == 1:
+            return args[0]
+        if isinstance(args[0], FermionOp):
+            pe = PatExps(S.One)
         else:
-            exponents = PatExps(args[2:])
-        if eval_exp:
-            flip, new_exponents = exponents.in_new(f=True)
-        else:
-            flip, new_exponents = exponents.drop_zeros()
-        if not isinstance(new_exponents, PatExps):
+            pe = args[0].args[2]
+        ext_exps = PatExps(args[1:], flatten=True)
+        new_args = (args[0].name, args[0].args[1],
+                        pe.cat(ext_exps, merge_ends, True))
+        if not isinstance(new_args[2], PatExps):
             return S.Zero
-        if new_exponents.args == ():
+        if new_args[2].args == ():
             return S.One
-        left = bool(Integer(args[1])) ^ flip
-        if new_exponents.args == (1,):
-            return FermionOp(args[0], left)
-        pd = new_exponents.parity_diff()
+        if new_args[2].args == (1,):
+            return FermionOp(args[0].name, new_args[1])
+        pd = new_args[2].parity_diff()
         if pd.is_integer == False:
             raise ValueError("Fermionic operators can only be raised to a"
             " positive integer power")
         if (pd < -1) == True or (pd > 1) == True:
             return S.Zero
-        return Operator.__new__(cls, args[0], left, new_exponents)
+        return Operator.__new__(cls, *new_args)
     
     @property
     def name(self):
@@ -188,6 +226,8 @@ class FermionPat(Operator):
     def _eval_is_hermitian(self):
         if self.comm_symm == 1:
             return True
+        if self.comm_symm == -1:
+            return False
 
     def _eval_adjoint(self):
         # not taking adjoint for the exponents
