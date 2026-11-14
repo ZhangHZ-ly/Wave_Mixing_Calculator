@@ -10,11 +10,11 @@ from sympy.core.power import Pow
 from sympy.core.function import diff, _mexpand
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.dagger import Dagger
-from ..pattern_perturb import PF, PF0, PF1
-from ..op_pattern import BosonNum
+from ..pattern_perturb import PF, PF0, PF1, pf
+from ..op_pattern import BosonNum, BosonPat, FermionPat
 from ..op_pattern.boson_pattern import fac
 from ..pattern_perturb.pattern_form import pf_add, _vpk, bn_simp
-from .multimode import MultimodeNum, MultimodeNum2
+from .multimode import MultimodeNum, MultimodeNum2, MultimodeCOP
 from .wm_processor import (WMProcessor, wm_processors, vac_pf, _dr_prep,
                            _t_mul, _tdz, t_, _g, nlc, nm)
 
@@ -48,6 +48,18 @@ def _ladder(k: tuple, down: bool, start: int, sg: int):
     return m, Mul(*f0), Mul(*f1)
 
 _pw = lambda b, e: PF({((b**e,), ()): S.One}) if e else PF1  # PF of b**e
+
+def _mmn_only(expr, weak_names) -> bool:
+    """True if expr contains no unpaired weak-field single-mode operator or multimode COP."""
+    if isinstance(expr, BosonPat):
+        return expr.is_hermitian or not expr.has(*weak_names)
+    if isinstance(expr, (FermionPat, MultimodeNum, MultimodeNum2)):
+        return True
+    if isinstance(expr, MultimodeCOP):
+        return False
+    if hasattr(expr, 'args'):
+        return all(_mmn_only(arg, weak_names) for arg in expr.args)
+    return True
 
 class WMWrapper:
     """
@@ -94,10 +106,55 @@ class WMWrapper:
 
     @classmethod
     def from_val(cls, val, dc=True) -> 'WMWrapper':
+        """
+        Converts an Expr, PF, dict, WMWrapper, or string/number into a WMWrapper.
+        """
         proc = dc if isinstance(dc, WMProcessor) else wm_processors[bool(dc)]
         if isinstance(val, cls):
             return val if val.dc == proc.dc else cls(proc, val.dict_repr, val.b_left)
-        return proc.from_expr(val)
+        if isinstance(val, (PF, dict)):
+            return cls(proc, val, None)
+        if isinstance(val, str) and val in proc.init_ops:
+            return proc.init_ops[val]
+
+        expr = sympify(val)
+        if isinstance(expr, MultimodeCOP):
+            return cls(proc, {(bool(expr.annih1), 1): PF1}, None)
+
+        weak_names = proc.a[0].names
+        if isinstance(expr, BosonOp) and expr.name in weak_names:
+            return cls(proc, {expr: {(None,): PF1}})
+
+        if _mmn_only(expr, weak_names):
+            return cls(proc, {(None,): pf(expr, as_dict=None,
+                                          ignore=(MultimodeNum, MultimodeNum2, MultimodeCOP))}, None)
+
+        if isinstance(expr, BosonPat) and expr.name in weak_names:
+            pp, np = expr.num_repr()
+            if isinstance(pp, BosonPat):
+                if pp.exps[0] > 1:
+                    raise ValueError('Solution parity unbalanced')
+                b = BosonOp(*pp.args[:2])
+                w = cls(proc, {b: {(None,): PF({_vpk: np})}}, b_left=True)
+                return w if w.b_left == (proc.dc ^ w.parity) else w.flip()
+            return cls(proc, {(None,): PF({_vpk: np})}, None)
+
+        if expr.has(MultimodeCOP) or any(
+            getattr(b, 'name', None) in weak_names
+            for b in expr.atoms(BosonOp, BosonPat)
+            if not isinstance(b, BosonNum)
+        ):
+            if expr.is_Add:
+                return proc.d_add(*(cls.from_val(arg, proc) for arg in expr.args))
+            if expr.is_Mul:
+                res = cls.from_val(expr.args[0], proc)
+                for arg in expr.args[1:]:
+                    res = res * cls.from_val(arg, proc)
+                return res
+            if expr.is_Pow:
+                return cls.from_val(expr.base, proc) ** expr.exp
+
+        return cls(proc, {(None,): pf(expr, as_dict=None)}, None)
 
     def __bool__(self) -> bool:
         return bool(self.dict_repr)
@@ -125,7 +182,7 @@ class WMWrapper:
 
     def __eq__(self, other) -> bool:
         if not isinstance(other, WMWrapper):
-            return self.__eq__(self.from_val(other))
+            return self.__eq__(self.from_val(other, self.processor))
         if isinstance(other, WMWrapper):
             if self.dc != other.dc:
                 return False
@@ -178,12 +235,9 @@ class WMWrapper:
             return self
         return WMWrapper(self.processor, res, self.b_left if res else None)
 
-    def expand(self, order, sub_g: bool = False, gc=None) -> 'WMWrapper':
+    def expand(self, order) -> 'WMWrapper':
         """Expands this WMWrapper to the given perturbative order."""
-        res = self.apply(lambda p: self.processor.pe.expand_pf(p, order), on_npf=True)
-        if sub_g and gc is not None:
-            return res.apply(lambda t: t.subs({t_: _g / gc}), on_npf=True)
-        return res
+        return self.apply(lambda p: self.processor.pe.expand_pf(p, order), on_npf=True)
 
     def eval_vacuum(self, vac_modes) -> 'WMWrapper':
         """
@@ -217,8 +271,9 @@ class WMWrapper:
         sg = 1 if p.dc else -1
         x_op = MultimodeNum(va, int(p.dc))
 
-        def _collapse(expr, occ=0):
+        def _collapse(expr, occ=S.Zero):
             """Collapses vacuum-field numbers; mode vb_1 holds `occ` quanta."""
+            occ = sympify(occ)  # keep replace() results as sympy objects
             oc = lambda n: occ if n == vb else S.Zero
             _mm = lambda n, d: d * nm + oc(n) if n in vac_sets[1] else MultimodeNum(n, d)
 

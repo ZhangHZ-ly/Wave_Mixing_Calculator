@@ -2,19 +2,19 @@
 // tab3_wm.js - Wave Mixing (WM) Calculation & Assertions
 // ====================================================
 
+function wmMismatchLabel(curProcess, isMismatch) {
+  if (isMismatch) return 'Arbitrary Phase Mismatch';
+  return curProcess === 'fwm' ? 'SPM Compensated (Δk = 2χN₀)' : 'Phase Matched (Δk = 0)';
+}
+
 function onWmProcessChange() {
   const curProcess = getWmProcess();
   const mismatchSelect = document.getElementById('wm-mismatch');
   if (mismatchSelect) {
     const optFalse = mismatchSelect.querySelector('option[value="false"]');
     const optTrue = mismatchSelect.querySelector('option[value="true"]');
-    if (curProcess === 'fwm') {
-      if (optFalse) optFalse.textContent = 'SPM Compensated (Δk = 2χN₀)';
-      if (optTrue) optTrue.textContent = 'Arbitrary Phase Mismatch';
-    } else {
-      if (optFalse) optFalse.textContent = 'Phase Matched (Δk = 0)';
-      if (optTrue) optTrue.textContent = 'Arbitrary Phase Mismatch';
-    }
+    if (optFalse) optFalse.textContent = wmMismatchLabel(curProcess, false);
+    if (optTrue) optTrue.textContent = wmMismatchLabel(curProcess, true);
   }
   onWmPresetChange();
 }
@@ -22,42 +22,32 @@ function onWmProcessChange() {
 function onWmPresetChange() {
   renderWmTable();
   if (activeEditItem && activeWorkspace === 'tab3') {
+    const isOpen = id => document.getElementById(id)?.classList.contains('active');
     const symBody = document.getElementById('sym-details-body');
     const opBody = document.getElementById('op-details-body');
     const renBody = document.getElementById('rename-details-body');
-    if (activeEditItem.type === 'symbol' && symBody && document.getElementById('symbolModal')?.classList.contains('active')) {
+    if (activeEditItem.type === 'symbol' && symBody && isOpen('symbolModal')) {
       renderItemDetailsTable(activeEditItem, symBody, activeWorkspace);
-    } else if ((activeEditItem.type === 'operator' || activeEditItem.type === 'evolved_op') && opBody && document.getElementById('operatorModal')?.classList.contains('active')) {
+    } else if ((activeEditItem.type === 'operator' || activeEditItem.type === 'evolved_op') && opBody && isOpen('operatorModal')) {
       renderItemDetailsTable(activeEditItem, opBody, activeWorkspace);
-    } else if (renBody && document.getElementById('renameModal')?.classList.contains('active')) {
+    } else if (renBody && isOpen('renameModal')) {
       renderItemDetailsTable(activeEditItem, renBody, activeWorkspace);
     }
   }
 
-  const curProcess = getWmProcess();
-  const isMismatch = getWmMismatch();
-  const orderVal = document.getElementById('wm-order') ? document.getElementById('wm-order').value : 1;
-  const useGain = wmUseGain;
-  const isSingleMode = getWmSingleMode();
   const tag = document.getElementById('wm-mode-tag');
   if (tag) {
+    const curProcess = getWmProcess();
     let procText = 'Down-conversion';
     if (curProcess === 'twm_fc') procText = 'Frequency Conversion / State Transfer';
     else if (curProcess === 'fwm') procText = 'Four-Wave Mixing';
 
-    let mismatchText = '';
-    if (curProcess === 'fwm') {
-      mismatchText = isMismatch ? 'Arbitrary Phase Mismatch' : 'SPM Compensated (Δk = 2χN₀)';
-    } else {
-      mismatchText = isMismatch ? 'Arbitrary Phase Mismatch' : 'Phase Matched (Δk = 0)';
-    }
-    const gainText = useGain ? 'gain (g)' : 'time (t)';
-    const modeText = isSingleMode ? 'single-mode' : 'multimode';
-    tag.textContent = `${procText} | ${mismatchText} | order=${orderVal} | ${gainText} | ${modeText}`;
+    const mismatchText = wmMismatchLabel(curProcess, getWmMismatch());
+    const gainText = wmUseGain ? 'gain (g)' : 'time (t)';
+    const modeText = getWmSingleMode() ? 'single-mode' : 'multimode';
+    tag.textContent = `${procText} | ${mismatchText} | order=${getWmOrderValue()} | ${gainText} | ${modeText}`;
   }
-  if (typeof updateAssertLabels === 'function') {
-    updateAssertLabels();
-  }
+  updateAssertLabels();
 }
 
 
@@ -66,51 +56,57 @@ function onWmPresetChange() {
 // ----------------------------------------------------
 let wmUseGain = false;
 
+// LaTeX of a cached time/gain result in the requested representation
+function pickResultLatex(result, useGain) {
+  return useGain ? (result.latex_g || result.latex) : (result.latex_t || result.latex);
+}
+
+function showOutputLatex(output, latex) {
+  output.innerHTML = '';
+  output.classList.remove('error');
+  renderMath(latex, output);
+}
+
+function showOutputError(output, msg) {
+  output.classList.add('error');
+  output.textContent = msg;
+}
+
+function setGainToggleLabel(btnId, useGain) {
+  const btn = document.getElementById(btnId);
+  if (btn) btn.textContent = useGain ? 'Display in terms of time' : 'Display in terms of gain';
+}
+
 function toggleWmGainDisplay() {
   wmUseGain = !wmUseGain;
-  const btn = document.getElementById('wm-gain-toggle-btn');
-  if (btn) {
-    btn.textContent = wmUseGain ? 'Display in terms of time' : 'Display in terms of gain';
-  }
+  setGainToggleLabel('wm-gain-toggle-btn', wmUseGain);
   onWmPresetChange();
   if (cachedWmResult) {
-    currentWmLatex = wmUseGain ? (cachedWmResult.latex_g || cachedWmResult.latex) : (cachedWmResult.latex_t || cachedWmResult.latex);
+    currentWmLatex = pickResultLatex(cachedWmResult, wmUseGain);
     currentWmExpr = wmUseGain ? (cachedWmResult.expr_str_g || cachedWmResult.expr_str) : (cachedWmResult.expr_str_t || cachedWmResult.expr_str);
-    const output = document.getElementById('wm-output');
-    output.innerHTML = '';
-    output.classList.remove('error');
-    katex.render(currentWmLatex, output, { displayMode: true, throwOnError: false });
+    showOutputLatex(document.getElementById('wm-output'), currentWmLatex);
   }
 }
-
-function onWmGainChange() {
-  toggleWmGainDisplay();
-}
-
-let orderWarningResolver = null;
 
 function escapeRegExp(string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function textReferencesName(text, name) {
+  return new RegExp(`\\b${escapeRegExp(name)}\\b`).test(text);
 }
 
 function exprContainsDefaultOperators(exprText, allNamedExprs, visited = new Set()) {
   if (!exprText || typeof exprText !== 'string') return false;
   const defaultOpRegex = /\b(a_0|a_1|a_2|a_p|a_s|a_i|A|N_t|MMN|MMN2)\b/;
   if (defaultOpRegex.test(exprText)) return true;
-  if (allNamedExprs && Array.isArray(allNamedExprs)) {
-    for (const ne of allNamedExprs) {
-      if (!visited.has(ne.name)) {
-        const re = new RegExp(`\\b${escapeRegExp(ne.name)}\\b`);
-        if (re.test(exprText)) {
-          visited.add(ne.name);
-          if (ne.hasDefaultOps === true) return true;
-          const childText = (ne.exprStr_t || ne.exprStr_g || ne.exprStr || ne.sourceInput || ne.latex_t || ne.latex_g || ne.latex || '');
-          if (exprContainsDefaultOperators(childText, allNamedExprs, visited)) {
-            return true;
-          }
-        }
-      }
-    }
+  if (!Array.isArray(allNamedExprs)) return false;
+  for (const ne of allNamedExprs) {
+    if (visited.has(ne.name) || !textReferencesName(exprText, ne.name)) continue;
+    visited.add(ne.name);
+    if (ne.hasDefaultOps === true) return true;
+    const childText = (ne.exprStr_t || ne.exprStr_g || ne.exprStr || ne.sourceInput || ne.latex_t || ne.latex_g || ne.latex || '');
+    if (exprContainsDefaultOperators(childText, allNamedExprs, visited)) return true;
   }
   return false;
 }
@@ -127,7 +123,7 @@ function confirmConditionWarning(conflictList, currentPresetSummary, warningDesc
     if (curEl) curEl.textContent = currentPresetSummary;
     if (descEl && warningDesc) descEl.textContent = warningDesc;
     if (listEl) {
-      listEl.innerHTML = conflictList.map(itemInfo => 
+      listEl.innerHTML = conflictList.map(itemInfo =>
         `<div style="margin-bottom: 0.35rem; color: #991b1b;">` +
         `&bull; <strong>${escapeHtml(itemInfo.item.name)}</strong>: ${escapeHtml(itemInfo.reason)}` +
         `</div>`
@@ -149,27 +145,21 @@ function closeConditionWarningModal(proceed) {
 }
 
 function getReferencedNamedExprs(exprText, allNamedExprs) {
-  const referenced = new Set();
+  const referenced = [];
   const queue = [exprText];
   const visitedNames = new Set();
 
   while (queue.length > 0) {
     const currentText = queue.shift();
     for (const ne of allNamedExprs) {
-      if (!visitedNames.has(ne.name)) {
-        const re = new RegExp(`\\b${escapeRegExp(ne.name)}\\b`);
-        if (re.test(currentText)) {
-          visitedNames.add(ne.name);
-          referenced.add(ne);
-          const childExpr = ne.exprStr_t || ne.exprStr || ne.sourceInput || ne.latex_t || ne.latex;
-          if (childExpr) {
-            queue.push(childExpr);
-          }
-        }
-      }
+      if (visitedNames.has(ne.name) || !textReferencesName(currentText, ne.name)) continue;
+      visitedNames.add(ne.name);
+      referenced.push(ne);
+      const childExpr = ne.exprStr_t || ne.exprStr || ne.sourceInput || ne.latex_t || ne.latex;
+      if (childExpr) queue.push(childExpr);
     }
   }
-  return Array.from(referenced);
+  return referenced;
 }
 
 function collectConditionConflicts(input, curProcess, isSingleMode) {
@@ -184,23 +174,22 @@ function collectConditionConflicts(input, curProcess, isSingleMode) {
 
   for (const item of referencedNamedExprs) {
     for (const [key, rule] of Object.entries(CONDITION_RULES)) {
-      if (rule.checkApplies && rule.checkApplies(item, wmTableItems)) {
-        const presetVal = currentPresets[key];
-        const exprVal = rule.getExprVal ? rule.getExprVal(item) : item[key];
-        if (!evaluateConditionCompatibility(rule, presetVal, exprVal)) {
-          let reason = '';
-          if (key === 'process') {
-            const exprLabel = PROCESS_LABELS[exprVal] || exprVal;
-            const curLabel = PROCESS_LABELS[curProcess] || curProcess;
-            reason = `created under ${exprLabel}, incompatible with current preset (${curLabel})`;
-          } else if (key === 'single_mode') {
-            reason = `created under Single Mode, incompatible with current Multimode preset`;
-          } else {
-            reason = `created under ${key}=${exprVal}, incompatible with current preset (${presetVal})`;
-          }
-          conflicts.push({ item, rule, reason });
-        }
+      if (!rule.checkApplies || !rule.checkApplies(item, wmTableItems)) continue;
+      const presetVal = currentPresets[key];
+      const exprVal = rule.getExprVal ? rule.getExprVal(item) : item[key];
+      if (evaluateConditionCompatibility(rule, presetVal, exprVal)) continue;
+
+      let reason;
+      if (key === 'process') {
+        const exprLabel = PROCESS_LABELS[exprVal] || exprVal;
+        const curLabel = PROCESS_LABELS[curProcess] || curProcess;
+        reason = `created under ${exprLabel}, incompatible with current preset (${curLabel})`;
+      } else if (key === 'single_mode') {
+        reason = `created under Single Mode, incompatible with current Multimode preset`;
+      } else {
+        reason = `created under ${key}=${exprVal}, incompatible with current preset (${presetVal})`;
       }
+      conflicts.push({ item, rule, reason });
     }
   }
   return conflicts;
@@ -251,7 +240,7 @@ function tokenizeExprJs(src) {
       i += numMatch[0].length;
       continue;
     }
-    const idMatch = src.slice(i).match(/^[a-zA-Z_\u0370-\u03FF][a-zA-Z0-9_\u0370-\u03FF]*/);
+    const idMatch = src.slice(i).match(/^[a-zA-Z_Ͱ-Ͽ][a-zA-Z0-9_Ͱ-Ͽ]*/);
     if (idMatch) {
       tokens.push({ type: 'ID', val: idMatch[0] });
       i += idMatch[0].length;
@@ -268,17 +257,17 @@ function parseExprJs(src) {
   if (!tokens || tokens.length === 0) return null;
   let pos = 0;
 
-  function peek() {
-    return pos < tokens.length ? tokens[pos] : null;
-  }
-  function consume() {
-    return tokens[pos++];
-  }
+  const peek = () => (pos < tokens.length ? tokens[pos] : null);
+  const consume = () => tokens[pos++];
+  const peekIs = (type, vals) => {
+    const tok = peek();
+    return !!tok && tok.type === type && (!vals || vals.includes(tok.val));
+  };
 
   function parseAdd() {
     let left = parseMul();
     if (!left) return null;
-    while (peek() && peek().type === 'OP' && (peek().val === '+' || peek().val === '-')) {
+    while (peekIs('OP', '+-')) {
       const op = consume().val;
       const right = parseMul();
       if (!right) return null;
@@ -291,12 +280,13 @@ function parseExprJs(src) {
     let left = parseUnary();
     if (!left) return null;
     while (peek()) {
-      if (peek().type === 'OP' && '*/@'.includes(peek().val)) {
+      if (peekIs('OP', '*/@')) {
         const op = consume().val;
         const right = parseUnary();
         if (!right) return null;
         left = { kind: op === '/' ? 'div' : 'mul', left, right };
       } else if (['ID', 'NUM', 'STR', 'LP'].includes(peek().type)) {
+        // Implicit multiplication by juxtaposition
         const right = parsePow();
         if (!right) return null;
         left = { kind: 'mul', left, right };
@@ -308,7 +298,7 @@ function parseExprJs(src) {
   }
 
   function parseUnary() {
-    if (peek() && peek().type === 'OP' && (peek().val === '+' || peek().val === '-')) {
+    if (peekIs('OP', '+-')) {
       const op = consume().val;
       const operand = parseUnary();
       if (!operand) return null;
@@ -320,7 +310,7 @@ function parseExprJs(src) {
   function parsePow() {
     const base = parsePrimary();
     if (!base) return null;
-    if (peek() && peek().type === 'POW') {
+    if (peekIs('POW')) {
       consume();
       const exp = parseUnary();
       if (!exp) return null;
@@ -332,41 +322,32 @@ function parseExprJs(src) {
   function parsePrimary() {
     const tok = peek();
     if (!tok) return null;
-    if (tok.type === 'NUM') {
+    if (tok.type === 'NUM' || tok.type === 'STR') {
       consume();
-      return { kind: 'num', val: tok.val };
-    }
-    if (tok.type === 'STR') {
-      consume();
-      return { kind: 'str', val: tok.val };
+      return { kind: tok.type === 'NUM' ? 'num' : 'str', val: tok.val };
     }
     if (tok.type === 'ID') {
       consume();
-      if (peek() && peek().type === 'LP') {
-        consume(); // '('
-        const args = [];
-        if (peek() && peek().type !== 'RP') {
-          while (true) {
-            const arg = parseAdd();
-            if (!arg) return null;
-            args.push(arg);
-            if (peek() && peek().type === 'COMMA') {
-              consume();
-            } else {
-              break;
-            }
-          }
+      if (!peekIs('LP')) return { kind: 'id', name: tok.val };
+      consume(); // '('
+      const args = [];
+      if (!peekIs('RP')) {
+        while (true) {
+          const arg = parseAdd();
+          if (!arg) return null;
+          args.push(arg);
+          if (!peekIs('COMMA')) break;
+          consume();
         }
-        if (!peek() || peek().type !== 'RP') return null;
-        consume(); // ')'
-        return { kind: 'call', name: tok.val, args };
       }
-      return { kind: 'id', name: tok.val };
+      if (!peekIs('RP')) return null;
+      consume(); // ')'
+      return { kind: 'call', name: tok.val, args };
     }
     if (tok.type === 'LP') {
       consume();
       const inner = parseAdd();
-      if (!inner || !peek() || peek().type !== 'RP') return null;
+      if (!inner || !peekIs('RP')) return null;
       consume();
       return inner;
     }
@@ -381,17 +362,15 @@ function parseExprJs(src) {
 function evalNumericConstJs(node) {
   if (!node) return null;
   if (node.kind === 'num') return node.val;
-  if (node.kind === 'unary' && node.op === '-') {
+  if (node.kind === 'unary') {
     const v = evalNumericConstJs(node.operand);
-    return v !== null ? -v : null;
-  }
-  if (node.kind === 'unary' && node.op === '+') {
-    return evalNumericConstJs(node.operand);
+    return (v !== null && node.op === '-') ? -v : v;
   }
   return null;
 }
 
 function getFactorInfoJs(node, curProcess) {
+  const EXACT_ZERO = { isExact: true, lo: 0, cat: 'exact', ref: null };
   const isDc = (curProcess !== 'twm_fc');
   const strongLo = (curProcess === 'fwm') ? -0.5 : -1;
   const strongNdLo = 2 * strongLo; // -1 for FWM, -2 for TWM
@@ -404,11 +383,7 @@ function getFactorInfoJs(node, curProcess) {
     }
   }
 
-  if (!node) return { isExact: true, lo: 0, cat: 'exact', ref: null };
-
-  if (node.kind === 'num' || node.kind === 'str') {
-    return { isExact: true, lo: 0, cat: 'exact', ref: null };
-  }
+  if (!node || node.kind === 'num' || node.kind === 'str') return EXACT_ZERO;
 
   if (node.kind === 'unary') {
     return getFactorInfoJs(node.operand, curProcess);
@@ -417,42 +392,35 @@ function getFactorInfoJs(node, curProcess) {
   if (node.kind === 'id') {
     const name = node.name;
     const tableItem = wmTableItems.find(x => x.name === name);
+    const orderOf = item => (typeof item.order === 'number' ? item.order : 0);
     if (tableItem) {
-      if (tableItem.type === 'named_expr') {
-        const lo = (typeof tableItem.leadingOrder === 'number')
-          ? tableItem.leadingOrder
-          : (typeof tableItem.leading_order === 'number' ? tableItem.leading_order : 0);
-        return { isExact: false, lo, cat: 'named_expr', ref: tableItem };
-      }
-      if (tableItem.type === 'evolved_op') {
-        const lo = (tableItem.modeIndex === strongModeIdx) ? strongLo : 0;
-        return { isExact: false, lo, cat: 'evolved_op', ref: tableItem.name };
-      }
-      if (tableItem.type === 'symbol') {
-        const isNlc = (tableItem.builtinKey === 'nlc' || tableItem.name === 'nlc');
-        const lo = isNlc ? 1 : (typeof tableItem.order === 'number' ? tableItem.order : 0);
-        return { isExact: true, lo, cat: 'exact', ref: tableItem.name };
-      }
-      if (tableItem.type === 'operator') {
-        const lo = (typeof tableItem.order === 'number') ? tableItem.order : 0;
-        return { isExact: true, lo, cat: 'exact', ref: tableItem.name };
-      }
-      if (tableItem.type === 'mm_op') {
-        return { isExact: true, lo: 0, cat: 'exact', ref: tableItem.name };
+      switch (tableItem.type) {
+        case 'named_expr': {
+          const lo = (typeof tableItem.leadingOrder === 'number')
+            ? tableItem.leadingOrder
+            : (typeof tableItem.leading_order === 'number' ? tableItem.leading_order : 0);
+          return { isExact: false, lo, cat: 'named_expr', ref: tableItem };
+        }
+        case 'evolved_op':
+          return { isExact: false, lo: (tableItem.modeIndex === strongModeIdx) ? strongLo : 0, cat: 'evolved_op', ref: tableItem.name };
+        case 'symbol': {
+          const isNlc = (tableItem.builtinKey === 'nlc' || tableItem.name === 'nlc');
+          return { isExact: true, lo: isNlc ? 1 : orderOf(tableItem), cat: 'exact', ref: tableItem.name };
+        }
+        case 'operator':
+          return { isExact: true, lo: orderOf(tableItem), cat: 'exact', ref: tableItem.name };
+        case 'mm_op':
+          return { isExact: true, lo: 0, cat: 'exact', ref: tableItem.name };
       }
     }
 
     if (name === 'a_p' || name === 'a_s' || name === 'a_i') {
-      const lo = strongNames.has(name) ? strongLo : 0;
-      return { isExact: false, lo, cat: 'evolved_op', ref: name };
+      return { isExact: false, lo: strongNames.has(name) ? strongLo : 0, cat: 'evolved_op', ref: name };
     }
     if (name === 'nlc' || name === 'chi' || name === 'χ') {
       return { isExact: true, lo: 1, cat: 'exact', ref: name };
     }
-    if (strongNames.has(name)) {
-      return { isExact: true, lo: strongLo, cat: 'exact', ref: name };
-    }
-    return { isExact: true, lo: 0, cat: 'exact', ref: name };
+    return { isExact: true, lo: strongNames.has(name) ? strongLo : 0, cat: 'exact', ref: name };
   }
 
   if (node.kind === 'call') {
@@ -462,29 +430,26 @@ function getFactorInfoJs(node, curProcess) {
     if (['N_', 'BosonNum'].includes(node.name) && node.args.length >= 1) {
       const arg0 = node.args[0];
       const argName = arg0.kind === 'id' ? arg0.name : (arg0.kind === 'str' ? arg0.val : '');
-      const lo = strongNames.has(argName) ? strongNdLo : 0;
-      return { isExact: true, lo, cat: 'exact', ref: null };
+      return { isExact: true, lo: strongNames.has(argName) ? strongNdLo : 0, cat: 'exact', ref: null };
     }
-    return { isExact: true, lo: 0, cat: 'exact', ref: null };
+    return EXACT_ZERO;
   }
 
   if (node.kind === 'pow') {
     const baseInfo = getFactorInfoJs(node.base, curProcess);
     const expVal = evalNumericConstJs(node.exp);
-    const mult = (expVal !== null) ? expVal : 1;
-    return {
-      isExact: baseInfo.isExact,
-      lo: baseInfo.lo * mult,
-      cat: baseInfo.cat,
-      ref: baseInfo.ref
-    };
+    return { ...baseInfo, lo: baseInfo.lo * (expVal !== null ? expVal : 1) };
   }
 
-  return { isExact: true, lo: 0, cat: 'exact', ref: null };
+  return EXACT_ZERO;
 }
 
+// Expand an AST into a sum of products: [[{ node, signMult }, ...], ...]
+// (signMult = -1 marks a factor in a denominator)
 function expandAdditiveProductsJs(node, curProcess) {
   if (!node) return [];
+  const cartesian = (left, right) => left.flatMap(lt => right.map(rt => lt.concat(rt)));
+
   if (node.kind === 'add') {
     return expandAdditiveProductsJs(node.left, curProcess).concat(
       expandAdditiveProductsJs(node.right, curProcess)
@@ -503,13 +468,7 @@ function expandAdditiveProductsJs(node, curProcess) {
     const leftTerms = expandAdditiveProductsJs(node.left, curProcess);
     const rightTerms = expandAdditiveProductsJs(node.right, curProcess);
     if (leftTerms.length * rightTerms.length <= 64) {
-      const res = [];
-      for (const lt of leftTerms) {
-        for (const rt of rightTerms) {
-          res.push(lt.concat(rt));
-        }
-      }
-      return res;
+      return cartesian(leftTerms, rightTerms);
     }
     return [[{ node: node.left, signMult: 1 }, { node: node.right, signMult: 1 }]];
   }
@@ -528,27 +487,14 @@ function expandAdditiveProductsJs(node, curProcess) {
       const baseTerms = expandAdditiveProductsJs(node.base, curProcess);
       if (baseTerms.length === 1) {
         if (baseTerms[0].length > 1) {
-          let repeated = [];
-          for (let k = 0; k < expVal; k++) repeated = repeated.concat(baseTerms[0]);
-          return [repeated];
+          return [Array(expVal).fill(baseTerms[0]).flat()];
         }
-        const info = getFactorInfoJs(node.base, curProcess);
-        if (!info.isExact) {
-          const repeated = [];
-          for (let k = 0; k < expVal; k++) repeated.push({ node: node.base, signMult: 1 });
-          return [repeated];
+        if (!getFactorInfoJs(node.base, curProcess).isExact) {
+          return [Array.from({ length: expVal }, () => ({ node: node.base, signMult: 1 }))];
         }
       } else if (Math.pow(baseTerms.length, expVal) <= 64) {
         let acc = [[]];
-        for (let k = 0; k < expVal; k++) {
-          const next = [];
-          for (const a of acc) {
-            for (const b of baseTerms) {
-              next.push(a.concat(b));
-            }
-          }
-          acc = next;
-        }
+        for (let k = 0; k < expVal; k++) acc = cartesian(acc, baseTerms);
         return acc;
       }
     }
@@ -560,52 +506,37 @@ function checkInsufficientOrderItems(exprText, targetOrder, curProcess) {
   const root = parseExprJs(exprText);
   if (!root) return [];
 
-  const expandedTerms = expandAdditiveProductsJs(root, curProcess);
   const insufficientMap = new Map();
 
-  for (const rawFactors of expandedTerms) {
-    const parsedFactors = [];
-    let totalLoSum = 0;
-    let hasEstimated = false;
-
-    for (const f of rawFactors) {
+  for (const rawFactors of expandAdditiveProductsJs(root, curProcess)) {
+    const parsedFactors = rawFactors.map(f => {
       const info = getFactorInfoJs(f.node, curProcess);
-      const effLo = info.lo * f.signMult;
-      totalLoSum += effLo;
-      if (!info.isExact) hasEstimated = true;
-      parsedFactors.push({ ...info, effLo });
-    }
-
-    if (!hasEstimated) continue;
+      return { ...info, effLo: info.lo * f.signMult };
+    });
+    if (parsedFactors.every(pf => pf.isExact)) continue;
+    const totalLoSum = parsedFactors.reduce((sum, pf) => sum + pf.effLo, 0);
 
     for (const pf of parsedFactors) {
       if (pf.isExact) continue;
-      const otherLoSum = totalLoSum - pf.effLo;
-      const reqRaw = targetOrder - otherLoSum;
+      const reqRaw = targetOrder - (totalLoSum - pf.effLo);
       const requiredOrder = Math.ceil(reqRaw - 1e-12);
 
+      let entry = null;
       if (pf.cat === 'evolved_op' && curProcess === 'fwm' && requiredOrder > 1) {
-        const key = `evolved:${pf.ref}`;
-        const existing = insufficientMap.get(key);
-        if (!existing || existing.requiredOrder < requiredOrder) {
-          insufficientMap.set(key, {
-            name: pf.ref,
-            kind: 'evolved_op',
-            recordedOrder: 1,
-            requiredOrder: requiredOrder
-          });
-        }
+        entry = { key: `evolved:${pf.ref}`, name: pf.ref, kind: 'evolved_op', recordedOrder: 1 };
       } else if (pf.cat === 'named_expr' && pf.ref && typeof pf.ref.order === 'number' && pf.ref.order < reqRaw - 1e-12) {
-        const key = `named:${pf.ref.name}`;
-        const existing = insufficientMap.get(key);
-        if (!existing || existing.requiredOrder < requiredOrder) {
-          insufficientMap.set(key, {
-            name: pf.ref.name,
-            kind: 'named_expr',
-            recordedOrder: pf.ref.order,
-            requiredOrder: requiredOrder
-          });
-        }
+        entry = { key: `named:${pf.ref.name}`, name: pf.ref.name, kind: 'named_expr', recordedOrder: pf.ref.order };
+      }
+      if (!entry) continue;
+
+      const existing = insufficientMap.get(entry.key);
+      if (!existing || existing.requiredOrder < requiredOrder) {
+        insufficientMap.set(entry.key, {
+          name: entry.name,
+          kind: entry.kind,
+          recordedOrder: entry.recordedOrder,
+          requiredOrder: requiredOrder
+        });
       }
     }
   }
@@ -613,23 +544,18 @@ function checkInsufficientOrderItems(exprText, targetOrder, curProcess) {
   return Array.from(insufficientMap.values());
 }
 
+let orderWarningResolver = null;
+
 function confirmOrderWarning(insufficientItems, targetOrder) {
   return new Promise((resolve) => {
     orderWarningResolver = resolve;
     document.getElementById('warn-target-order').textContent = targetOrder;
     const list = document.getElementById('warn-var-list');
     list.innerHTML = insufficientItems.map(item => {
-      if (item.kind === 'evolved_op') {
-        return (
-          `<div style="margin-bottom: 0.35rem; color: #92400e;">` +
-          `&bull; <strong>${escapeHtml(item.name)}</strong> (FWM evolved operator): capped at <strong>Order ${item.recordedOrder}</strong> ` +
-          `(effective requirement in term is <strong>Order ${item.requiredOrder}</strong>, overall target is <strong>Order ${targetOrder}</strong>)` +
-          `</div>`
-        );
-      }
+      const status = item.kind === 'evolved_op' ? ' (FWM evolved operator): capped at' : ': recorded at';
       return (
         `<div style="margin-bottom: 0.35rem; color: #92400e;">` +
-        `&bull; <strong>${escapeHtml(item.name)}</strong>: recorded at <strong>Order ${item.recordedOrder}</strong> ` +
+        `&bull; <strong>${escapeHtml(item.name)}</strong>${status} <strong>Order ${item.recordedOrder}</strong> ` +
         `(effective requirement in term is <strong>Order ${item.requiredOrder}</strong>, overall target is <strong>Order ${targetOrder}</strong>)` +
         `</div>`
       );
@@ -647,42 +573,40 @@ function closeOrderWarningModal(proceed) {
   }
 }
 
-async function runWm() {
+// ----------------------------------------------------
+// Shared Tab 3 calculation flow (combination & assertions)
+// ----------------------------------------------------
+
+// Read and cache the Tab 3 expression input; returns null (with an error shown) if empty
+function readWmSourceInput(output) {
   const input = document.getElementById('wm-input').value.trim();
-  const output = document.getElementById('wm-output');
   output.classList.remove('error');
-
   if (!input) {
-    output.classList.add('error');
-    output.textContent = 'Please enter a combination expression to calculate!';
-    return;
+    showOutputError(output, 'Please enter a combination expression to calculate!');
+    return null;
   }
-
   currentWmSourceInput = input;
   localStorage.setItem('qc_tab3_source_input', input);
+  return input;
+}
 
-  const curProcess = getWmProcess();
-  const isDc = getWmDc();
-  const isMismatch = getWmMismatch();
+// Snapshot the current calculation presets; returns null (with an error shown) if the order is invalid
+function readWmPresets(output) {
   const orderVal = parseInt(document.getElementById('wm-order').value);
-  const useGain = wmUseGain;
-
   if (isNaN(orderVal)) {
-    output.classList.add('error');
-    output.textContent = 'Please enter a valid retained order (integer)!';
-    return;
+    showOutputError(output, 'Please enter a valid retained order (integer)!');
+    return null;
   }
+  return { curProcess: getWmProcess(), isDc: getWmDc(), isMismatch: getWmMismatch(), orderVal };
+}
 
-  onWmPresetChange();
-
-  const isSingleMode = getWmSingleMode();
-
-  // 1. Check condition consistency (process, single_mode, extensible logic rules) for referenced named expressions
-  const conflicts = collectConditionConflicts(input, curProcess, isSingleMode);
-
+// Ask the user to confirm (1) preset-condition conflicts and (2) insufficient accuracy orders of
+// referenced variables. Returns false if the user cancelled.
+async function confirmWmWarnings(input, ctx, output) {
+  const conflicts = collectConditionConflicts(input, ctx.curProcess, ctx.isSingleMode);
   if (conflicts.length > 0) {
-    const procLabel = PROCESS_LABELS[curProcess] || curProcess;
-    const presetSummary = `process=${procLabel}, single_mode=${isSingleMode ? 'True' : 'False'}`;
+    const procLabel = PROCESS_LABELS[ctx.curProcess] || ctx.curProcess;
+    const presetSummary = `process=${procLabel}, single_mode=${ctx.isSingleMode ? 'True' : 'False'}`;
     const proceed = await confirmConditionWarning(
       conflicts,
       presetSummary,
@@ -690,45 +614,68 @@ async function runWm() {
     );
     if (!proceed) {
       output.innerHTML = '<span style="color: var(--text-secondary);">Calculation cancelled due to condition inconsistency.</span>';
-      return;
+      return false;
     }
   }
 
-  // 2. Accuracy protection: check if any custom saved expression or FWM field operator solution has order lower than required
-  const insufficientItems = checkInsufficientOrderItems(input, orderVal, curProcess);
-
+  const insufficientItems = checkInsufficientOrderItems(input, ctx.orderVal, ctx.curProcess);
   if (insufficientItems.length > 0) {
-    const proceed = await confirmOrderWarning(insufficientItems, orderVal);
+    const proceed = await confirmOrderWarning(insufficientItems, ctx.orderVal);
     if (!proceed) {
       output.innerHTML = '<span style="color: var(--text-secondary);">Calculation cancelled due to order inconsistency.</span>';
-      return;
+      return false;
     }
   }
+  return true;
+}
+
+function buildWmRequest(input, ctx, useGain, extra = {}) {
+  const { symbols, operators, mmOperators, namedExprs } = extractWorkspaceDefinitions('tab3');
+  return {
+    text: input,
+    dc: ctx.isDc,
+    process: ctx.curProcess,
+    mismatch: ctx.isMismatch,
+    order: ctx.orderVal,
+    use_gain: useGain,
+    single_mode: ctx.isSingleMode,
+    symbols,
+    operators,
+    mm_operators: mmOperators,
+    named_expressions: namedExprs,
+    ...extra
+  };
+}
+
+// Lazily record a longer TWM solver solution length (drives the evolved-operator accuracy in the table)
+function updateCachedSolLen(ctx, solLen) {
+  if (ctx.curProcess === 'fwm' || typeof solLen !== 'number') return;
+  const solverKey = `${ctx.curProcess}_${ctx.isMismatch}`;
+  if (solLen > (cachedSolverSolLens[solverKey] || 1)) {
+    cachedSolverSolLens[solverKey] = solLen;
+    localStorage.setItem('qc_wm_solver_sol_lens', JSON.stringify(cachedSolverSolLens));
+    renderWmTable();
+  }
+}
+
+async function runWm() {
+  const output = document.getElementById('wm-output');
+  const input = readWmSourceInput(output);
+  if (!input) return;
+
+  const ctx = readWmPresets(output);
+  if (!ctx) return;
+  const useGain = wmUseGain;
+
+  onWmPresetChange();
+  ctx.isSingleMode = getWmSingleMode();
+
+  if (!(await confirmWmWarnings(input, ctx, output))) return;
 
   output.innerHTML = '<span style="color: var(--text-secondary);">Calculating operator combination...</span>';
 
-  const { symbols, operators, mmOperators, namedExprs } = extractWorkspaceDefinitions('tab3');
-
   try {
-    const res = await fetch('/api/combination', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text: input,
-        dc: isDc,
-        process: curProcess,
-        mismatch: isMismatch,
-        order: orderVal,
-        use_gain: useGain,
-        single_mode: isSingleMode,
-        symbols: symbols,
-        operators: operators,
-        mm_operators: mmOperators,
-        named_expressions: namedExprs
-      })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || 'Combination calculation failed');
+    const data = await postJson('/api/combination', buildWmRequest(input, ctx, useGain), 'Combination calculation failed');
 
     cachedWmResult = data;
     cachedWmResult.sourceInput = input;
@@ -736,22 +683,12 @@ async function runWm() {
     currentWmLatex = (wmUseGain ? data.latex_g : data.latex_t) || data.latex || '';
     currentWmExpr = data.expr_str;
 
-    // Lazy update TWM solver sol length for current mixing mode and re-render table
-    if (curProcess !== 'fwm' && typeof data.sol_len === 'number') {
-      const solverKey = `${curProcess}_${isMismatch}`;
-      const prevLen = cachedSolverSolLens[solverKey] || 1;
-      if (data.sol_len > prevLen) {
-        cachedSolverSolLens[solverKey] = data.sol_len;
-        localStorage.setItem('qc_wm_solver_sol_lens', JSON.stringify(cachedSolverSolLens));
-        renderWmTable();
-      }
-    }
+    updateCachedSolLen(ctx, data.sol_len);
 
     output.innerHTML = '';
-    katex.render(currentWmLatex, output, { displayMode: true, throwOnError: false });
+    renderMath(currentWmLatex, output);
   } catch (err) {
-    output.classList.add('error');
-    output.textContent = err.message;
+    showOutputError(output, err.message);
   }
 }
 
@@ -760,8 +697,9 @@ async function runWm() {
 // ----------------------------------------------------
 let assertUseGain = false;
 let currentAssertLatex = '';
-let currentAssertExpr = '';
 let cachedAssertResult = null;
+
+const ASSERT_CHECKBOX_IDS = ['assert-coherent-drive', 'assert-vac-signal', 'assert-vac-other'];
 
 function switchWmSubTab(subTabId) {
   document.querySelectorAll('.subtab-btn').forEach(btn => btn.classList.remove('active'));
@@ -770,14 +708,10 @@ function switchWmSubTab(subTabId) {
   const target = document.getElementById(subTabId);
   if (target) target.classList.add('active');
 
-  if (subTabId === 'wm-sub-defined') {
-    const btn = document.getElementById('subtab-btn-defined');
-    if (btn) btn.classList.add('active');
-  } else if (subTabId === 'wm-sub-assertions') {
-    const btn = document.getElementById('subtab-btn-assertions');
-    if (btn) btn.classList.add('active');
-    updateAssertLabels();
-  }
+  const btnId = { 'wm-sub-defined': 'subtab-btn-defined', 'wm-sub-assertions': 'subtab-btn-assertions' }[subTabId];
+  const btn = btnId && document.getElementById(btnId);
+  if (btn) btn.classList.add('active');
+  if (subTabId === 'wm-sub-assertions') updateAssertLabels();
 }
 
 function updateAssertLabels() {
@@ -787,17 +721,13 @@ function updateAssertLabels() {
   const otherLabelEl = document.getElementById('assert-vac-other-label');
   if (typeof katex !== 'undefined') {
     if (driveLabelEl) {
-      const driveMode = isDc ? 'Pump' : 'Idler';
-      const modeSub = isDc ? '0' : '2';
-      driveLabelEl.innerHTML = `${driveMode} input is in coherent state ${katex.renderToString(`|\\alpha_${modeSub}\\rangle`)}`;
+      driveLabelEl.innerHTML = `${isDc ? 'Pump' : 'Idler'} input is in coherent state ${katex.renderToString(`|\\alpha_${isDc ? '0' : '2'}\\rangle`)}`;
     }
     if (signalLabelEl) {
       signalLabelEl.innerHTML = `Signal input is in vacuum state ${katex.renderToString('|0\\rangle_1')}`;
     }
     if (otherLabelEl) {
-      const otherMode = isDc ? 'Idler' : 'Pump';
-      const modeSub = isDc ? '2' : '0';
-      otherLabelEl.innerHTML = `${otherMode} input is in vacuum state ${katex.renderToString(`|0\\rangle_${modeSub}`)}`;
+      otherLabelEl.innerHTML = `${isDc ? 'Idler' : 'Pump'} input is in vacuum state ${katex.renderToString(`|0\\rangle_${isDc ? '2' : '0'}`)}`;
     }
   }
   updateAssertModeTag();
@@ -809,12 +739,8 @@ function updateAssertModeTag() {
   const curProcess = getWmProcess();
   const isDc = getWmDc();
   const isMismatch = getWmMismatch();
-  const orderVal = document.getElementById('wm-order') ? document.getElementById('wm-order').value : 1;
-  const isSingleMode = getWmSingleMode();
-
-  const chkDrive = document.getElementById('assert-coherent-drive') && document.getElementById('assert-coherent-drive').checked;
-  const chkSignal = document.getElementById('assert-vac-signal') && document.getElementById('assert-vac-signal').checked;
-  const chkOther = document.getElementById('assert-vac-other') && document.getElementById('assert-vac-other').checked;
+  const orderVal = getWmOrderValue();
+  const [chkDrive, chkSignal, chkOther] = ASSERT_CHECKBOX_IDS.map(isChecked);
 
   const conds = [];
   if (chkDrive) conds.push(isDc ? '|α₀⟩' : '|α₂⟩');
@@ -829,19 +755,14 @@ function updateAssertModeTag() {
 
   const condStr = '[' + conds.join(', ') + ']';
   const procText = PROCESS_LABELS[curProcess] || 'Down-conversion';
-  let mismatchText = '';
-  if (curProcess === 'fwm') {
-    mismatchText = isMismatch ? 'Δk ≠ 2χ|α₀|²' : 'Δk = 2χ|α₀|²';
-    if (!chkDrive) {
-      mismatchText = isMismatch ? 'Δk ≠ 2χN₀' : 'Δk = 2χN₀';
-    }
-  } else {
-    mismatchText = isMismatch ? 'Δk ≠ 0' : 'Δk = 0';
-  }
-  const gainText = assertUseGain ? 'gain (g)' : 'time (t)';
-  const modeText = isSingleMode ? 'single-mode' : 'multimode';
 
   if (cachedAssertResult) {
+    const rel = isMismatch ? '≠' : '=';
+    const mismatchText = (curProcess === 'fwm')
+      ? `Δk ${rel} 2χ${chkDrive ? '|α₀|²' : 'N₀'}`
+      : `Δk ${rel} 0`;
+    const gainText = assertUseGain ? 'gain (g)' : 'time (t)';
+    const modeText = getWmSingleMode() ? 'single-mode' : 'multimode';
     tag.className = 'badge badge-success';
     tag.textContent = `${condStr} | ${procText} | ${mismatchText} | order=${orderVal} | ${gainText} | ${modeText}`;
   } else {
@@ -852,32 +773,22 @@ function updateAssertModeTag() {
 
 function toggleAssertGainDisplay() {
   assertUseGain = !assertUseGain;
-  const btn = document.getElementById('assert-gain-toggle-btn');
-  if (btn) {
-    btn.textContent = assertUseGain ? 'Display in terms of time' : 'Display in terms of gain';
-  }
+  setGainToggleLabel('assert-gain-toggle-btn', assertUseGain);
   updateAssertModeTag();
   if (cachedAssertResult) {
-    currentAssertLatex = assertUseGain ? (cachedAssertResult.latex_g || cachedAssertResult.latex) : (cachedAssertResult.latex_t || cachedAssertResult.latex);
-    currentAssertExpr = assertUseGain ? (cachedAssertResult.expr_str_g || cachedAssertResult.expr_str) : (cachedAssertResult.expr_str_t || cachedAssertResult.expr_str);
-    const output = document.getElementById('assert-output');
-    output.innerHTML = '';
-    output.classList.remove('error');
-    katex.render(currentAssertLatex, output, { displayMode: true, throwOnError: false });
+    currentAssertLatex = pickResultLatex(cachedAssertResult, assertUseGain);
+    showOutputLatex(document.getElementById('assert-output'), currentAssertLatex);
   }
 }
 
 function clearWmAssertions() {
-  const chkDrive = document.getElementById('assert-coherent-drive');
-  const chkSignal = document.getElementById('assert-vac-signal');
-  const chkOther = document.getElementById('assert-vac-other');
-  if (chkDrive) chkDrive.checked = false;
-  if (chkSignal) chkSignal.checked = false;
-  if (chkOther) chkOther.checked = false;
+  for (const id of ASSERT_CHECKBOX_IDS) {
+    const el = document.getElementById(id);
+    if (el) el.checked = false;
+  }
 
   cachedAssertResult = null;
   currentAssertLatex = '';
-  currentAssertExpr = '';
 
   const output = document.getElementById('assert-output');
   if (output) {
@@ -888,119 +799,40 @@ function clearWmAssertions() {
 }
 
 async function runWmAssertions() {
-  const input = document.getElementById('wm-input').value.trim();
   const output = document.getElementById('assert-output');
-  output.classList.remove('error');
+  const input = readWmSourceInput(output);
+  if (!input) return;
 
-  if (!input) {
-    output.classList.add('error');
-    output.textContent = 'Please enter a combination expression to calculate!';
-    return;
-  }
-
-  currentWmSourceInput = input;
-  localStorage.setItem('qc_tab3_source_input', input);
-
-  const coherentDrive = document.getElementById('assert-coherent-drive') && document.getElementById('assert-coherent-drive').checked;
-  const vacSignal = document.getElementById('assert-vac-signal') && document.getElementById('assert-vac-signal').checked;
-  const vacOther = document.getElementById('assert-vac-other') && document.getElementById('assert-vac-other').checked;
-
+  const [coherentDrive, vacSignal, vacOther] = ASSERT_CHECKBOX_IDS.map(isChecked);
   if (!coherentDrive && !vacSignal && !vacOther) {
-    output.classList.add('error');
-    output.textContent = 'Please select at least one assertion condition (e.g. coherent drive, vacuum signal, or vacuum idler/pump)!';
+    showOutputError(output, 'Please select at least one assertion condition (e.g. coherent drive, vacuum signal, or vacuum idler/pump)!');
     return;
   }
 
-  const curProcess = getWmProcess();
-  const isDc = getWmDc();
-  const isMismatch = getWmMismatch();
-  const orderVal = parseInt(document.getElementById('wm-order').value);
+  const ctx = readWmPresets(output);
+  if (!ctx) return;
+  ctx.isSingleMode = getWmSingleMode();
 
-  if (isNaN(orderVal)) {
-    output.classList.add('error');
-    output.textContent = 'Please enter a valid retained order (integer)!';
-    return;
-  }
-
-  const isSingleMode = getWmSingleMode();
-
-  // 1. Check condition consistency (process, single_mode, extensible logic rules) for referenced named expressions
-  const conflicts = collectConditionConflicts(input, curProcess, isSingleMode);
-
-  if (conflicts.length > 0) {
-    const procLabel = PROCESS_LABELS[curProcess] || curProcess;
-    const presetSummary = `process=${procLabel}, single_mode=${isSingleMode ? 'True' : 'False'}`;
-    const proceed = await confirmConditionWarning(
-      conflicts,
-      presetSummary,
-      'Referenced variable(s) were created under presets mathematically incompatible with current calculation settings. Continuing may yield inconsistent results.'
-    );
-    if (!proceed) {
-      output.innerHTML = '<span style="color: var(--text-secondary);">Calculation cancelled due to condition inconsistency.</span>';
-      return;
-    }
-  }
-
-  // 2. Accuracy protection: check if any custom saved expression or FWM field operator solution has order lower than required
-  const insufficientItems = checkInsufficientOrderItems(input, orderVal, curProcess);
-
-  if (insufficientItems.length > 0) {
-    const proceed = await confirmOrderWarning(insufficientItems, orderVal);
-    if (!proceed) {
-      output.innerHTML = '<span style="color: var(--text-secondary);">Calculation cancelled due to order inconsistency.</span>';
-      return;
-    }
-  }
+  if (!(await confirmWmWarnings(input, ctx, output))) return;
 
   output.innerHTML = '<span style="color: var(--text-secondary);">Calculating expression under assertions...</span>';
 
-  const { symbols, operators, mmOperators, namedExprs } = extractWorkspaceDefinitions('tab3');
-
   try {
-    const res = await fetch('/api/combination/assert', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text: input,
-        dc: isDc,
-        process: curProcess,
-        mismatch: isMismatch,
-        order: orderVal,
-        use_gain: assertUseGain,
-        single_mode: isSingleMode,
-        symbols: symbols,
-        operators: operators,
-        mm_operators: mmOperators,
-        named_expressions: namedExprs,
-        coherent_drive: coherentDrive,
-        vacuum_signal: vacSignal,
-        vacuum_other_weak: vacOther
-      })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || 'Assertion calculation failed');
+    const data = await postJson('/api/combination/assert', buildWmRequest(input, ctx, assertUseGain, {
+      coherent_drive: coherentDrive,
+      vacuum_signal: vacSignal,
+      vacuum_other_weak: vacOther
+    }), 'Assertion calculation failed');
 
     cachedAssertResult = data;
     currentAssertLatex = (assertUseGain ? data.latex_g : data.latex_t) || data.latex || '';
-    currentAssertExpr = data.expr_str;
 
-    if (curProcess !== 'fwm' && typeof data.sol_len === 'number') {
-      const solverKey = `${curProcess}_${isMismatch}`;
-      const prevLen = cachedSolverSolLens[solverKey] || 1;
-      if (data.sol_len > prevLen) {
-        cachedSolverSolLens[solverKey] = data.sol_len;
-        localStorage.setItem('qc_wm_solver_sol_lens', JSON.stringify(cachedSolverSolLens));
-        renderWmTable();
-      }
-    }
+    updateCachedSolLen(ctx, data.sol_len);
 
     output.innerHTML = '';
-    katex.render(currentAssertLatex, output, { displayMode: true, throwOnError: false });
+    renderMath(currentAssertLatex, output);
     updateAssertModeTag();
   } catch (err) {
-    output.classList.add('error');
-    output.textContent = err.message;
+    showOutputError(output, err.message);
   }
 }
-
-

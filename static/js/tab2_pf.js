@@ -10,7 +10,7 @@ async function runPf(useRem) {
   const modeTag = document.getElementById('pf-mode-tag');
   const remainderContainer = document.getElementById('pf-remainder-container');
   const remainderOutput = document.getElementById('pf-remainder-output');
-  
+
   output.classList.remove('error');
   if (!input) {
     output.classList.add('error');
@@ -28,34 +28,26 @@ async function runPf(useRem) {
   const { symbols, operators, namedExprs } = extractWorkspaceDefinitions('tab2');
 
   try {
-    const res = await fetch('/api/pf_form', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text: input,
-        symbols: symbols,
-        operators: operators,
-        named_expressions: namedExprs,
-        use_rem: useRem
-      })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || 'Calculation failed');
+    const data = await postJson('/api/pf_form', {
+      text: input,
+      symbols,
+      operators,
+      named_expressions: namedExprs,
+      use_rem: useRem
+    }, 'Calculation failed');
 
     currentPfLatex = data.latex;
     currentPfExpr = data.expr_str;
-    currentPfSourceInput = input;
     output.innerHTML = '';
-    katex.render(data.latex, output, { displayMode: true, throwOnError: false });
+    renderMath(data.latex, output);
 
     const remLatex = data.remainder_latex;
-    const remStr = data.remainder_str;
     if (useRem && remLatex !== null && remLatex !== undefined) {
       currentPfRemainderLatex = remLatex;
-      currentPfRemainderExpr = remStr || '';
+      currentPfRemainderExpr = data.remainder_str || '';
       remainderContainer.style.display = 'block';
       remainderOutput.innerHTML = '';
-      katex.render(remLatex, remainderOutput, { displayMode: true, throwOnError: false });
+      renderMath(remLatex, remainderOutput);
     } else {
       remainderContainer.style.display = 'none';
       currentPfRemainderLatex = '';
@@ -67,6 +59,3 @@ async function runPf(useRem) {
     remainderContainer.style.display = 'none';
   }
 }
-
-// Backwards compatibility aliases
-window.runPatternForm = runPf;

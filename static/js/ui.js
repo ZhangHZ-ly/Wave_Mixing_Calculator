@@ -5,14 +5,11 @@
 function switchTab(tabId) {
   document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(panel => panel.classList.remove('active'));
-  
-  let targetId = tabId;
-  if (tabId === 'tab-pattern') targetId = 'tab-pf';
-  if (tabId === 'tab-combined') targetId = 'tab-wm';
-  const targetPanel = document.getElementById(targetId);
+
+  const targetPanel = document.getElementById(tabId);
   if (targetPanel) targetPanel.classList.add('active');
-  
-  const activeBtn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.getAttribute('onclick').includes(targetId));
+
+  const activeBtn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.getAttribute('onclick').includes(tabId));
   if (activeBtn) activeBtn.classList.add('active');
 }
 
@@ -42,6 +39,36 @@ function escapeHtml(str) {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// Render a LaTeX string as display math into an element
+function renderMath(latex, el) {
+  katex.render(latex, el, { displayMode: true, throwOnError: false });
+}
+
+// POST a JSON body and return the parsed response; throws with the backend detail on failure
+async function postJson(url, body, errorMsg) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || errorMsg);
+  return data;
+}
+
+function isChecked(id) {
+  const el = document.getElementById(id);
+  return !!(el && el.checked);
+}
+
+function closeDropdowns() {
+  document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
+}
+
+function isOnButton(e) {
+  return !!(e && e.target && e.target.closest && e.target.closest('button, .btn-group'));
+}
+
 
 // Row Floating Tooltip Handling
 // ----------------------------------------------------
@@ -51,13 +78,13 @@ function showRowTooltip(content, hint, e, note = '') {
   const tooltipEl = document.getElementById('rowTooltip');
   if (!tooltipEl) return;
   if (draggedRow || document.querySelector('.draggable-row.dragging')) return;
-  if (e && e.target && e.target.closest && e.target.closest('button, .btn-group')) {
+  if (isOnButton(e)) {
     hideRowTooltip();
     return;
   }
   clearTimeout(tooltipTimer);
   tooltipTimer = setTimeout(() => {
-    if (e && e.target && e.target.closest && e.target.closest('button, .btn-group')) return;
+    if (isOnButton(e)) return;
     let html = '';
     if (content) {
       html += `<div>${escapeHtml(content)}</div>`;
@@ -80,7 +107,7 @@ function showRowTooltip(content, hint, e, note = '') {
 }
 
 function moveRowTooltip(e) {
-  if (draggedRow || document.querySelector('.draggable-row.dragging') || (e && e.target && e.target.closest && e.target.closest('button, .btn-group'))) {
+  if (draggedRow || document.querySelector('.draggable-row.dragging') || isOnButton(e)) {
     hideRowTooltip();
     return;
   }
@@ -118,11 +145,11 @@ function hideRowTooltip() {
 
 function attachRowTooltip(tr, content, hint = 'Click to edit', note = '') {
   tr.addEventListener('mouseenter', (e) => {
-    if (e.target && e.target.closest && e.target.closest('button, .btn-group')) return;
+    if (isOnButton(e)) return;
     showRowTooltip(content, hint, e, note);
   });
   tr.addEventListener('mousemove', (e) => {
-    if (e.target && e.target.closest && e.target.closest('button, .btn-group')) {
+    if (isOnButton(e)) {
       hideRowTooltip();
       return;
     }
@@ -133,9 +160,7 @@ function attachRowTooltip(tr, content, hint = 'Click to edit', note = '') {
       moveRowTooltip(e);
     }
   });
-  tr.addEventListener('mouseleave', () => {
-    hideRowTooltip();
-  });
+  tr.addEventListener('mouseleave', hideRowTooltip);
 }
 
 // ----------------------------------------------------
@@ -189,36 +214,33 @@ function stopAutoScrollLoop() {
   autoScrollWindowDeltaY = 0;
 }
 
+// Remove drop indicators from every row except `keep`
+function clearDropIndicators(keep = null) {
+  document.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(row => {
+    if (row !== keep) row.classList.remove('drag-over-top', 'drag-over-bottom');
+  });
+}
+
+// Show the drop indicator line above (isAbove) or below a single row
+function markDropRow(row, isAbove) {
+  clearDropIndicators(row);
+  row.classList.toggle('drag-over-top', isAbove);
+  row.classList.toggle('drag-over-bottom', !isAbove);
+}
+
 function updateDragTargetIndicator(x, y) {
   if (!draggedRow || !draggedWs) return;
   const el = document.elementFromPoint(x, y);
-  if (!el) {
-    document.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(row => {
-      row.classList.remove('drag-over-top', 'drag-over-bottom');
-    });
-    currentDropTarget = null;
-    return;
-  }
-
   const container = draggedRow.closest('.table-responsive');
-  if (!container || !container.contains(el)) {
-    document.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(row => {
-      row.classList.remove('drag-over-top', 'drag-over-bottom');
-    });
+  if (!el || !container || !container.contains(el)) {
+    clearDropIndicators();
     currentDropTarget = null;
     return;
   }
 
-  const thead = el.closest('thead');
-  if (thead) {
+  if (el.closest('thead')) {
     const firstRow = container.querySelector('tbody tr.draggable-row');
-    if (firstRow && firstRow !== draggedRow) {
-      document.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(row => {
-        if (row !== firstRow) row.classList.remove('drag-over-top', 'drag-over-bottom');
-      });
-      firstRow.classList.add('drag-over-top');
-      firstRow.classList.remove('drag-over-bottom');
-    }
+    if (firstRow && firstRow !== draggedRow) markDropRow(firstRow, true);
     currentDropTarget = { position: 'top' };
     return;
   }
@@ -227,32 +249,22 @@ function updateDragTargetIndicator(x, y) {
   if (tr && tr !== draggedRow) {
     const rect = tr.getBoundingClientRect();
     const isAbove = y < (rect.top + rect.height / 2);
-    document.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(row => {
-      if (row !== tr) row.classList.remove('drag-over-top', 'drag-over-bottom');
-    });
-    if (isAbove) {
-      tr.classList.add('drag-over-top');
-      tr.classList.remove('drag-over-bottom');
-    } else {
-      tr.classList.add('drag-over-bottom');
-      tr.classList.remove('drag-over-top');
-    }
+    markDropRow(tr, isAbove);
     currentDropTarget = { position: 'row', tr: tr, isAbove: isAbove };
     return;
   }
 
   if (el.closest('tbody') || el === container) {
     const lastRow = container.querySelector('tbody tr.draggable-row:last-child');
-    if (lastRow && lastRow !== draggedRow) {
-      document.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(row => {
-        if (row !== lastRow) row.classList.remove('drag-over-top', 'drag-over-bottom');
-      });
-      lastRow.classList.add('drag-over-bottom');
-      lastRow.classList.remove('drag-over-top');
-    }
+    if (lastRow && lastRow !== draggedRow) markDropRow(lastRow, false);
     currentDropTarget = { position: 'bottom' };
-    return;
   }
+}
+
+// Auto-scroll speed (px/frame) that grows as the pointer moves `depth` px into an edge band of width `margin`
+function edgeScrollSpeed(depth, margin) {
+  const factor = Math.min(1, Math.max(0, depth / margin));
+  return Math.round(4 + factor * 14);
 }
 
 function handleDragAutoScroll(e) {
@@ -264,38 +276,27 @@ function handleDragAutoScroll(e) {
   lastDragX = e.clientX;
   lastDragY = e.clientY;
 
+  autoScrollDeltaY = 0;
   const container = draggedRow.closest('.table-responsive');
   if (container) {
     const rect = container.getBoundingClientRect();
     const margin = 45;
     const isHorizNear = e.clientX >= rect.left - 30 && e.clientX <= rect.right + 30;
 
-    if (isHorizNear) {
-      if (e.clientY >= rect.top - 20 && e.clientY <= rect.top + margin) {
-        const factor = Math.min(1, Math.max(0, (rect.top + margin - e.clientY) / margin));
-        autoScrollDeltaY = -Math.round(4 + factor * 14);
-        autoScrollContainer = container;
-      } else if (e.clientY >= rect.bottom - margin && e.clientY <= rect.bottom + 20) {
-        const factor = Math.min(1, Math.max(0, (e.clientY - (rect.bottom - margin)) / margin));
-        autoScrollDeltaY = Math.round(4 + factor * 14);
-        autoScrollContainer = container;
-      } else {
-        autoScrollDeltaY = 0;
-      }
-    } else {
-      autoScrollDeltaY = 0;
+    if (isHorizNear && e.clientY >= rect.top - 20 && e.clientY <= rect.top + margin) {
+      autoScrollDeltaY = -edgeScrollSpeed(rect.top + margin - e.clientY, margin);
+      autoScrollContainer = container;
+    } else if (isHorizNear && e.clientY >= rect.bottom - margin && e.clientY <= rect.bottom + 20) {
+      autoScrollDeltaY = edgeScrollSpeed(e.clientY - (rect.bottom - margin), margin);
+      autoScrollContainer = container;
     }
-  } else {
-    autoScrollDeltaY = 0;
   }
 
   const winMargin = 50;
   if (e.clientY >= 0 && e.clientY < winMargin) {
-    const factor = Math.min(1, Math.max(0, (winMargin - e.clientY) / winMargin));
-    autoScrollWindowDeltaY = -Math.round(4 + factor * 14);
+    autoScrollWindowDeltaY = -edgeScrollSpeed(winMargin - e.clientY, winMargin);
   } else if (e.clientY > window.innerHeight - winMargin) {
-    const factor = Math.min(1, Math.max(0, (e.clientY - (window.innerHeight - winMargin)) / winMargin));
-    autoScrollWindowDeltaY = Math.round(4 + factor * 14);
+    autoScrollWindowDeltaY = edgeScrollSpeed(e.clientY - (window.innerHeight - winMargin), winMargin);
   } else {
     autoScrollWindowDeltaY = 0;
   }
@@ -314,13 +315,12 @@ window.addEventListener('wheel', (e) => {
     container.scrollTop += e.deltaY;
     if (container.scrollTop !== prev) {
       e.preventDefault();
-      if (typeof lastDragX === 'number' && typeof lastDragY === 'number') {
-        updateDragTargetIndicator(lastDragX, lastDragY);
-      }
-      return;
+    } else {
+      window.scrollBy(0, e.deltaY);
     }
+  } else {
+    window.scrollBy(0, e.deltaY);
   }
-  window.scrollBy(0, e.deltaY);
   if (typeof lastDragX === 'number' && typeof lastDragY === 'number') {
     updateDragTargetIndicator(lastDragX, lastDragY);
   }
@@ -358,43 +358,26 @@ window.addEventListener('mouseup', () => {
       const sourceId = draggedRow.dataset.id;
       const fromIndex = arr.findIndex(x => x.id === sourceId);
 
-      if (fromIndex !== -1) {
-        if (currentDropTarget.position === 'row' && currentDropTarget.tr) {
-          const targetId = currentDropTarget.tr.dataset.id;
-          let toIndex = arr.findIndex(x => x.id === targetId);
-          if (toIndex !== -1 && sourceId !== targetId) {
-            const [movedItem] = arr.splice(fromIndex, 1);
-            toIndex = arr.findIndex(x => x.id === targetId);
-            if (!currentDropTarget.isAbove) {
-              toIndex++;
-            }
-            arr.splice(toIndex, 0, movedItem);
-            saveWorkspaceToStorage(draggedWs);
-          }
-        } else if (currentDropTarget.position === 'top') {
-          if (fromIndex !== 0) {
-            const [movedItem] = arr.splice(fromIndex, 1);
-            arr.unshift(movedItem);
-            saveWorkspaceToStorage(draggedWs);
-          }
-        } else if (currentDropTarget.position === 'bottom') {
-          if (fromIndex !== arr.length - 1) {
-            const [movedItem] = arr.splice(fromIndex, 1);
-            arr.push(movedItem);
-            saveWorkspaceToStorage(draggedWs);
-          }
-        }
+      const { position, tr, isAbove } = currentDropTarget;
+      const targetId = (position === 'row' && tr) ? tr.dataset.id : null;
+      const isValidTarget = position === 'top' || position === 'bottom'
+        || (targetId !== null && targetId !== sourceId && arr.some(x => x.id === targetId));
+
+      if (fromIndex !== -1 && isValidTarget) {
+        const [movedItem] = arr.splice(fromIndex, 1);
+        let toIndex = 0;
+        if (position === 'bottom') toIndex = arr.length;
+        else if (position === 'row') toIndex = arr.findIndex(x => x.id === targetId) + (isAbove ? 0 : 1);
+        arr.splice(toIndex, 0, movedItem);
+        // Only persist & re-render when the order actually changed
+        if (toIndex !== fromIndex) saveWorkspaceToStorage(draggedWs);
       }
     }
 
     stopAutoScrollLoop();
     document.body.classList.remove('row-dragging');
-    document.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(el => {
-      el.classList.remove('drag-over-top', 'drag-over-bottom');
-    });
-    if (draggedRow) {
-      draggedRow.classList.remove('dragging');
-    }
+    clearDropIndicators();
+    draggedRow.classList.remove('dragging');
     draggedRow = null;
     draggedWs = null;
     currentDropTarget = null;
@@ -445,11 +428,7 @@ function makeRowDraggable(tr, ws) {
       tr.style.cursor = '';
       return;
     }
-    if (isEventNearText(e, 8)) {
-      tr.style.cursor = 'text';
-    } else {
-      tr.style.cursor = 'pointer';
-    }
+    tr.style.cursor = isEventNearText(e, 8) ? 'text' : 'pointer';
   });
 
   tr.addEventListener('mousedown', (e) => {
@@ -474,11 +453,6 @@ function toggleDropdown(id) {
   const dd = document.getElementById(id);
   dd.classList.toggle('open');
 }
-window.addEventListener('click', (e) => {
-  if (!e.target.closest('.dropdown')) {
-    document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
-  }
-});
 
 
 // Context Menu Handling
@@ -500,7 +474,9 @@ function showContextMenu(e, item, ws) {
   menu.style.top = `${Math.min(e.clientY, window.innerHeight - 190)}px`;
 }
 
-window.addEventListener('click', () => {
+// Any click outside a dropdown closes open dropdowns; any click hides the context menu
+window.addEventListener('click', (e) => {
+  if (!e.target.closest('.dropdown')) closeDropdowns();
   const menu = document.getElementById('contextMenu');
   if (menu) menu.style.display = 'none';
 });

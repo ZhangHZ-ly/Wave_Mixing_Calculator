@@ -49,13 +49,8 @@ function renderStaticMath(root = document.body) {
 // Initialization
 document.addEventListener('DOMContentLoaded', () => {
   renderTable();
-  const isMismatch = getWmMismatch();
-  if (!isMismatch) {
-    const pmIdx = wmTableItems.findIndex(x => x.builtinKey === 'pm' || (x.type === 'symbol' && x.name === 'pm'));
-    if (pmIdx !== -1) {
-      wmTableItems.splice(pmIdx, 1);
-      saveWmTableItemsToStorage();
-    }
+  if (!getWmMismatch() && removePmFromWmTable()) {
+    saveWmTableItemsToStorage();
   }
   renderWmTable();
   onModeTypeChange();
@@ -64,61 +59,38 @@ document.addEventListener('DOMContentLoaded', () => {
   renderStaticMath();
 
   // Restore & wire separately cached source inputs for Tab 2 and Tab 3
-  const cachedPfInput = localStorage.getItem('qc_tab2_source_input');
-  const pfInputEl = document.getElementById('pf-input');
-  if (cachedPfInput && pfInputEl && !pfInputEl.value) {
-    pfInputEl.value = cachedPfInput;
-  }
-  if (pfInputEl) {
-    pfInputEl.addEventListener('input', () => {
-      const v = pfInputEl.value.trim();
+  const sourceInputs = [
+    { id: 'pf-input', key: 'qc_tab2_source_input', setCurrent: v => { currentPfSourceInput = v; } },
+    { id: 'wm-input', key: 'qc_tab3_source_input', setCurrent: v => { currentWmSourceInput = v; } }
+  ];
+  for (const { id, key, setCurrent } of sourceInputs) {
+    const inputEl = document.getElementById(id);
+    if (!inputEl) continue;
+    const cached = localStorage.getItem(key);
+    if (cached && !inputEl.value) inputEl.value = cached;
+    inputEl.addEventListener('input', () => {
+      const v = inputEl.value.trim();
       if (v) {
-        currentPfSourceInput = v;
-        localStorage.setItem('qc_tab2_source_input', v);
+        setCurrent(v);
+        localStorage.setItem(key, v);
       }
     });
   }
 
-  const cachedWmInput = localStorage.getItem('qc_tab3_source_input');
-  const wmInputEl = document.getElementById('wm-input');
-  if (cachedWmInput && wmInputEl && !wmInputEl.value) {
-    wmInputEl.value = cachedWmInput;
-  }
-  if (wmInputEl) {
-    wmInputEl.addEventListener('input', () => {
-      const v = wmInputEl.value.trim();
-      if (v) {
-        currentWmSourceInput = v;
-        localStorage.setItem('qc_tab3_source_input', v);
-      }
-    });
-  }
-
-  const symOrderInput = document.getElementById('sym-order');
-  if (symOrderInput) {
-    symOrderInput.addEventListener('input', function() {
-      if (activeEditItem && !activeEditItem.builtinKey && !['nlc', 'pm'].includes(activeEditItem.name)) {
-        const val = parseFloat(this.value);
-        activeEditItem.order = isNaN(val) ? 0 : val;
-        const detailsBody = document.getElementById('sym-details-body');
-        if (detailsBody) {
-          renderItemDetailsTable(activeEditItem, detailsBody, activeWorkspace);
-        }
-      }
-    });
-  }
-
-  const opOrderInput = document.getElementById('op-order');
-  if (opOrderInput) {
-    opOrderInput.addEventListener('input', function() {
-      if (activeEditItem && activeEditItem.type === 'operator' && activeEditItem.kind === 'boson') {
-        const val = parseFloat(this.value);
-        activeEditItem.order = isNaN(val) ? 0 : val;
-        const detailsBody = document.getElementById('op-details-body');
-        if (detailsBody) {
-          renderItemDetailsTable(activeEditItem, detailsBody, activeWorkspace);
-        }
-      }
+  // Live-update the edited item's leading order (and its details table) from the modal order inputs
+  const orderInputs = [
+    { id: 'sym-order', detailsId: 'sym-details-body', isEditable: item => !isBuiltinSymbol(item) },
+    { id: 'op-order', detailsId: 'op-details-body', isEditable: item => item.type === 'operator' && item.kind === 'boson' }
+  ];
+  for (const { id, detailsId, isEditable } of orderInputs) {
+    const inputEl = document.getElementById(id);
+    if (!inputEl) continue;
+    inputEl.addEventListener('input', () => {
+      if (!activeEditItem || !isEditable(activeEditItem)) return;
+      const val = parseFloat(inputEl.value);
+      activeEditItem.order = isNaN(val) ? 0 : val;
+      const detailsBody = document.getElementById(detailsId);
+      if (detailsBody) renderItemDetailsTable(activeEditItem, detailsBody, activeWorkspace);
     });
   }
 });

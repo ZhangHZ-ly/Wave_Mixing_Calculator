@@ -38,6 +38,33 @@ function normalizeWmProcess(proc, dc) {
   return 'twm_dc';
 }
 
+// Mixing process a saved item was created under (legacy items only carry a boolean `dc`)
+function itemProcess(item, fallback = null) {
+  if (item.process) return item.process;
+  if (typeof item.dc === 'boolean') return item.dc ? 'twm_dc' : 'twm_fc';
+  return fallback;
+}
+
+// Whether a saved expression (transitively) references the default wave-mixing operators
+function itemHasDefaultOps(item, allItems = wmTableItems) {
+  return (typeof item.hasDefaultOps === 'boolean')
+    ? item.hasDefaultOps
+    : exprContainsDefaultOperators(item.latex_t || item.latex_g || item.latex || '', allItems);
+}
+
+// Built-in parametric symbols (nlc, pm) have fixed orders and cannot be edited
+function isBuiltinSymbol(item) {
+  return !!item.builtinKey || ['nlc', 'pm'].includes(item.name);
+}
+
+function isPmItem(item) {
+  return item.builtinKey === 'pm' || (item.type === 'symbol' && item.name === 'pm');
+}
+
+function deepClone(obj) {
+  return JSON.parse(JSON.stringify(obj));
+}
+
 // Default interactive table entries for Tab 2
 const DEFAULT_TABLE_ITEMS = [
   { id: '1', type: 'operator', kind: 'boson', name: 'a', displayName: 'a', notes: 'Default boson mode' },
@@ -58,7 +85,7 @@ const DEFAULT_WM_TABLE_ITEMS = [
 
 let tableItems = JSON.parse(localStorage.getItem('qc_table_items_en') || 'null');
 if (!tableItems || !tableItems.length) {
-  tableItems = JSON.parse(JSON.stringify(DEFAULT_TABLE_ITEMS));
+  tableItems = deepClone(DEFAULT_TABLE_ITEMS);
   saveTableItemsToStorage();
 } else {
   let tableUpdated = false;
@@ -80,7 +107,7 @@ let wmTableItems = JSON.parse(
   localStorage.getItem('qc_wm_table_items_en') || 'null'
 );
 if (!wmTableItems || !wmTableItems.length) {
-  wmTableItems = JSON.parse(JSON.stringify(DEFAULT_WM_TABLE_ITEMS));
+  wmTableItems = deepClone(DEFAULT_WM_TABLE_ITEMS);
   saveWmTableItemsToStorage();
 } else {
   let wmUpdated = false;
@@ -91,7 +118,7 @@ if (!wmTableItems || !wmTableItems.length) {
         wmUpdated = true;
       }
       if (!item.process && typeof item.dc === 'boolean') {
-        item.process = item.dc ? 'twm_dc' : 'twm_fc';
+        item.process = itemProcess(item);
         wmUpdated = true;
       }
     }
@@ -110,16 +137,8 @@ const CONDITION_RULES = {
     conflictBadge: 'process conflict',
     conflictTitle: 'Mixing Process Inconsistency Warning',
     conflictMsg: 'Variables containing default operators have different algebraic definitions, Hamiltonians, and subspaces across down-conversion, state transfer, and four-wave mixing.',
-    checkApplies: (item, allItems) => {
-      return (typeof item.hasDefaultOps === 'boolean')
-        ? item.hasDefaultOps
-        : exprContainsDefaultOperators(item.latex_t || item.latex_g || item.latex || '', allItems);
-    },
-    getExprVal: (item) => {
-      if (item.process) return item.process;
-      if (typeof item.dc === 'boolean') return item.dc ? 'twm_dc' : 'twm_fc';
-      return null;
-    }
+    checkApplies: (item, allItems) => itemHasDefaultOps(item, allItems),
+    getExprVal: (item) => itemProcess(item)
   },
   single_mode: {
     key: 'single_mode',
@@ -130,9 +149,7 @@ const CONDITION_RULES = {
     conflictBadge: 'single-mode conflict',
     conflictTitle: 'Single-Mode Inconsistency Warning',
     conflictMsg: 'Expressions created under Single Mode cannot be used in Multimode calculations because multimode summation and mode degeneracy details were collapsed.',
-    checkApplies: (item) => {
-      return item.single_mode === true;
-    },
+    checkApplies: (item) => item.single_mode === true,
     getExprVal: (item) => item.single_mode
   }
 };
@@ -193,7 +210,7 @@ function extractWorkspaceDefinitions(ws) {
   })) : [];
 
   const namedExprs = items.filter(x => x.type === 'named_expr').map(ne => {
-    const neProc = ne.process || (typeof ne.dc === 'boolean' ? (ne.dc ? 'twm_dc' : 'twm_fc') : null);
+    const neProc = itemProcess(ne);
     const neDc = typeof ne.dc === 'boolean' ? ne.dc : (neProc ? (neProc !== 'twm_fc') : null);
     return {
       name: ne.name,
@@ -213,6 +230,12 @@ function extractWorkspaceDefinitions(ws) {
   });
 
   return { symbols, operators, mmOperators, namedExprs };
+}
+
+// Raw value of the retained-order input (string), or 1 if the input is absent
+function getWmOrderValue() {
+  const el = document.getElementById('wm-order');
+  return el ? el.value : 1;
 }
 
 function getWmProcess() {
@@ -251,9 +274,8 @@ function saveWorkspaceToStorage(ws) {
 async function resetTableDefaults(ws) {
   if (ws === 'tab3') {
     if (!confirm('Reset Tab 3 table to default parametric symbols and operators?')) return;
-    const isMismatch = getWmMismatch();
-    let defaults = JSON.parse(JSON.stringify(DEFAULT_WM_TABLE_ITEMS));
-    if (!isMismatch) {
+    let defaults = deepClone(DEFAULT_WM_TABLE_ITEMS);
+    if (!getWmMismatch()) {
       defaults = defaults.filter(x => x.builtinKey !== 'pm' && x.name !== 'pm');
     }
     wmTableItems = defaults;
@@ -268,7 +290,7 @@ async function resetTableDefaults(ws) {
     showToast('Tab 3 table reset to defaults.');
   } else {
     if (!confirm('Reset Tab 2 table to default symbols and operators?')) return;
-    tableItems = JSON.parse(JSON.stringify(DEFAULT_TABLE_ITEMS));
+    tableItems = deepClone(DEFAULT_TABLE_ITEMS);
     saveTableItemsToStorage();
     renderTable();
     showToast('Tab 2 table reset to defaults.');
@@ -289,13 +311,16 @@ function getSuggestedUniqueName(baseName) {
   return candidate;
 }
 
+const ITEM_TYPE_LABELS = {
+  named_expr: 'Custom Saved Expression',
+  symbol: 'Commutative Symbol',
+  evolved_op: 'Evolved Operator',
+  operator: 'Quantum Operator',
+  mm_op: 'Multimode Operator'
+};
+
 function formatConflictItemDetails(item) {
-  let typeText = item.type;
-  if (item.type === 'named_expr') typeText = 'Custom Saved Expression';
-  else if (item.type === 'symbol') typeText = 'Commutative Symbol';
-  else if (item.type === 'evolved_op') typeText = 'Evolved Operator';
-  else if (item.type === 'operator') typeText = 'Quantum Operator';
-  else if (item.type === 'mm_op') typeText = 'Multimode Operator';
+  const typeText = ITEM_TYPE_LABELS[item.type] || item.type;
 
   let lines = [];
   lines.push(`<div><strong>Name:</strong> <code>${escapeHtml(item.name)}</code> &nbsp; <span class="badge badge-info">${typeText}</span></div>`);
@@ -324,20 +349,15 @@ function promptRestoreConflict(baseOp, occupyingItem, entityType = 'base operato
     currentConflictBaseOpName = baseOp.name;
 
     const titleEl = document.getElementById('restore-conflict-title');
-    if (titleEl) {
-      titleEl.textContent = entityType === 'parameter' ? 'Parameter Restore Conflict' : 'Base Operator Restore Conflict';
-    }
+    if (titleEl) titleEl.textContent = entityType === 'parameter' ? 'Parameter Restore Conflict' : 'Base Operator Restore Conflict';
     const typeEl = document.getElementById('restore-conflict-entity-type');
-    if (typeEl) {
-      typeEl.textContent = entityType;
-    }
+    if (typeEl) typeEl.textContent = entityType;
 
     document.getElementById('restore-conflict-op-name').textContent = baseOp.name;
     document.getElementById('restore-conflict-item-details').innerHTML = formatConflictItemDetails(occupyingItem);
 
-    const suggestedName = getSuggestedUniqueName(baseOp.name);
     const input = document.getElementById('restore-conflict-new-name');
-    input.value = suggestedName;
+    input.value = getSuggestedUniqueName(baseOp.name);
 
     const errDiv = document.getElementById('restore-conflict-error');
     errDiv.textContent = '';
@@ -352,30 +372,33 @@ function promptRestoreConflict(baseOp, occupyingItem, entityType = 'base operato
 }
 
 function handleRestoreRenameClick() {
-  const input = document.getElementById('restore-conflict-new-name');
-  const errDiv = document.getElementById('restore-conflict-error');
-  const newName = input.value.trim();
+  const newName = document.getElementById('restore-conflict-new-name').value.trim();
 
-  const check = validateVariableName(newName);
-  if (!check.valid) {
-    errDiv.textContent = check.error;
+  let error = validateVariableName(newName).error;
+  if (!error && newName === currentConflictBaseOpName) {
+    error = `Identifier cannot be '${currentConflictBaseOpName}' because that is the name of the item being restored.`;
+  }
+  if (!error && wmTableItems.some(x => x.id !== currentConflictOccupyingItem.id && x.name === newName)) {
+    error = `Identifier '${newName}' already exists in the table. Please choose a different name.`;
+  }
+
+  if (error) {
+    const errDiv = document.getElementById('restore-conflict-error');
+    errDiv.textContent = error;
     errDiv.style.display = 'block';
     return;
   }
-
-  if (newName === currentConflictBaseOpName) {
-    errDiv.textContent = `Identifier cannot be '${currentConflictBaseOpName}' because that is the name of the item being restored.`;
-    errDiv.style.display = 'block';
-    return;
-  }
-
-  if (wmTableItems.some(x => x.id !== currentConflictOccupyingItem.id && x.name === newName)) {
-    errDiv.textContent = `Identifier '${newName}' already exists in the table. Please choose a different name.`;
-    errDiv.style.display = 'block';
-    return;
-  }
-
   resolveRestoreConflict('rename', newName);
+}
+
+// Apply a 'delete' / 'rename' resolution to the item occupying a restored name ('cancel' is a no-op)
+function applyConflictResolution(resolution, occupyingItem) {
+  if (resolution.action === 'delete') {
+    const delIdx = wmTableItems.findIndex(x => x.id === occupyingItem.id);
+    if (delIdx !== -1) wmTableItems.splice(delIdx, 1);
+  } else if (resolution.action === 'rename') {
+    occupyingItem.name = resolution.newName;
+  }
 }
 
 function resolveRestoreConflict(action, newName) {
@@ -391,65 +414,41 @@ function resolveRestoreConflict(action, newName) {
 
 function insertPmIntoWmTable(defaultPm) {
   if (wmTableItems.some(x => x.builtinKey === 'pm' || x.name === defaultPm.name)) return;
-  const itemToInsert = JSON.parse(JSON.stringify(defaultPm));
   const nlcIdx = wmTableItems.findIndex(x => x.builtinKey === 'nlc' || x.name === 'nlc');
-  if (nlcIdx !== -1) {
-    wmTableItems.splice(nlcIdx + 1, 0, itemToInsert);
-  } else {
-    wmTableItems.unshift(itemToInsert);
-  }
+  wmTableItems.splice(nlcIdx + 1, 0, deepClone(defaultPm)); // nlcIdx === -1 inserts at the front
+}
+
+// Remove the phase-mismatch parameter from the Tab 3 table; returns whether it was present
+function removePmFromWmTable() {
+  const pmIdx = wmTableItems.findIndex(isPmItem);
+  if (pmIdx === -1) return false;
+  wmTableItems.splice(pmIdx, 1);
+  return true;
 }
 
 async function onWmMismatchChange() {
   const mismatchSelect = document.getElementById('wm-mismatch');
-  const isMismatch = mismatchSelect ? (mismatchSelect.value === 'true') : false;
 
-  if (isMismatch) {
-    const defaultPm = DEFAULT_WM_TABLE_ITEMS.find(x => x.builtinKey === 'pm') || {
-      id: 'c2',
-      type: 'symbol',
-      builtinKey: 'pm',
-      name: 'pm',
-      displayName: '\\Delta k',
-      isReal: true,
-      isInteger: false,
-      isNonnegative: false,
-      isPositive: false,
-      notes: 'Phase mismatch parameter (Δk)'
-    };
-
-    const occupyingIndex = wmTableItems.findIndex(x => x.name === defaultPm.name);
-    if (occupyingIndex !== -1) {
-      const occupyingItem = wmTableItems[occupyingIndex];
-      if (occupyingItem.builtinKey === 'pm' || (occupyingItem.type === 'symbol' && occupyingItem.name === 'pm' && occupyingItem.displayName === '\\Delta k')) {
-        occupyingItem.builtinKey = 'pm';
-      } else {
+  if (getWmMismatch()) {
+    const defaultPm = DEFAULT_WM_TABLE_ITEMS.find(x => x.builtinKey === 'pm');
+    const occupyingItem = wmTableItems.find(x => x.name === defaultPm.name);
+    if (occupyingItem && (occupyingItem.builtinKey === 'pm' || (occupyingItem.type === 'symbol' && occupyingItem.displayName === defaultPm.displayName))) {
+      occupyingItem.builtinKey = 'pm';
+    } else {
+      if (occupyingItem) {
         const resolution = await promptRestoreConflict(defaultPm, occupyingItem, 'parameter');
         if (resolution.action === 'cancel') {
           mismatchSelect.value = 'false';
           onWmPresetChange();
           return;
-        } else if (resolution.action === 'delete') {
-          const delIdx = wmTableItems.findIndex(x => x.id === occupyingItem.id);
-          if (delIdx !== -1) {
-            wmTableItems.splice(delIdx, 1);
-          }
-          insertPmIntoWmTable(defaultPm);
-        } else if (resolution.action === 'rename') {
-          occupyingItem.name = resolution.newName;
-          insertPmIntoWmTable(defaultPm);
         }
+        applyConflictResolution(resolution, occupyingItem);
       }
-    } else {
       insertPmIntoWmTable(defaultPm);
     }
     showToast("Phase Mismatched: 'pm' (Δk) added to variables table.");
-  } else {
-    const pmIdx = wmTableItems.findIndex(x => x.builtinKey === 'pm' || (x.type === 'symbol' && x.name === 'pm'));
-    if (pmIdx !== -1) {
-      wmTableItems.splice(pmIdx, 1);
-      showToast("Phase Matched: 'pm' removed from variables table.");
-    }
+  } else if (removePmFromWmTable()) {
+    showToast("Phase Matched: 'pm' removed from variables table.");
   }
 
   saveWmTableItemsToStorage();
@@ -463,10 +462,9 @@ async function restoreBaseOperators(ws) {
 
   for (const baseOp of baseEvolvedOps) {
     // Check if an item in wmTableItems currently occupies baseOp.name
-    const occupyingIndex = wmTableItems.findIndex(x => x.name === baseOp.name);
+    const occupyingItem = wmTableItems.find(x => x.name === baseOp.name);
 
-    if (occupyingIndex !== -1) {
-      const occupyingItem = wmTableItems[occupyingIndex];
+    if (occupyingItem) {
       // If it is already the evolved_op for this modeIndex, no conflict
       if (occupyingItem.type === 'evolved_op' && occupyingItem.modeIndex === baseOp.modeIndex) {
         if (occupyingItem.displayName !== baseOp.displayName) {
@@ -478,17 +476,9 @@ async function restoreBaseOperators(ws) {
 
       // It is occupied by a different item (custom expression, symbol, or another evolved_op)
       const resolution = await promptRestoreConflict(baseOp, occupyingItem, 'base operator');
-      if (resolution.action === 'cancel') {
-        // User cancelled restoring this base operator, skip it
-        continue;
-      } else if (resolution.action === 'delete') {
-        const delIdx = wmTableItems.findIndex(x => x.id === occupyingItem.id);
-        if (delIdx !== -1) {
-          wmTableItems.splice(delIdx, 1);
-        }
-      } else if (resolution.action === 'rename') {
-        occupyingItem.name = resolution.newName;
-      }
+      // User cancelled restoring this base operator, skip it
+      if (resolution.action === 'cancel') continue;
+      applyConflictResolution(resolution, occupyingItem);
     }
 
     // Now baseOp.name is free.
@@ -499,7 +489,7 @@ async function restoreBaseOperators(ws) {
 
     if (opIdx === -1) {
       // Operator was previously deleted, recreate it from baseOp
-      wmTableItems.push(JSON.parse(JSON.stringify(baseOp)));
+      wmTableItems.push(deepClone(baseOp));
       restoredCount++;
     } else {
       // Operator was previously renamed or modified, restore its canonical name and displayName
@@ -561,10 +551,6 @@ function validateVariableName(name) {
     return { valid: false, error: `'${name}' conflicts with a built-in constant or mathematical function (${name}).` };
   }
   return { valid: true, error: '' };
-}
-
-function isValidPythonIdentifier(name) {
-  return validateVariableName(name).valid;
 }
 
 

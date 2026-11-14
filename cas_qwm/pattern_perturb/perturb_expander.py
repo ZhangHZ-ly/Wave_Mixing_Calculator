@@ -586,9 +586,7 @@ class PE:
             return
         if expr.is_number or isinstance(expr, (*self.rc, *self.rs, *self.rp)):
             o = self.leading_order(expr)[1]
-            if o is S.Infinity or not o.is_number:
-                yield from ()
-            elif o <= n:
+            if o is not S.Infinity and o.is_number and o <= n:
                 yield expr, o
         elif isinstance(expr, Subs):
             if not isinstance(expr.expr, Derivative):
@@ -618,13 +616,11 @@ class PE:
             n0 = 0
             for o in lo:
                 if o is S.Infinity:
-                    yield from ()
                     return
                 if not o.is_number or o.is_infinite:
                     raise ValueError('Expect the leading order to be an indentified number')
                 n0 += o
             if n0 > n:
-                yield from ()
                 return
             ts = []
             d = {}
@@ -654,7 +650,6 @@ class PE:
             if (lt is S.Zero
                 or (lt**m is S.Zero and m.is_infinite)
                 or lo * m > n):
-                yield from ()
                 return
             d = {}
             n_new = n - m * lo
@@ -698,7 +693,6 @@ class PE:
                         lo.append(-self.leading_order(vc)[1])
                 n = Add(n, *lo)
                 if n < 0:
-                    yield from ()
                     return
                 a0 = []
                 ao = []
@@ -734,7 +728,6 @@ class PE:
                     ).subs(subs_pt)
             elif expr.is_Pow or isinstance(expr, Function):
                 if n < 0:
-                    yield from ()
                     return
                 a0 = []
                 ao = []
@@ -825,32 +818,28 @@ class PE:
     def expand_pf(self, pf: PF, n, with_order=False, **kwargs):
         """
         Expand pattern-form table-like expressions upto the given order n.
-        If with_order=True, returns a dict mapping each order to the corresponding PF.
+        If with_order=True, returns a generator of (PF, order) pairs, one per
+        perturbative term (orders may repeat, as in expand_expr).
         """
         if with_order:
-            orders = dict()
-            for (bs, fs), t in pf.table.items():
-                nb = Add(*(self.leading_order(b)[1] for b in bs + fs))
-                for term, o in self.expand_expr(t, n-nb, **kwargs):
-                    tot_o = nb + o
-                    if tot_o not in orders:
-                        orders[tot_o] = [dict(), S.Zero]
-                    tbl = orders[tot_o][0]
-                    tbl[(bs, fs)] = tbl.get((bs, fs), S.Zero) + term
-
-            if pf.npf != 0 and pf.npf is not S.Zero:
-                for term, o in self.expand_expr(pf.npf, n, **kwargs):
-                    if o not in orders:
-                        orders[o] = [dict(), S.Zero]
-                    orders[o][1] += term
-
-            return {o: PF(tbl, npf) for o, (tbl, npf) in orders.items()}
-
+            return self._expand_pf_terms(pf, n, **kwargs)
         new_t = dict()
         for (bs, fs), t in pf.table.items():
             nb = Add(*(self.leading_order(b)[1] for b in bs + fs))
             new_t[(bs, fs)] = Add(*(e[0] for e in self.expand_expr(t, n-nb, **kwargs)))
         return PF(new_t, Add(*(e[0] for e in self.expand_expr(pf.npf, n, **kwargs))))
+
+    def _expand_pf_terms(self, pf: PF, n, **kwargs):
+        """Yields (PF, order) pairs of the perturbative terms of pf up to order n."""
+        for (bs, fs), t in pf.table.items():
+            nb = Add(*(self.leading_order(b)[1] for b in bs + fs))
+            for term, o in self.expand_expr(t, n-nb, **kwargs):
+                if term != 0:
+                    yield PF({(bs, fs): term}), nb + o
+        if pf.npf != 0:
+            for term, o in self.expand_expr(pf.npf, n, **kwargs):
+                if term != 0:
+                    yield PF(npf=term), o
 
     def cohr_avr(self, expr, cohr_dict, n,
                  update_self=False, update_cohr_dict=True, **kwargs):

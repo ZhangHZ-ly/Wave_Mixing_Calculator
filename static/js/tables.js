@@ -3,11 +3,9 @@
 // ====================================================
 function renderWorkspaceTable(ws) {
   const isWm = (ws === 'tab3');
-  const tbodyId = isWm ? 'wmTableBody' : 'symbolTableBody';
-  const tbody = document.getElementById(tbodyId);
+  const tbody = document.getElementById(isWm ? 'wmTableBody' : 'symbolTableBody');
   if (!tbody) return;
   tbody.innerHTML = '';
-
 
   const items = isWm ? wmTableItems : tableItems;
   const inputId = isWm ? 'wm-input' : 'pf-input';
@@ -22,26 +20,28 @@ function renderWorkspaceTable(ws) {
 
   const curProcess = getWmProcess();
   const isDc = getWmDc();
-  const orderVal = document.getElementById('wm-order') ? parseInt(document.getElementById('wm-order').value) : 1;
+  const orderVal = parseInt(getWmOrderValue());
   const isSingleMode = getWmSingleMode();
+
+  // Tab 2 badges span the full cell width
+  const badge = (cls, text, full = !isWm) => `<span class="badge ${cls}${full ? ' badge-full' : ''}">${text}</span>`;
 
   items.forEach(item => {
     const tr = document.createElement('tr');
     tr.dataset.id = item.id;
 
+    const isPm = item.builtinKey === 'pm' || item.name === 'pm';
     let typeBadge = '';
     let attrOrDef = '';
     let dispCell = `<td><span class="cell-text">${escapeHtml(item.displayName || item.name)}</span></td>`;
     let notesStr = item.notes ? escapeHtml(item.notes) : '<span style="color: var(--text-secondary);">&ndash;</span>';
 
     if (item.type === 'symbol') {
-      typeBadge = isWm ? '<span class="badge badge-info">Commutative Symbol</span>' : '<span class="badge badge-info badge-full">Commutative Symbol</span>';
-      const isNlc = item.builtinKey === 'nlc' || item.name === 'nlc';
-
-      if (item.builtinKey === 'pm' || item.name === 'pm') {
+      typeBadge = badge('badge-info', 'Commutative Symbol');
+      if (isPm) {
         attrOrDef = 'Phase mismatch parameter (Real)';
         notesStr = item.notes ? escapeHtml(item.notes) : 'Phase mismatch parameter (&Delta;k)';
-      } else if (isNlc) {
+      } else if (item.builtinKey === 'nlc' || item.name === 'nlc') {
         attrOrDef = 'Nonlinear coupling coefficient (χ): Non-negative, Real';
       } else {
         const attrs = [];
@@ -52,16 +52,16 @@ function renderWorkspaceTable(ws) {
         attrOrDef = attrs.length ? attrs.join(', ') : 'Complex';
       }
     } else if (item.type === 'operator') {
-      typeBadge = item.kind === 'boson'
-        ? (isWm ? '<span class="badge badge-success">Boson Mode</span>' : '<span class="badge badge-success badge-full">Boson Operator</span>')
-        : (isWm ? '<span class="badge badge-warning">Fermion Mode</span>' : '<span class="badge badge-warning badge-full">Fermion Operator</span>');
-      attrOrDef = item.kind === 'boson' ? (isWm ? 'Custom Boson Mode' : 'Single Boson Mode') : (isWm ? 'Custom Fermion Mode' : 'Single Fermion Mode');
+      const isBoson = item.kind === 'boson';
+      const kindName = isBoson ? 'Boson' : 'Fermion';
+      typeBadge = badge(isBoson ? 'badge-success' : 'badge-warning', `${kindName} ${isWm ? 'Mode' : 'Operator'}`);
+      attrOrDef = `${isWm ? 'Custom' : 'Single'} ${kindName} Mode`;
     } else if (item.type === 'evolved_op') {
-      typeBadge = '<span class="badge badge-success">Evolved Operator</span>';
+      typeBadge = badge('badge-success', 'Evolved Operator', false);
       const modeLabels = ['Pump (mode 0)', 'Signal (mode 1)', 'Idler (mode 2)'];
       attrOrDef = `${modeLabels[item.modeIndex] || 'Boson Mode'} at t`;
     } else if (item.type === 'mm_op') {
-      typeBadge = '<span class="badge badge-warning">Multimode Operator</span>';
+      typeBadge = badge('badge-warning', 'Multimode Operator', false);
       dispCell = `<td style="color: var(--text-secondary);"><span class="cell-text">&ndash;</span></td>`;
       if (item.mmKind === 'COP') {
         attrOrDef = isDc ? 'MultimodeCOP: Σ a1 a2 (Down-conversion / FWM)' : 'MultimodeCOP: Σ a0 a1† (State Transfer)';
@@ -69,25 +69,17 @@ function renderWorkspaceTable(ws) {
         attrOrDef = isDc ? 'MultimodeNum2: Σ (1 + N1 + N2) (Down-conversion / FWM)' : 'MultimodeNum2: Σ (N1 - N0) (State Transfer)';
       }
     } else if (item.type === 'named_expr') {
-      typeBadge = isWm ? '<span class="badge badge-gray">Saved Expression</span>' : '<span class="badge badge-gray badge-full">Saved Expression</span>';
+      typeBadge = badge('badge-gray', 'Saved Expression');
       dispCell = `<td style="text-align: center; color: var(--text-secondary);"><span class="cell-text">&ndash;</span></td>`;
 
       if (isWm) {
         attrOrDef = item.sourceInput || ((item.latex_t || item.latex_g)
-          ? `[Time Form (t)]:
-${item.latex_t || ''}
-
-[Gain Form (g)]:
-${item.latex_g || ''}`
+          ? `[Time Form (t)]:\n${item.latex_t || ''}\n\n[Gain Form (g)]:\n${item.latex_g || ''}`
           : (item.latex || ''));
 
         // Evaluate condition conflicts via propositional logic
-        const itemHasDefault = (typeof item.hasDefaultOps === 'boolean')
-          ? item.hasDefaultOps
-          : exprContainsDefaultOperators(item.latex_t || item.latex_g || item.latex || '', wmTableItems);
-
-        const itemProc = item.process || (typeof item.dc === 'boolean' ? (item.dc ? 'twm_dc' : 'twm_fc') : null);
-        const isProcMismatch = (itemProc !== null && itemProc !== curProcess && itemHasDefault);
+        const itemProc = itemProcess(item);
+        const isProcMismatch = (itemProc !== null && itemProc !== curProcess && itemHasDefaultOps(item));
         const isSmMismatch = (item.single_mode === true && !isSingleMode);
 
         if (isProcMismatch || isSmMismatch) {
@@ -96,17 +88,11 @@ ${item.latex_g || ''}`
             const itemProcLabel = PROCESS_LABELS[itemProc] || itemProc;
             const curProcLabel = PROCESS_LABELS[curProcess] || curProcess;
             typeBadge += ` <span class="badge badge-danger" title="Created under ${itemProcLabel}, incompatible with current preset!">process conflict</span>`;
-            attrOrDef = `[WARNING: Mixing Process Inconsistency]
-Created under ${itemProcLabel}, but current mixing process is ${curProcLabel}.
-
-` + attrOrDef;
+            attrOrDef = `[WARNING: Mixing Process Inconsistency]\nCreated under ${itemProcLabel}, but current mixing process is ${curProcLabel}.\n\n` + attrOrDef;
           }
           if (isSmMismatch) {
             typeBadge += ` <span class="badge badge-danger" title="Created under Single Mode, incompatible with current Multimode preset!">single-mode conflict</span>`;
-            attrOrDef = `[WARNING: Single Mode Inconsistency]
-Created under Single Mode (n_m=1), but current preset is Multimode.
-
-` + attrOrDef;
+            attrOrDef = `[WARNING: Single Mode Inconsistency]\nCreated under Single Mode (n_m=1), but current preset is Multimode.\n\n` + attrOrDef;
           }
         } else if (typeof item.order === 'number' && !isNaN(orderVal) && item.order < orderVal) {
           tr.classList.add('row-warning');
@@ -116,7 +102,7 @@ Created under Single Mode (n_m=1), but current preset is Multimode.
       }
     }
 
-    const rowNote = item.notes || ((item.builtinKey === 'pm' || item.name === 'pm') ? 'Phase mismatch parameter (Δk)' : '');
+    const rowNote = item.notes || (isPm ? 'Phase mismatch parameter (Δk)' : '');
     attachRowTooltip(tr, attrOrDef, isWm ? 'click to view details or edit\nright-click for more options' : 'click to edit\nright-click for more options', rowNote);
 
     tr.innerHTML = `
@@ -167,8 +153,11 @@ function insertIntoInput(inputId, str) {
   input.selectionStart = input.selectionEnd = pos + str.length;
 }
 
-// Dropdown
-
+const ITEM_DETAIL_TYPE_LABELS = {
+  symbol: 'Commutative Symbol',
+  mm_op: 'Multimode Preset Operator',
+  named_expr: 'Saved Expression (Named Variable)'
+};
 
 function renderItemDetailsTable(item, tbodyEl, ws) {
   if (!tbodyEl || !item) return;
@@ -177,12 +166,18 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
   const curProcess = getWmProcess();
   const curDc = getWmDc();
   const curSingleMode = getWmSingleMode();
-  const curOrderRaw = document.getElementById('wm-order') ? parseInt(document.getElementById('wm-order').value) : 1;
+  const curOrderRaw = parseInt(getWmOrderValue());
   const curOrder = isNaN(curOrderRaw) ? 1 : curOrderRaw;
   const curMismatch = getWmMismatch();
 
-  const rows = [];
+  const ANY_BADGE = '<span class="badge badge-gray">any</span> <span class="details-note"></span>';
+  const EXACT_BADGE = '<span class="badge badge-gray">any</span> <span class="details-note">(Exact)</span>';
+  const AUTO_NOTE = ' <span class="details-note">(auto-update)</span>';
+  const editableOrderBadge = (leadOrd) =>
+    `<span class="badge badge-gray badge-editable" title="Click text or badge to edit leading order" onclick="startLeadingOrderInlineEdit(event, '${item.id}', '${ws}')">${leadOrd} <span class="details-note" style="margin-left: 4px; font-size: 0.75rem;">✏️</span></span>`;
+  const itemOrder = (typeof item.order === 'number') ? item.order : 0;
 
+  const rows = [];
   function addRow(label, htmlVal) {
     rows.push(`
       <tr>
@@ -193,12 +188,9 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
   }
 
   // 1. Object Type / Class
-  let typeDesc = '';
-  if (item.type === 'symbol') typeDesc = 'Commutative Symbol';
-  else if (item.type === 'operator') typeDesc = item.kind === 'boson' ? 'Boson Field Operator' : 'Fermion Field Operator';
+  let typeDesc = ITEM_DETAIL_TYPE_LABELS[item.type] || '';
+  if (item.type === 'operator') typeDesc = item.kind === 'boson' ? 'Boson Field Operator' : 'Fermion Field Operator';
   else if (item.type === 'evolved_op') typeDesc = (curProcess === 'fwm') ? 'Evolved Operator (Four-Wave Mixing)' : 'Evolved Operator (Three-Wave Mixing)';
-  else if (item.type === 'mm_op') typeDesc = 'Multimode Preset Operator';
-  else if (item.type === 'named_expr') typeDesc = 'Saved Expression (Named Variable)';
   addRow('Object Type', `<strong>${escapeHtml(typeDesc)}</strong>`);
 
   // 2. Preset / Custom Origin
@@ -211,52 +203,43 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
 
   // 3. Accuracy / Order
   if (item.type === 'symbol') {
-    addRow('Accuracy (Order)', '<span class="badge badge-gray">any</span> <span class="details-note">(Exact)</span>');
-    const isBuiltinSym = !!item.builtinKey || ['nlc', 'pm'].includes(item.name);
-    if (isBuiltinSym) {
+    addRow('Accuracy (Order)', EXACT_BADGE);
+    if (isBuiltinSymbol(item)) {
       const isNlc = item.builtinKey === 'nlc' || item.name === 'nlc';
       addRow('Leading Order', `<span class="badge badge-gray">${isNlc ? 1 : 0}</span> <span class="details-note">(Built-in)</span>`);
     } else {
-      const leadOrd = (typeof item.order === 'number') ? item.order : 0;
-      addRow('Leading Order', `<span class="badge badge-gray badge-editable" title="Click text or badge to edit leading order" onclick="startLeadingOrderInlineEdit(event, '${item.id}', '${ws}')">${leadOrd} <span class="details-note" style="margin-left: 4px; font-size: 0.75rem;">✏️</span></span>`);
+      addRow('Leading Order', editableOrderBadge(itemOrder));
     }
   } else if (item.type === 'operator') {
-    addRow('Accuracy (Order)', '<span class="badge badge-gray">any</span> <span class="details-note">(Exact)</span>');
-    const leadOrd = (typeof item.order === 'number') ? item.order : 0;
-    if (item.kind === 'boson') {
-      addRow('Leading Order', `<span class="badge badge-gray badge-editable" title="Click text or badge to edit leading order" onclick="startLeadingOrderInlineEdit(event, '${item.id}', '${ws}')">${leadOrd} <span class="details-note" style="margin-left: 4px; font-size: 0.75rem;">✏️</span></span>`);
-    } else {
-      addRow('Leading Order', `<span class="badge badge-gray">${leadOrd}</span> <span class="details-note">(Exact Fermion)</span>`);
-    }
+    addRow('Accuracy (Order)', EXACT_BADGE);
+    addRow('Leading Order', item.kind === 'boson'
+      ? editableOrderBadge(itemOrder)
+      : `<span class="badge badge-gray">${itemOrder}</span> <span class="details-note">(Exact Fermion)</span>`);
   } else if (item.type === 'evolved_op') {
+    let isStrong, leadOrd;
     if (curProcess === 'fwm') {
-      const isStrong = (item.modeIndex === 0);
-      const leadOrd = isStrong ? -0.5 : 0;
+      isStrong = (item.modeIndex === 0);
+      leadOrd = isStrong ? -0.5 : 0;
       const evolvedAccuracy = 1;
-      const isLower = evolvedAccuracy < curOrder;
-      const orderBadge = `<span class="badge ${isLower ? 'badge-warning' : 'badge-success'}">${evolvedAccuracy}</span> <span class="details-note">(auto-update (maximum 1))</span>`;
-      addRow('Accuracy (Order)', orderBadge);
-      addRow('Leading Order', `<span class="badge badge-gray">${leadOrd}</span> <span class="details-note">${isStrong ? '(Strong driving mode)' : '(Weak signal/idler mode)'}</span>`);
+      const accCls = evolvedAccuracy < curOrder ? 'badge-warning' : 'badge-success';
+      addRow('Accuracy (Order)', `<span class="badge ${accCls}">${evolvedAccuracy}</span> <span class="details-note">(auto-update (maximum 1))</span>`);
     } else {
-      const isStrong = (curDc && item.modeIndex === 0) || (!curDc && item.modeIndex === 2);
-      const leadOrd = isStrong ? -1 : 0;
+      isStrong = (curDc && item.modeIndex === 0) || (!curDc && item.modeIndex === 2);
+      leadOrd = isStrong ? -1 : 0;
       const solverKey = `${curProcess}_${curMismatch}`;
       const legacyKey = `${curDc}_${curMismatch}`;
       const curSolLen = cachedSolverSolLens[solverKey] || cachedSolverSolLens[legacyKey] || 1;
-      const evolvedAccuracy = curSolLen + leadOrd - 1;
-      addRow('Accuracy (Order)', `<span class="badge badge-info">${evolvedAccuracy}</span> <span class="details-note">(auto-update)</span>`);
-      addRow('Leading Order', `<span class="badge badge-gray">${leadOrd}</span> <span class="details-note">${isStrong ? '(Strong driving mode)' : '(Weak signal/idler mode)'}</span>`);
+      addRow('Accuracy (Order)', `<span class="badge badge-info">${curSolLen + leadOrd - 1}</span>${AUTO_NOTE}`);
     }
+    addRow('Leading Order', `<span class="badge badge-gray">${leadOrd}</span> <span class="details-note">${isStrong ? '(Strong driving mode)' : '(Weak signal/idler mode)'}</span>`);
   } else if (item.type === 'mm_op') {
-    addRow('Accuracy (Order)', '<span class="badge badge-gray">any</span> <span class="details-note">(Exact)</span>');
+    addRow('Accuracy (Order)', EXACT_BADGE);
     addRow('Leading Order', '<span class="badge badge-gray">0</span>');
   } else if (item.type === 'named_expr') {
     if (typeof item.order === 'number') {
-      const isLower = item.order < curOrder;
-      const orderBadge = isLower
+      addRow('Accuracy (Order)', item.order < curOrder
         ? `<span class="badge badge-warning">${item.order}</span> <span class="details-note">(preset ${curOrder})</span>`
-        : `<span class="badge badge-success">${item.order}</span>`;
-      addRow('Accuracy (Order)', orderBadge);
+        : `<span class="badge badge-success">${item.order}</span>`);
     } else {
       addRow('Accuracy (Order)', '<span class="badge badge-gray">N/A</span>');
     }
@@ -265,34 +248,26 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
   }
 
   // 4. Mixing Type Attribute
-  const curProcLabel = PROCESS_LABELS[curProcess] || curProcess;
   if (item.type === 'named_expr') {
-    const hasDefault = (typeof item.hasDefaultOps === 'boolean')
-      ? item.hasDefaultOps
-      : exprContainsDefaultOperators(item.latex_t || item.latex_g || item.latex || '', wmTableItems);
-    if (!hasDefault) {
-      addRow('Mixing Type', `<span class="badge badge-gray">any</span> <span class="details-note"></span>`);
+    if (!itemHasDefaultOps(item)) {
+      addRow('Mixing Type', ANY_BADGE);
     } else {
-      const itemProc = item.process || (typeof item.dc === 'boolean' ? (item.dc ? 'twm_dc' : 'twm_fc') : curProcess);
-      const isProcConflict = (itemProc !== curProcess);
+      const itemProc = itemProcess(item, curProcess);
       const procLabel = PROCESS_LABELS[itemProc] || itemProc;
-      const procBadge = isProcConflict
-        ? `<span class="badge badge-danger">${procLabel}</span>`
-        : `<span class="badge badge-success">${procLabel}</span>`;
-      addRow('Mixing Type', procBadge);
+      addRow('Mixing Type', `<span class="badge ${itemProc !== curProcess ? 'badge-danger' : 'badge-success'}">${procLabel}</span>`);
     }
   } else if (item.type === 'evolved_op' || item.type === 'mm_op') {
-    addRow('Mixing Type', `<span class="badge badge-info">${curProcLabel}</span> <span class="details-note">(auto-update)</span>`);
+    addRow('Mixing Type', `<span class="badge badge-info">${PROCESS_LABELS[curProcess] || curProcess}</span>${AUTO_NOTE}`);
   } else {
-    addRow('Mixing Type', `<span class="badge badge-gray">any</span> <span class="details-note"></span>`);
+    addRow('Mixing Type', ANY_BADGE);
   }
 
   // 5. Single-Mode Attribute
-  const curSmLabel = curSingleMode ? 'Single-Mode (n_m = 1)' : 'Multimode';
+  const smLabelOf = isSm => (isSm ? 'Single-Mode (n_m = 1)' : 'Multimode');
   if (item.type === 'named_expr') {
     const isSm = (item.single_mode === true);
-    const smLabel = isSm ? 'Single-Mode (n_m = 1)' : 'Multimode';
-    let smBadge = '';
+    const smLabel = smLabelOf(isSm);
+    let smBadge;
     if (isSm && !curSingleMode) {
       smBadge = `<span class="badge badge-danger">${smLabel}</span>`;
     } else if (!isSm && curSingleMode) {
@@ -302,11 +277,11 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
     }
     addRow('Multi/Single Mode', smBadge);
   } else if (item.type === 'evolved_op') {
-    addRow('Multi/Single Mode', `<span class="badge badge-info">${curSmLabel}</span> <span class="details-note">(auto-update)</span>`);
+    addRow('Multi/Single Mode', `<span class="badge badge-info">${smLabelOf(curSingleMode)}</span>${AUTO_NOTE}`);
   } else if (item.type === 'mm_op') {
-    addRow('Multi/Single Mode', `<span class="badge badge-info">Multimode</span> <span class="details-note">(auto-update)</span>`);
+    addRow('Multi/Single Mode', `<span class="badge badge-info">Multimode</span>${AUTO_NOTE}`);
   } else {
-    addRow('Multi/Single Mode', `<span class="badge badge-gray">any</span> <span class="details-note"></span>`);
+    addRow('Multi/Single Mode', ANY_BADGE);
   }
 
   tbodyEl.innerHTML = rows.join('');
@@ -317,30 +292,19 @@ function startLeadingOrderInlineEdit(event, itemId, ws) {
   const badgeEl = event.currentTarget;
   if (!badgeEl || badgeEl.tagName === 'INPUT' || badgeEl.querySelector('input')) return;
 
-  const arr = getWorkspaceArray(ws);
-  const item = arr.find(x => x.id === itemId);
+  const item = getWorkspaceArray(ws).find(x => x.id === itemId);
   if (!item) return;
 
-  const currentVal = (typeof item.order === 'number') ? item.order : 0;
-
   const editContainer = document.createElement('span');
-  editContainer.style.display = 'inline-flex';
-  editContainer.style.alignItems = 'center';
-  editContainer.style.gap = '6px';
+  editContainer.style.cssText = 'display: inline-flex; align-items: center; gap: 6px;';
 
   const input = document.createElement('input');
   input.type = 'number';
   input.step = 'any';
-  input.value = currentVal;
-  input.style.width = '70px';
-  input.style.padding = '2px 8px';
-  input.style.fontSize = '0.85rem';
-  input.style.fontWeight = '600';
-  input.style.border = '1px solid var(--primary-color)';
-  input.style.borderRadius = '4px';
-  input.style.outline = 'none';
-  input.style.boxShadow = '0 0 0 2px rgba(37, 99, 235, 0.2)';
-  input.style.background = '#fff';
+  input.value = (typeof item.order === 'number') ? item.order : 0;
+  input.style.cssText = 'width: 70px; padding: 2px 8px; font-size: 0.85rem; font-weight: 600; '
+    + 'border: 1px solid var(--primary-color); border-radius: 4px; outline: none; '
+    + 'box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2); background: #fff;';
 
   const hint = document.createElement('span');
   hint.className = 'details-note';
@@ -356,46 +320,28 @@ function startLeadingOrderInlineEdit(event, itemId, ws) {
     committed = true;
     if (save) {
       const parsed = parseFloat(input.value);
-      const finalVal = isNaN(parsed) ? 0 : parsed;
-      item.order = finalVal;
+      item.order = isNaN(parsed) ? 0 : parsed;
 
-      const symOrderEl = document.getElementById('sym-order');
-      if (symOrderEl && activeEditItem && activeEditItem.id === item.id) {
-        symOrderEl.value = finalVal;
+      // Keep the open modal's order input in sync
+      if (activeEditItem && activeEditItem.id === item.id) {
+        for (const id of ['sym-order', 'op-order']) {
+          const el = document.getElementById(id);
+          if (el) el.value = item.order;
+        }
       }
-      const opOrderEl = document.getElementById('op-order');
-      if (opOrderEl && activeEditItem && activeEditItem.id === item.id) {
-        opOrderEl.value = finalVal;
-      }
-
-      saveWorkspaceToStorage(ws);
-      if (ws === 'tab3') {
-        renderWmTable();
-      } else {
-        renderTable();
-      }
+      saveWorkspaceToStorage(ws); // also re-renders the table
     }
-    const detailsBody = (item.type === 'symbol')
-      ? document.getElementById('sym-details-body')
-      : document.getElementById('op-details-body');
-    if (detailsBody) {
-      renderItemDetailsTable(item, detailsBody, ws);
-    }
+    const detailsBody = document.getElementById(item.type === 'symbol' ? 'sym-details-body' : 'op-details-body');
+    if (detailsBody) renderItemDetailsTable(item, detailsBody, ws);
   }
 
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' || e.key === 'Escape') {
       e.preventDefault();
-      finish(true);
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      finish(false);
+      finish(e.key === 'Enter');
     }
   });
-
-  input.addEventListener('blur', () => {
-    finish(true);
-  });
+  input.addEventListener('blur', () => finish(true));
 
   badgeEl.replaceWith(editContainer);
   input.focus();
@@ -404,85 +350,79 @@ function startLeadingOrderInlineEdit(event, itemId, ws) {
 
 function onOpKindChanged() {
   const kind = document.getElementById('op-kind')?.value;
-  const isWm = (activeWorkspace === 'tab3');
   const opOrderGroup = document.getElementById('op-order-group');
   if (opOrderGroup) {
-    opOrderGroup.style.display = (kind === 'boson' && isWm) ? 'block' : 'none';
+    opOrderGroup.style.display = (kind === 'boson' && activeWorkspace === 'tab3') ? 'block' : 'none';
   }
 }
 
+// Show the read-only details table of the edited item in a modal (Tab 3 only)
+function toggleDetailsGroup(groupId, bodyId, show) {
+  const group = document.getElementById(groupId);
+  const body = document.getElementById(bodyId);
+  if (!group || !body) return;
+  group.style.display = show ? 'block' : 'none';
+  if (show) renderItemDetailsTable(activeEditItem, body, activeWorkspace);
+}
+
+// Show/hide a modal's leading-order input group and initialise its value
+function toggleOrderGroup(groupId, inputId, show, value) {
+  const group = document.getElementById(groupId);
+  if (!group) return;
+  group.style.display = show ? 'block' : 'none';
+  const input = document.getElementById(inputId);
+  if (show && input) input.value = value;
+}
+
+const SYMBOL_FLAG_FIELDS = { isReal: 'sym-real', isInteger: 'sym-integer', isNonnegative: 'sym-nonnegative', isPositive: 'sym-positive' };
+
 function openSymbolModal(itemId, ws) {
   activeWorkspace = ws || 'tab2';
-  document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
-  const modal = document.getElementById('symbolModal');
+  closeDropdowns();
   const isWm = (activeWorkspace === 'tab3');
-  const symOrderGroup = document.getElementById('sym-order-group');
-  const symOrderInput = document.getElementById('sym-order');
-  const title = document.getElementById('symbolModalTitle');
-  const arr = getWorkspaceArray(activeWorkspace);
-  
-  if (itemId) {
-    const item = arr.find(x => x.id === itemId);
-    if (!item) return;
-    activeEditItem = item;
-    title.textContent = 'Edit Commutative Symbol: ' + item.name;
-    document.getElementById('sym-name').value = item.name;
-    document.getElementById('sym-disp').value = item.displayName || item.name;
-    document.getElementById('sym-real').checked = !!item.isReal;
-    document.getElementById('sym-integer').checked = !!item.isInteger;
-    document.getElementById('sym-nonnegative').checked = !!item.isNonnegative;
-    document.getElementById('sym-positive').checked = !!item.isPositive;
-    document.getElementById('sym-notes').value = item.notes || '';
+  const item = itemId ? getWorkspaceArray(activeWorkspace).find(x => x.id === itemId) : null;
+  if (itemId && !item) return;
+  activeEditItem = item;
 
-    const isBuiltin = !!item.builtinKey || ['nlc', 'pm'].includes(item.name);
-    if (symOrderGroup && symOrderInput) {
-      if (isWm && !isBuiltin) {
-        symOrderGroup.style.display = 'block';
-        symOrderInput.value = (typeof item.order === 'number') ? item.order : 0;
-      } else {
-        symOrderGroup.style.display = 'none';
-      }
-    }
-  } else {
-    activeEditItem = null;
-    title.textContent = 'New Commutative Symbol';
-    document.getElementById('sym-name').value = '';
-    document.getElementById('sym-disp').value = '';
-    document.getElementById('sym-real').checked = false;
-    document.getElementById('sym-integer').checked = false;
-    document.getElementById('sym-nonnegative').checked = false;
-    document.getElementById('sym-positive').checked = false;
-    document.getElementById('sym-notes').value = '';
+  document.getElementById('symbolModalTitle').textContent = item ? 'Edit Commutative Symbol: ' + item.name : 'New Commutative Symbol';
+  document.getElementById('sym-name').value = item ? item.name : '';
+  document.getElementById('sym-disp').value = item ? (item.displayName || item.name) : '';
+  for (const [key, id] of Object.entries(SYMBOL_FLAG_FIELDS)) {
+    document.getElementById(id).checked = !!(item && item[key]);
+  }
+  document.getElementById('sym-notes').value = (item && item.notes) || '';
 
-    if (symOrderGroup && symOrderInput) {
-      if (isWm) {
-        symOrderGroup.style.display = 'block';
-        symOrderInput.value = 0;
-      } else {
-        symOrderGroup.style.display = 'none';
-      }
-    }
+  const showOrder = isWm && !(item && isBuiltinSymbol(item));
+  toggleOrderGroup('sym-order-group', 'sym-order', showOrder, (item && typeof item.order === 'number') ? item.order : 0);
+  toggleDetailsGroup('sym-details-group', 'sym-details-body', !!item && isWm);
+  document.getElementById('symbolModal').classList.add('active');
+}
+
+// Index of another entry already named `name` (other than the edited item), or -1
+function findDuplicateIndex(arr, name) {
+  return arr.findIndex(x => x.name === name && (!activeEditItem || x.id !== activeEditItem.id));
+}
+
+// Overwrite arr[dupIndex] (keeping its id) and drop the edited item if it is a different entry
+function overwriteDuplicate(arr, dupIndex, data) {
+  arr[dupIndex] = { id: arr[dupIndex].id, ...data };
+  if (activeEditItem && activeEditItem.id !== arr[dupIndex].id) {
+    const idxToRemove = arr.findIndex(x => x.id === activeEditItem.id);
+    if (idxToRemove !== -1) arr.splice(idxToRemove, 1);
   }
-  const symDetailsGroup = document.getElementById('sym-details-group');
-  const symDetailsBody = document.getElementById('sym-details-body');
-  if (symDetailsGroup && symDetailsBody) {
-    if (itemId && isWm) {
-      symDetailsGroup.style.display = 'block';
-      renderItemDetailsTable(activeEditItem, symDetailsBody, activeWorkspace);
-    } else {
-      symDetailsGroup.style.display = 'none';
-    }
-  }
-  modal.classList.add('active');
+}
+
+function confirmOverwrite(name) {
+  return confirm(`Identifier '${name}' already exists in the table. Do you want to overwrite its definition?`);
 }
 
 function saveSymbol() {
   const name = document.getElementById('sym-name').value.trim();
   const disp = document.getElementById('sym-disp').value.trim() || name;
-  const isReal = document.getElementById('sym-real').checked;
-  const isInteger = document.getElementById('sym-integer').checked;
-  const isNonnegative = document.getElementById('sym-nonnegative').checked;
-  const isPositive = document.getElementById('sym-positive').checked;
+  const flags = {};
+  for (const [key, id] of Object.entries(SYMBOL_FLAG_FIELDS)) {
+    flags[key] = document.getElementById(id).checked;
+  }
   const notes = document.getElementById('sym-notes').value.trim();
   const isWm = (activeWorkspace === 'tab3');
   const symOrderEl = document.getElementById('sym-order');
@@ -495,28 +435,19 @@ function saveSymbol() {
   }
 
   const arr = getWorkspaceArray(activeWorkspace);
-  const dupIndex = arr.findIndex(x => x.name === name && (!activeEditItem || x.id !== activeEditItem.id));
+  const dupIndex = findDuplicateIndex(arr, name);
   if (dupIndex !== -1) {
-    const doOverwrite = confirm(`Identifier '${name}' already exists in the table. Do you want to overwrite its definition?`);
-    if (!doOverwrite) return;
-    const isBuiltin = activeEditItem ? (!!activeEditItem.builtinKey || ['nlc', 'pm'].includes(activeEditItem.name)) : (!!arr[dupIndex].builtinKey || ['nlc', 'pm'].includes(arr[dupIndex].name));
-    arr[dupIndex] = {
-      id: arr[dupIndex].id,
+    if (!confirmOverwrite(name)) return;
+    const base = activeEditItem || arr[dupIndex];
+    overwriteDuplicate(arr, dupIndex, {
       type: 'symbol',
-      builtinKey: activeEditItem ? activeEditItem.builtinKey : arr[dupIndex].builtinKey,
+      builtinKey: base.builtinKey,
       name: name,
       displayName: disp,
-      isReal: isReal,
-      isInteger: isInteger,
-      isNonnegative: isNonnegative,
-      isPositive: isPositive,
+      ...flags,
       notes: notes,
-      order: isBuiltin ? (arr[dupIndex].order || 0) : symOrder
-    };
-    if (activeEditItem && activeEditItem.id !== arr[dupIndex].id) {
-      const idxToRemove = arr.findIndex(x => x.id === activeEditItem.id);
-      if (idxToRemove !== -1) arr.splice(idxToRemove, 1);
-    }
+      order: isBuiltinSymbol(base) ? (arr[dupIndex].order || 0) : symOrder
+    });
     saveWorkspaceToStorage(activeWorkspace);
     closeModal('symbolModal');
     showToast(`Symbol '${name}' overwritten successfully!`);
@@ -524,31 +455,13 @@ function saveSymbol() {
   }
 
   if (activeEditItem) {
-    activeEditItem.name = name;
-    activeEditItem.displayName = disp;
-    activeEditItem.isReal = isReal;
-    activeEditItem.isInteger = isInteger;
-    activeEditItem.isNonnegative = isNonnegative;
-    activeEditItem.isPositive = isPositive;
-    activeEditItem.notes = notes;
-    if (!activeEditItem.builtinKey && !['nlc', 'pm'].includes(activeEditItem.name) && isWm) {
+    Object.assign(activeEditItem, { name, displayName: disp, ...flags, notes });
+    if (isWm && !isBuiltinSymbol(activeEditItem)) {
       activeEditItem.order = symOrder;
     }
   } else {
-    const newSym = {
-      id: String(Date.now()),
-      type: 'symbol',
-      name: name,
-      displayName: disp,
-      isReal: isReal,
-      isInteger: isInteger,
-      isNonnegative: isNonnegative,
-      isPositive: isPositive,
-      notes: notes
-    };
-    if (isWm) {
-      newSym.order = symOrder;
-    }
+    const newSym = { id: String(Date.now()), type: 'symbol', name, displayName: disp, ...flags, notes };
+    if (isWm) newSym.order = symOrder;
     arr.push(newSym);
   }
 
@@ -558,69 +471,31 @@ function saveSymbol() {
 
 function openOperatorModal(defaultKind, itemId, ws) {
   activeWorkspace = ws || 'tab2';
-  document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
-  const modal = document.getElementById('operatorModal');
-  const title = document.getElementById('operatorModalTitle');
-  const kindGroup = document.getElementById('op-kind-group');
-  const arr = getWorkspaceArray(activeWorkspace);
+  closeDropdowns();
   const isWm = (activeWorkspace === 'tab3');
-  const opOrderGroup = document.getElementById('op-order-group');
-  const opOrderInput = document.getElementById('op-order');
-  
-  if (itemId) {
-    const item = arr.find(x => x.id === itemId);
-    if (!item) return;
-    activeEditItem = item;
-    if (item.type === 'evolved_op') {
-      title.textContent = 'Edit Evolved Operator: ' + item.name;
-      kindGroup.style.display = 'none';
-      if (opOrderGroup) opOrderGroup.style.display = 'none';
-    } else {
-      title.textContent = 'Edit Field Operator: ' + item.name;
-      kindGroup.style.display = 'flex';
-      const kind = item.kind || 'boson';
-      document.getElementById('op-kind').value = kind;
-      if (opOrderGroup && opOrderInput) {
-        if (isWm && kind === 'boson') {
-          opOrderGroup.style.display = 'block';
-          opOrderInput.value = (typeof item.order === 'number') ? item.order : 0;
-        } else {
-          opOrderGroup.style.display = 'none';
-        }
-      }
-    }
-    document.getElementById('op-var-name').value = item.name;
-    document.getElementById('op-disp').value = item.displayName || item.name;
-    document.getElementById('op-notes').value = item.notes || '';
-  } else {
-    activeEditItem = null;
-    kindGroup.style.display = 'flex';
-    const kind = defaultKind || 'boson';
-    title.textContent = kind === 'boson' ? 'New Boson Operator' : 'New Fermion Operator';
-    document.getElementById('op-kind').value = kind;
-    document.getElementById('op-var-name').value = kind === 'boson' ? 'a' : 'c';
-    document.getElementById('op-disp').value = '';
-    document.getElementById('op-notes').value = '';
-    if (opOrderGroup && opOrderInput) {
-      if (isWm && kind === 'boson') {
-        opOrderGroup.style.display = 'block';
-        opOrderInput.value = 0;
-      } else {
-        opOrderGroup.style.display = 'none';
-      }
-    }
-  }
-  const opDetailsGroup = document.getElementById('op-details-group');
-  const opDetailsBody = document.getElementById('op-details-body');
-  if (opDetailsGroup && opDetailsBody) {
-    if (itemId && isWm) {
-      opDetailsGroup.style.display = 'block';
-      renderItemDetailsTable(activeEditItem, opDetailsBody, activeWorkspace);
-    } else {
-      opDetailsGroup.style.display = 'none';
-    }
-  }
-  modal.classList.add('active');
+  const item = itemId ? getWorkspaceArray(activeWorkspace).find(x => x.id === itemId) : null;
+  if (itemId && !item) return;
+  activeEditItem = item;
+
+  const isEvolved = !!item && item.type === 'evolved_op';
+  const kind = item ? (item.kind || 'boson') : (defaultKind || 'boson');
+
+  let title;
+  if (item) title = (isEvolved ? 'Edit Evolved Operator: ' : 'Edit Field Operator: ') + item.name;
+  else title = kind === 'boson' ? 'New Boson Operator' : 'New Fermion Operator';
+  document.getElementById('operatorModalTitle').textContent = title;
+
+  document.getElementById('op-kind-group').style.display = isEvolved ? 'none' : 'flex';
+  if (!isEvolved) document.getElementById('op-kind').value = kind;
+  toggleOrderGroup('op-order-group', 'op-order', !isEvolved && isWm && kind === 'boson',
+    (item && typeof item.order === 'number') ? item.order : 0);
+
+  document.getElementById('op-var-name').value = item ? item.name : (kind === 'boson' ? 'a' : 'c');
+  document.getElementById('op-disp').value = item ? (item.displayName || item.name) : '';
+  document.getElementById('op-notes').value = (item && item.notes) || '';
+
+  toggleDetailsGroup('op-details-group', 'op-details-body', !!item && isWm);
+  document.getElementById('operatorModal').classList.add('active');
 }
 
 function saveOperator() {
@@ -629,8 +504,9 @@ function saveOperator() {
   const disp = document.getElementById('op-disp').value.trim() || name;
   const notes = document.getElementById('op-notes').value.trim();
   const isWm = (activeWorkspace === 'tab3');
+  const hasOrder = isWm && kind === 'boson';
   const opOrderEl = document.getElementById('op-order');
-  const opOrder = (opOrderEl && isWm && kind === 'boson') ? (parseFloat(opOrderEl.value) || 0) : 0;
+  const opOrder = (opOrderEl && hasOrder) ? (parseFloat(opOrderEl.value) || 0) : 0;
 
   const check = validateVariableName(name);
   if (!check.valid) {
@@ -639,34 +515,13 @@ function saveOperator() {
   }
 
   const arr = getWorkspaceArray(activeWorkspace);
-  const dupIndex = arr.findIndex(x => x.name === name && (!activeEditItem || x.id !== activeEditItem.id));
+  const isEvolved = !!activeEditItem && activeEditItem.type === 'evolved_op';
+  const dupIndex = findDuplicateIndex(arr, name);
   if (dupIndex !== -1) {
-    const doOverwrite = confirm(`Identifier '${name}' already exists in the table. Do you want to overwrite its definition?`);
-    if (!doOverwrite) return;
-    if (activeEditItem && activeEditItem.type === 'evolved_op') {
-      arr[dupIndex] = {
-        id: arr[dupIndex].id,
-        type: 'evolved_op',
-        modeIndex: activeEditItem.modeIndex,
-        name: name,
-        displayName: disp,
-        notes: notes
-      };
-    } else {
-      arr[dupIndex] = {
-        id: arr[dupIndex].id,
-        type: 'operator',
-        kind: kind,
-        name: name,
-        displayName: disp,
-        notes: notes,
-        order: (kind === 'boson' && isWm) ? opOrder : 0
-      };
-    }
-    if (activeEditItem && activeEditItem.id !== arr[dupIndex].id) {
-      const idxToRemove = arr.findIndex(x => x.id === activeEditItem.id);
-      if (idxToRemove !== -1) arr.splice(idxToRemove, 1);
-    }
+    if (!confirmOverwrite(name)) return;
+    overwriteDuplicate(arr, dupIndex, isEvolved
+      ? { type: 'evolved_op', modeIndex: activeEditItem.modeIndex, name, displayName: disp, notes }
+      : { type: 'operator', kind, name, displayName: disp, notes, order: opOrder });
     saveWorkspaceToStorage(activeWorkspace);
     closeModal('operatorModal');
     showToast(`Operator '${name}' overwritten successfully!`);
@@ -674,27 +529,14 @@ function saveOperator() {
   }
 
   if (activeEditItem) {
-    if (activeEditItem.type !== 'evolved_op') {
+    if (!isEvolved) {
       activeEditItem.kind = kind;
-      if (kind === 'boson' && isWm) {
-        activeEditItem.order = opOrder;
-      }
+      if (hasOrder) activeEditItem.order = opOrder;
     }
-    activeEditItem.name = name;
-    activeEditItem.displayName = disp;
-    activeEditItem.notes = notes;
+    Object.assign(activeEditItem, { name, displayName: disp, notes });
   } else {
-    const newOp = {
-      id: String(Date.now()),
-      type: 'operator',
-      kind: kind,
-      name: name,
-      displayName: disp,
-      notes: notes
-    };
-    if (kind === 'boson' && isWm) {
-      newOp.order = opOrder;
-    }
+    const newOp = { id: String(Date.now()), type: 'operator', kind, name, displayName: disp, notes };
+    if (hasOrder) newOp.order = opOrder;
     arr.push(newOp);
   }
 
@@ -702,138 +544,129 @@ function saveOperator() {
   closeModal('operatorModal');
 }
 
-function renderModalFormulaWithTabs(containerEl, tabGroupEl, tabTBtn, tabGBtn, latexT, latexG, singleLatex, resLatex, defaultTab = 't') {
+// Render a saved formula preview inside a modal. With time/gain forms (latexT / latexG) a t/g tab
+// switcher (`${tabPrefix}-tab-group`, `-tab-t`, `-tab-g`) is shown; otherwise a single formula
+// (plus optional remainder) is rendered.
+function renderModalFormulaWithTabs(containerEl, tabPrefix, { latexT = null, latexG = null, singleLatex = null, resLatex = null, defaultTab = 't' } = {}) {
   if (!containerEl) return;
+  const tabGroupEl = document.getElementById(`${tabPrefix}-tab-group`);
+  const tabTBtn = document.getElementById(`${tabPrefix}-tab-t`);
+  const tabGBtn = document.getElementById(`${tabPrefix}-tab-g`);
 
   if (latexT || latexG) {
     if (tabGroupEl) tabGroupEl.style.display = 'flex';
 
-    function switchTab(mode) {
+    function showTab(mode) {
       if (tabTBtn) tabTBtn.classList.toggle('active', mode !== 'g');
       if (tabGBtn) tabGBtn.classList.toggle('active', mode === 'g');
       containerEl.innerHTML = '';
       const mathEl = document.createElement('div');
-      const targetLatex = (mode === 'g' && latexG) ? latexG : (latexT || latexG || '');
-      katex.render(targetLatex, mathEl, { displayMode: true, throwOnError: false });
+      renderMath((mode === 'g' && latexG) ? latexG : (latexT || latexG || ''), mathEl);
       containerEl.appendChild(mathEl);
     }
 
-    if (tabTBtn) tabTBtn.onclick = () => switchTab('t');
-    if (tabGBtn) tabGBtn.onclick = () => switchTab('g');
+    if (tabTBtn) tabTBtn.onclick = () => showTab('t');
+    if (tabGBtn) tabGBtn.onclick = () => showTab('g');
 
-    switchTab(defaultTab === 'g' && latexG ? 'g' : (latexT ? 't' : 'g'));
-  } else {
-    if (tabGroupEl) tabGroupEl.style.display = 'none';
-    containerEl.innerHTML = '';
+    showTab(defaultTab === 'g' && latexG ? 'g' : (latexT ? 't' : 'g'));
+    return;
+  }
 
-    if (singleLatex) {
-      const mathEl = document.createElement('div');
-      katex.render(singleLatex, mathEl, { displayMode: true, throwOnError: false });
-      containerEl.appendChild(mathEl);
+  if (tabGroupEl) tabGroupEl.style.display = 'none';
+  containerEl.innerHTML = '';
 
-      if (resLatex) {
-        const resBlock = document.createElement('div');
-        resBlock.style.borderTop = '1px dashed #cbd5e1';
-        resBlock.style.marginTop = '0.45rem';
-        resBlock.style.paddingTop = '0.45rem';
-        resBlock.innerHTML = '<div style="font-size: 0.75rem; font-weight: 600; color: #475569; margin-bottom: 0.2rem;">Remainder:</div>';
-        const mathRes = document.createElement('div');
-        katex.render(resLatex, mathRes, { displayMode: true, throwOnError: false });
-        resBlock.appendChild(mathRes);
-        containerEl.appendChild(resBlock);
-      }
-    } else {
-      containerEl.innerHTML = '<span style="color: var(--text-secondary); font-size: 0.85rem;">No LaTeX preview available</span>';
-    }
+  if (!singleLatex) {
+    containerEl.innerHTML = '<span style="color: var(--text-secondary); font-size: 0.85rem;">No LaTeX preview available</span>';
+    return;
+  }
+
+  const mathEl = document.createElement('div');
+  renderMath(singleLatex, mathEl);
+  containerEl.appendChild(mathEl);
+
+  if (resLatex) {
+    const resBlock = document.createElement('div');
+    resBlock.style.cssText = 'border-top: 1px dashed #cbd5e1; margin-top: 0.45rem; padding-top: 0.45rem;';
+    resBlock.innerHTML = '<div style="font-size: 0.75rem; font-weight: 600; color: #475569; margin-bottom: 0.2rem;">Remainder:</div>';
+    const mathRes = document.createElement('div');
+    renderMath(resLatex, mathRes);
+    resBlock.appendChild(mathRes);
+    containerEl.appendChild(resBlock);
   }
 }
 
 function openSaveAnswerModal(ws) {
   activeWorkspace = ws || 'tab2';
-  document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
-  const title = document.getElementById('saveAnswerModalTitle');
+  closeDropdowns();
   const orderInfo = document.getElementById('wm-save-order-info');
   const orderInput = document.getElementById('wm-order');
 
+  let title, preview;
   if (activeWorkspace === 'tab1') {
     if (!currentSingleModeLatex) {
       alert('Answer area has no evaluated single-mode result! Please compute an expression first.');
       return;
     }
-    title.textContent = 'Import Single-Mode Result to Tab 2 as PF';
-    document.getElementById('ne-name').value = '';
-    document.getElementById('ne-notes').value = '';
-    if (orderInfo) orderInfo.style.display = 'none';
-
-    renderModalFormulaWithTabs(
-      document.getElementById('ne-expr-preview'),
-      document.getElementById('save-tab-group'),
-      document.getElementById('save-tab-t'),
-      document.getElementById('save-tab-g'),
-      null,
-      null,
-      currentSingleModeLatex,
-      null,
-      't'
-    );
-    document.getElementById('saveAnswerModal').classList.add('active');
+    title = 'Import Single-Mode Result to Tab 2 as PF';
+    preview = { singleLatex: currentSingleModeLatex };
   } else if (activeWorkspace === 'tab3') {
     if (!currentWmLatex) {
       alert('Answer area has no evaluated combination result! Please enter an expression and compute it first.');
       return;
     }
-    title.textContent = 'Save Answer Area Expression (Tab 3)';
-    document.getElementById('ne-name').value = '';
-    document.getElementById('ne-notes').value = '';
-    if (orderInfo && orderInput) {
-      orderInfo.style.display = 'block';
-      const leadingOrd = (cachedWmResult && typeof cachedWmResult.leading_order === 'number') ? cachedWmResult.leading_order : 0;
-      const curProc = (cachedWmResult && cachedWmResult.process) ? cachedWmResult.process : getWmProcess();
-      const procLabel = PROCESS_LABELS[curProc] || curProc;
-      const isSingleMode = (cachedWmResult && typeof cachedWmResult.single_mode === 'boolean')
-        ? cachedWmResult.single_mode
-        : getWmSingleMode();
-      document.getElementById('wm-save-order-val').textContent = `${orderInput.value} (Leading Order: ${leadingOrd}) | ${procLabel} | ${isSingleMode ? 'Single Mode' : 'Multimode'}`;
-    }
-
-    const latexT = (cachedWmResult && cachedWmResult.latex_t) ? cachedWmResult.latex_t : currentWmLatex;
-    const latexG = (cachedWmResult && cachedWmResult.latex_g) ? cachedWmResult.latex_g : currentWmLatex;
-    const defTab = (typeof wmUseGain !== 'undefined' && wmUseGain) ? 'g' : 't';
-    renderModalFormulaWithTabs(
-      document.getElementById('ne-expr-preview'),
-      document.getElementById('save-tab-group'),
-      document.getElementById('save-tab-t'),
-      document.getElementById('save-tab-g'),
-      latexT,
-      latexG,
-      null,
-      null,
-      defTab
-    );
-    document.getElementById('saveAnswerModal').classList.add('active');
+    title = 'Save Answer Area Expression (Tab 3)';
+    preview = {
+      latexT: cachedWmResult?.latex_t || currentWmLatex,
+      latexG: cachedWmResult?.latex_g || currentWmLatex,
+      defaultTab: wmUseGain ? 'g' : 't'
+    };
   } else {
     if (!currentPfLatex) {
       alert('Answer area has no evaluated PF result! Please enter an expression and compute it first.');
       return;
     }
-    title.textContent = 'Save Answer Area PF as Variable (Tab 2)';
-    document.getElementById('ne-name').value = '';
-    document.getElementById('ne-notes').value = '';
-    if (orderInfo) orderInfo.style.display = 'none';
-
-    renderModalFormulaWithTabs(
-      document.getElementById('ne-expr-preview'),
-      document.getElementById('save-tab-group'),
-      document.getElementById('save-tab-t'),
-      document.getElementById('save-tab-g'),
-      null,
-      null,
-      currentPfLatex,
-      currentPfRemainderLatex || null,
-      't'
-    );
-    document.getElementById('saveAnswerModal').classList.add('active');
+    title = 'Save Answer Area PF as Variable (Tab 2)';
+    preview = { singleLatex: currentPfLatex, resLatex: currentPfRemainderLatex || null };
   }
+
+  document.getElementById('saveAnswerModalTitle').textContent = title;
+  document.getElementById('ne-name').value = '';
+  document.getElementById('ne-notes').value = '';
+
+  if (activeWorkspace !== 'tab3') {
+    if (orderInfo) orderInfo.style.display = 'none';
+  } else if (orderInfo && orderInput) {
+    orderInfo.style.display = 'block';
+    const leadingOrd = (cachedWmResult && typeof cachedWmResult.leading_order === 'number') ? cachedWmResult.leading_order : 0;
+    const curProc = cachedWmResult?.process || getWmProcess();
+    const procLabel = PROCESS_LABELS[curProc] || curProc;
+    const isSingleMode = (cachedWmResult && typeof cachedWmResult.single_mode === 'boolean')
+      ? cachedWmResult.single_mode
+      : getWmSingleMode();
+    document.getElementById('wm-save-order-val').textContent = `${orderInput.value} (Leading Order: ${leadingOrd}) | ${procLabel} | ${isSingleMode ? 'Single Mode' : 'Multimode'}`;
+  }
+
+  renderModalFormulaWithTabs(document.getElementById('ne-expr-preview'), 'save', preview);
+  document.getElementById('saveAnswerModal').classList.add('active');
+}
+
+// Insert a named expression, or overwrite the existing entry of that name after confirmation.
+// `build(existing)` returns the entry fields (without id). Returns false if the user declined.
+function upsertNamedItem(arr, name, build, tabName = '') {
+  const dupIndex = arr.findIndex(x => x.name === name);
+  const existing = dupIndex !== -1 ? arr[dupIndex] : null;
+  if (existing && !confirm(`Identifier '${name}' already exists in the ${tabName ? tabName + ' ' : ''}table. Do you want to overwrite its definition?`)) {
+    return false;
+  }
+  const entry = { id: existing ? existing.id : String(Date.now()), ...build(existing) };
+  if (existing) arr[dupIndex] = entry;
+  else arr.push(entry);
+
+  const where = tabName ? ` in ${tabName}` : '';
+  showToast(existing
+    ? `Expression '${name}' overwritten successfully${where}!`
+    : `Expression successfully saved as variable '${name}'${where}!`);
+  return true;
 }
 
 async function saveAnswerExpression() {
@@ -861,8 +694,7 @@ async function saveAnswerExpression() {
     }
 
     const smSource = `Pat(${opName}, ${document.getElementById('sm-first-op').value}, ${document.getElementById('sm-exponents').value.trim()})`;
-    const dupIndex = tableItems.findIndex(x => x.name === name);
-    const itemData = {
+    const saved = upsertNamedItem(tableItems, name, () => ({
       type: 'named_expr',
       name: name,
       displayName: '',
@@ -870,17 +702,8 @@ async function saveAnswerExpression() {
       exprStr: currentSingleModeExprStr || '',
       latex: currentSingleModeLatex,
       notes: notes
-    };
-
-    if (dupIndex !== -1) {
-      const doOverwrite = confirm(`Identifier '${name}' already exists in the Tab 2 table. Do you want to overwrite its definition?`);
-      if (!doOverwrite) return;
-      tableItems[dupIndex] = { ...itemData, id: tableItems[dupIndex].id };
-      showToast(`Expression '${name}' overwritten successfully in Tab 2!`);
-    } else {
-      tableItems.push({ ...itemData, id: String(Date.now()) });
-      showToast(`Expression successfully saved as variable '${name}' in Tab 2!`);
-    }
+    }), 'Tab 2');
+    if (!saved) return;
 
     saveWorkspaceToStorage('tab2');
     closeModal('saveAnswerModal');
@@ -889,14 +712,12 @@ async function saveAnswerExpression() {
 
   const arr = getWorkspaceArray(activeWorkspace);
   const isWmWs = (activeWorkspace === 'tab3');
+  const currentInputText = isWmWs
+    ? (cachedWmResult?.sourceInput || currentWmSourceInput || localStorage.getItem('qc_tab3_source_input') || document.getElementById('wm-input')?.value?.trim() || '')
+    : (currentPfSourceInput || localStorage.getItem('qc_tab2_source_input') || document.getElementById('pf-input')?.value?.trim() || '');
   const currentWmOrder = (isWmWs && document.getElementById('wm-order'))
     ? parseInt(document.getElementById('wm-order').value)
     : null;
-  const currentInputText = isWmWs
-    ? ((cachedWmResult && cachedWmResult.sourceInput)
-        ? cachedWmResult.sourceInput
-        : (currentWmSourceInput || localStorage.getItem('qc_tab3_source_input') || document.getElementById('wm-input')?.value?.trim() || ''))
-    : (currentPfSourceInput || localStorage.getItem('qc_tab2_source_input') || document.getElementById('pf-input')?.value?.trim() || '');
 
   // Inform backend to persist the latest evaluated object directly under this variable name
   try {
@@ -907,128 +728,59 @@ async function saveAnswerExpression() {
     });
   } catch (_) {}
 
+  let saved;
   if (isWmWs) {
-    const latexT = (cachedWmResult && cachedWmResult.latex_t) ? cachedWmResult.latex_t : currentWmLatex;
-    const latexG = (cachedWmResult && cachedWmResult.latex_g) ? cachedWmResult.latex_g : currentWmLatex;
-    const exprStrT = (cachedWmResult && cachedWmResult.expr_str_t) ? cachedWmResult.expr_str_t : (currentWmExpr || '');
-    const exprStrG = (cachedWmResult && cachedWmResult.expr_str_g) ? cachedWmResult.expr_str_g : (currentWmExpr || '');
-    const exprStrVal = (cachedWmResult && cachedWmResult.expr_str) ? cachedWmResult.expr_str : (currentWmExpr || exprStrT || currentInputText || '');
-    const leadOrdVal = (cachedWmResult && typeof cachedWmResult.leading_order === 'number')
-      ? cachedWmResult.leading_order
-      : 0;
-    const curProcess = (cachedWmResult && cachedWmResult.process) ? cachedWmResult.process : getWmProcess();
-    const isDc = curProcess !== 'twm_fc';
-    const hasDefault = exprContainsDefaultOperators(latexT, wmTableItems) || exprContainsDefaultOperators(latexG, wmTableItems);
-    const savedOrderVal = (cachedWmResult && typeof cachedWmResult.order === 'number') ? cachedWmResult.order : currentWmOrder;
+    const latexT = cachedWmResult?.latex_t || currentWmLatex;
+    const latexG = cachedWmResult?.latex_g || currentWmLatex;
+    const exprStrT = cachedWmResult?.expr_str_t || currentWmExpr || '';
+    const exprStrG = cachedWmResult?.expr_str_g || currentWmExpr || '';
+    const curProcess = cachedWmResult?.process || getWmProcess();
 
-    const dupIndex = arr.findIndex(x => x.name === name);
-    if (dupIndex !== -1) {
-      const doOverwrite = confirm(`Identifier '${name}' already exists in the table. Do you want to overwrite its definition?`);
-      if (!doOverwrite) return;
-      arr[dupIndex] = {
-        id: arr[dupIndex].id,
-        type: 'named_expr',
-        name: name,
-        displayName: '',
-        sourceInput: currentInputText || (arr[dupIndex] ? arr[dupIndex].sourceInput : '') || '',
-        exprStr: exprStrVal,
-        exprStr_t: exprStrT,
-        exprStr_g: exprStrG,
-        latex_t: latexT,
-        latex_g: latexG,
-        order: savedOrderVal,
-        leadingOrder: leadOrdVal,
-        dc: isDc,
-        process: curProcess,
-        single_mode: (cachedWmResult && typeof cachedWmResult.single_mode === 'boolean')
-          ? cachedWmResult.single_mode
-          : getWmSingleMode(),
-        hasDefaultOps: hasDefault,
-        notes: notes
-      };
-      saveWorkspaceToStorage(activeWorkspace);
-      closeModal('saveAnswerModal');
-      showToast(`Expression '${name}' overwritten successfully!`);
-      return;
-    }
-
-    const isCurrentSm = (cachedWmResult && typeof cachedWmResult.single_mode === 'boolean')
-      ? cachedWmResult.single_mode
-      : getWmSingleMode();
-
-    arr.push({
-      id: String(Date.now()),
+    saved = upsertNamedItem(arr, name, (existing) => ({
       type: 'named_expr',
       name: name,
       displayName: '',
-      sourceInput: currentInputText,
-      exprStr: exprStrVal,
+      sourceInput: currentInputText || existing?.sourceInput || '',
+      exprStr: cachedWmResult?.expr_str || currentWmExpr || exprStrT || currentInputText || '',
       exprStr_t: exprStrT,
       exprStr_g: exprStrG,
       latex_t: latexT,
       latex_g: latexG,
-      order: savedOrderVal,
-      leadingOrder: leadOrdVal,
-      dc: isDc,
+      order: (cachedWmResult && typeof cachedWmResult.order === 'number') ? cachedWmResult.order : currentWmOrder,
+      leadingOrder: (cachedWmResult && typeof cachedWmResult.leading_order === 'number') ? cachedWmResult.leading_order : 0,
+      dc: curProcess !== 'twm_fc',
       process: curProcess,
-      single_mode: isCurrentSm,
-      hasDefaultOps: hasDefault,
+      single_mode: (cachedWmResult && typeof cachedWmResult.single_mode === 'boolean')
+        ? cachedWmResult.single_mode
+        : getWmSingleMode(),
+      hasDefaultOps: exprContainsDefaultOperators(latexT, wmTableItems) || exprContainsDefaultOperators(latexG, wmTableItems),
       notes: notes
-    });
-
-    saveWorkspaceToStorage(activeWorkspace);
-    closeModal('saveAnswerModal');
-    showToast(`Expression successfully saved as variable '${name}'!`);
-    return;
-  }
-
-  if (!currentPfLatex) {
-    alert('No evaluated result to save. Please calculate a result first.');
-    return;
-  }
-
-  const dupIndex = arr.findIndex(x => x.name === name);
-  if (dupIndex !== -1) {
-    const doOverwrite = confirm(`Identifier '${name}' already exists in the table. Do you want to overwrite its definition?`);
-    if (!doOverwrite) return;
-    arr[dupIndex] = {
-      id: arr[dupIndex].id,
+    }));
+  } else {
+    if (!currentPfLatex) {
+      alert('No evaluated result to save. Please calculate a result first.');
+      return;
+    }
+    saved = upsertNamedItem(arr, name, (existing) => ({
       type: 'named_expr',
       name: name,
       displayName: '',
-      sourceInput: currentInputText || (arr[dupIndex] ? arr[dupIndex].sourceInput : '') || '',
-      exprStr: currentPfExpr || (arr[dupIndex] ? arr[dupIndex].exprStr : '') || '',
+      sourceInput: currentInputText || existing?.sourceInput || '',
+      exprStr: currentPfExpr || existing?.exprStr || '',
       latex: currentPfLatex || null,
       remainder_latex: currentPfRemainderLatex || null,
       notes: notes
-    };
-    saveWorkspaceToStorage(activeWorkspace);
-    closeModal('saveAnswerModal');
-    showToast(`Expression '${name}' overwritten successfully!`);
-    return;
+    }));
   }
-
-  arr.push({
-    id: String(Date.now()),
-    type: 'named_expr',
-    name: name,
-    displayName: '',
-    sourceInput: currentInputText,
-    exprStr: currentPfExpr || '',
-    latex: currentPfLatex || null,
-    remainder_latex: currentPfRemainderLatex || null,
-    notes: notes
-  });
+  if (!saved) return;
 
   saveWorkspaceToStorage(activeWorkspace);
   closeModal('saveAnswerModal');
-  showToast(`Expression successfully saved as variable '${name}'!`);
 }
 
 function openRenameModal(itemId, ws) {
   activeWorkspace = ws || 'tab2';
-  const arr = getWorkspaceArray(activeWorkspace);
-  const item = arr.find(x => x.id === itemId);
+  const item = getWorkspaceArray(activeWorkspace).find(x => x.id === itemId);
   if (!item) return;
   activeEditItem = item;
   document.getElementById('rename-input').value = item.name;
@@ -1054,35 +806,15 @@ function openRenameModal(itemId, ws) {
   const defGroup = document.getElementById('rename-def-group');
   const defPreview = document.getElementById('rename-def-preview');
   if (defGroup && defPreview) {
-    if (item.type === 'named_expr') {
-      defGroup.style.display = 'block';
-      if (item.latex_t || item.latex_g) {
-        renderModalFormulaWithTabs(
-          defPreview,
-          document.getElementById('rename-tab-group'),
-          document.getElementById('rename-tab-t'),
-          document.getElementById('rename-tab-g'),
-          item.latex_t,
-          item.latex_g,
-          null,
-          null,
-          't'
-        );
-      } else {
-        renderModalFormulaWithTabs(
-          defPreview,
-          document.getElementById('rename-tab-group'),
-          document.getElementById('rename-tab-t'),
-          document.getElementById('rename-tab-g'),
-          null,
-          null,
-          item.latex || '',
-          item.remainder_latex || null,
-          't'
-        );
-      }
-    } else {
-      defGroup.style.display = 'none';
+    const isNamed = item.type === 'named_expr';
+    defGroup.style.display = isNamed ? 'block' : 'none';
+    if (isNamed) {
+      renderModalFormulaWithTabs(defPreview, 'rename', {
+        latexT: item.latex_t,
+        latexG: item.latex_g,
+        singleLatex: item.latex || '',
+        resLatex: item.remainder_latex || null
+      });
     }
   }
 
@@ -1091,17 +823,7 @@ function openRenameModal(itemId, ws) {
     title.textContent = item.type === 'named_expr' ? 'View Definition & Edit Expression' : 'Edit Identifier & Notes';
   }
 
-  const detailsGroup = document.getElementById('rename-details-group');
-  const detailsBody = document.getElementById('rename-details-body');
-  if (detailsGroup && detailsBody) {
-    if (activeWorkspace === 'tab3') {
-      detailsGroup.style.display = 'block';
-      renderItemDetailsTable(item, detailsBody, activeWorkspace);
-    } else {
-      detailsGroup.style.display = 'none';
-    }
-  }
-
+  toggleDetailsGroup('rename-details-group', 'rename-details-body', activeWorkspace === 'tab3');
   document.getElementById('renameModal').classList.add('active');
 }
 
@@ -1131,8 +853,7 @@ function applyRename() {
 function editItem(id, ws) {
   hideRowTooltip();
   activeWorkspace = ws || 'tab2';
-  const arr = getWorkspaceArray(activeWorkspace);
-  const item = arr.find(x => x.id === id);
+  const item = getWorkspaceArray(activeWorkspace).find(x => x.id === id);
   if (!item) return;
   if (item.type === 'symbol') {
     openSymbolModal(id, activeWorkspace);
@@ -1146,8 +867,7 @@ function editItem(id, ws) {
 function deleteItem(id, ws) {
   activeWorkspace = ws || 'tab2';
   const isWm = (activeWorkspace === 'tab3');
-  const arr = isWm ? wmTableItems : tableItems;
-  const item = arr.find(x => x.id === id);
+  const item = getWorkspaceArray(activeWorkspace).find(x => x.id === id);
   if (!item) return;
 
   if (isWm && (item.type === 'evolved_op' || ['a_p', 'a_s', 'a_i'].includes(item.name))) {
@@ -1167,4 +887,3 @@ function deleteItem(id, ws) {
   saveWorkspaceToStorage(activeWorkspace);
   showToast(`'${item.name}' deleted.`);
 }
-

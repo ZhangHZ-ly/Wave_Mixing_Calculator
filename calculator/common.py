@@ -1,9 +1,13 @@
 from __future__ import annotations
 import keyword
-from typing import Tuple
+from typing import Any, Dict, Tuple
 
-from sympy.core.symbol import Symbol
 import re
+from sympy.core.symbol import Symbol
+from sympy.functions.elementary.exponential import exp
+from sympy.functions.elementary.hyperbolic import cosh, sinh, tanh
+from sympy.functions.elementary.miscellaneous import sqrt
+from sympy.functions.elementary.trigonometric import cos, sin
 from tokenize import NUMBER, NAME, OP
 from sympy.parsing.sympy_parser import (
     convert_xor,
@@ -46,15 +50,17 @@ def split_scientific_variable(tokens, local_dict, global_dict):
     return result
 
 
-TRANSFORMS = (
-    split_scientific_variable,
-) + standard_transformations + (
-    split_symbols_custom(custom_can_split),
-    implicit_multiplication,
-    implicit_application,
-    function_exponentiation,
-    convert_xor,
-)
+def _build_transforms(multiplication) -> tuple:
+    return (split_scientific_variable,) + standard_transformations + (
+        split_symbols_custom(custom_can_split),
+        multiplication,
+        implicit_application,
+        function_exponentiation,
+        convert_xor,
+    )
+
+
+TRANSFORMS = _build_transforms(implicit_multiplication)
 
 
 def implicit_matmul(tokens, local_dict, global_dict):
@@ -66,15 +72,15 @@ def implicit_matmul(tokens, local_dict, global_dict):
     ]
 
 
-WM_TRANSFORMS = (
-    split_scientific_variable,
-) + standard_transformations + (
-    split_symbols_custom(custom_can_split),
-    implicit_matmul,
-    implicit_application,
-    function_exponentiation,
-    convert_xor,
-)
+WM_TRANSFORMS = _build_transforms(implicit_matmul)
+
+# Elementary functions exposed to expression input (wrapped per-workspace before use)
+ELEMENTARY_FUNCS = {
+    'exp': exp, 'sin': sin, 'cos': cos,
+    'sinh': sinh, 'cosh': cosh, 'tanh': tanh,
+    'sqrt': sqrt,
+}
+DAGGER_ALIASES = ('dag', 'Dagger', 'dagger')
 
 # Parametric gain operator symbol \hat{g} (non-commutative to preserve operator ordering)
 g_hat = Symbol(r'\hat{g}', commutative=False)
@@ -111,3 +117,31 @@ def is_valid_variable_name(name: str) -> Tuple[bool, str]:
 def is_valid_python_name(name: str) -> bool:
     """Validate whether name conforms to Python identifier rules and does not conflict with keywords or built-ins."""
     return is_valid_variable_name(name)[0]
+
+
+def validated_name(defn: Dict[str, Any], label: str) -> str:
+    """Return the stripped 'name' of a definition dict, raising ValueError if it is not a valid identifier."""
+    name = (defn.get('name') or '').strip()
+    valid, err_msg = is_valid_variable_name(name)
+    if not valid:
+        raise ValueError(f"Invalid {label} identifier: {err_msg}")
+    return name
+
+
+def symbol_assumptions(defn: Dict[str, Any]) -> Dict[str, bool]:
+    """Map the (mutually prioritized) assumption flags of a symbol definition to sympy Symbol kwargs."""
+    for flag, key in (('is_positive', 'positive'), ('is_nonnegative', 'nonnegative'),
+                      ('is_integer', 'integer'), ('is_real', 'real')):
+        if defn.get(flag):
+            return {key: True}
+    return {}
+
+
+def safe_subs(expr, subs: Dict[Any, Any]):
+    """Apply display-name substitutions, falling back to the original expression on failure."""
+    if not subs:
+        return expr
+    try:
+        return expr.subs(subs)
+    except Exception:
+        return expr

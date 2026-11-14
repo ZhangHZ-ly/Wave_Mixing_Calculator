@@ -1,7 +1,10 @@
 from __future__ import annotations
 import ast
+import io
 import math
 import re
+import tokenize
+from functools import partial
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from cas_qwm.dsolve_pm import d_p2s
@@ -20,9 +23,6 @@ from sympy.core.sympify import sympify
 from sympy.core.traversal import bottom_up
 from sympy.functions.elementary.complexes import Abs
 from sympy.functions.elementary.exponential import exp
-from sympy.functions.elementary.hyperbolic import cosh, sinh, tanh
-from sympy.functions.elementary.miscellaneous import sqrt
-from sympy.functions.elementary.trigonometric import cos, sin
 from sympy.parsing.sympy_parser import parse_expr
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.dagger import Dagger
@@ -30,9 +30,13 @@ from sympy.physics.quantum.fermion import FermionOp
 from sympy.printing.latex import latex
 
 from .common import (
-    WM_TRANSFORMS,
-    is_valid_variable_name,
+    DAGGER_ALIASES,
+    ELEMENTARY_FUNCS,
     RESERVED_NAMES,
+    WM_TRANSFORMS,
+    safe_subs,
+    symbol_assumptions,
+    validated_name,
 )
 from .conditions import normalize_process, process_is_dc
 from .wm_transforms import t_to_g
@@ -75,15 +79,12 @@ def eval_wm_solve(
     s = get_wm_solver(proc, mismatch=bool(mismatch))
 
     if proc == 'fwm':
-        sol_order = min(1, max(-1, order))
-        expr_t = s.sol_expr(var_index, sol_order)
+        expr_t = s.sol_expr(var_index, min(1, max(-1, order)))
         if not mismatch:
             expr_t = s._zq(expr_t)
-        expr_g = t_to_g(expr_t, process='fwm', mismatch=bool(mismatch))
     else:
-        sol_order = max(-1, order - 1)
-        expr_t = s.sol_expr(var_index, sol_order)
-        expr_g = t_to_g(expr_t, process=proc, mismatch=bool(mismatch))
+        expr_t = s.sol_expr(var_index, max(-1, order - 1))
+    expr_g = t_to_g(expr_t, process=proc, mismatch=bool(mismatch))
 
     return latex(expr_t), latex(expr_g)
 
@@ -176,25 +177,20 @@ def compute_val_leading_order(
         return expr_t.subs({t_: _g / gc_eff})
 
     w_sub = WMWrapper.from_val(val, s.processor).apply(_sub_t_for_order, on_npf=True)
-    orders: List[Any] = []
     if w_sub.b_left is None:
-        for p in w_sub.dict_repr.values():
+        groups = [(0, w_sub.dict_repr.values())]
+    else:
+        groups = [(pe.leading_order(b)[1], d.values()) for b, d in w_sub.dict_repr.items()]
+
+    orders: List[Any] = []
+    for b_ord, pfs in groups:
+        for p in pfs:
             try:
                 o = pe.lo_pf(p)[1]
                 if o is not S.Infinity:
-                    orders.append(o)
+                    orders.append(o + b_ord)
             except Exception:
                 pass
-    else:
-        for b, d in w_sub.dict_repr.items():
-            b_ord = pe.leading_order(b)[1]
-            for p in d.values():
-                try:
-                    o = pe.lo_pf(p)[1]
-                    if o is not S.Infinity:
-                        orders.append(o + b_ord)
-                except Exception:
-                    pass
 
     if not orders:
         return 0
@@ -202,6 +198,13 @@ def compute_val_leading_order(
         return _format_order_num(min(orders))
     except Exception:
         return 0
+
+
+_NLC_NAMES = ('nlc', 'chi', r'\chi', 'χ')
+
+
+def _ref_attr(ref: Any, key: str, default: Any = None) -> Any:
+    return ref.get(key, default) if isinstance(ref, dict) else getattr(ref, key, default)
 
 
 def analyze_expression_terms(
@@ -247,7 +250,7 @@ def analyze_expression_terms(
         for s_def in symbols:
             name = (s_def.get('name') or '').strip()
             if name:
-                if name in ('nlc', 'chi', r'\chi', 'χ') or s_def.get('builtin_key') == 'nlc':
+                if name in _NLC_NAMES or s_def.get('builtin_key') == 'nlc':
                     sym_orders[name] = 1.0
                 else:
                     try:
@@ -289,7 +292,7 @@ def analyze_expression_terms(
                 return False, lo, 'evolved', name
             if name in sym_orders:
                 return True, sym_orders[name], 'exact', name
-            if name in ('nlc', 'chi', r'\chi', 'χ'):
+            if name in _NLC_NAMES:
                 return True, 1.0, 'exact', name
             lo = strong_lo if name in strong_names else 0.0
             return True, lo, 'exact', name
@@ -297,7 +300,7 @@ def analyze_expression_terms(
             return get_factor_info(node.operand)
         if isinstance(node, ast.Call):
             func_name = node.func.id if isinstance(node.func, ast.Name) else ''
-            if func_name in ('dag', 'Dagger', 'dagger', 'diff', 'Derivative') and node.args:
+            if func_name in (*DAGGER_ALIASES, 'diff', 'Derivative') and node.args:
                 return get_factor_info(node.args[0])
             if func_name in ('N_', 'BosonNum') and node.args:
                 arg = node.args[0]
@@ -332,7 +335,7 @@ def analyze_expression_terms(
             return expand_additive_products(node.operand)
         if isinstance(node, ast.Call):
             func_name = node.func.id if isinstance(node.func, ast.Name) else ''
-            if func_name in ('dag', 'Dagger', 'dagger') and len(node.args) == 1:
+            if func_name in DAGGER_ALIASES and len(node.args) == 1:
                 inner_terms = expand_additive_products(node.args[0])
                 if len(inner_terms) > 1 or (len(inner_terms) == 1 and len(inner_terms[0]) > 1):
                     return inner_terms
@@ -403,41 +406,34 @@ def analyze_expression_terms(
             req_order_raw = float(target_order) - other_lo_sum
             req_order_int = int(math.ceil(req_order_raw - 1e-12))
 
+            warning = None
             if cat == 'evolved':
-                is_strong = (ref in strong_names)
                 if proc == 'fwm':
-                    needed_for_op = 1 if req_order_int >= 1 else (0 if req_order_int >= 0 else -1)
+                    # FWM evolved operators are capped at order 1
+                    needed_for_op = max(-1, min(1, req_order_int))
                     if req_order_int > 1:
-                        name = str(ref)
-                        key = ('evolved', name, 1, req_order_int)
-                        if key not in seen_warnings:
-                            seen_warnings.add(key)
-                            insufficient_items.append({
-                                'name': name,
-                                'kind': 'evolved_op',
-                                'order': 1,
-                                'required_order': req_order_int,
-                            })
-                elif is_strong:
+                        warning = (str(ref), 'evolved_op', 1)
+                elif ref in strong_names:
                     needed_for_op = -1 if req_order_int <= 0 else (req_order_int if req_order_int % 2 == 1 else req_order_int - 1)
                 else:
                     needed_for_op = -1 if req_order_int < 0 else (req_order_int if req_order_int % 2 == 0 else req_order_int - 1)
-
-                if needed_for_op > max_evolved_needed:
-                    max_evolved_needed = needed_for_op
+                max_evolved_needed = max(max_evolved_needed, needed_for_op)
             elif cat == 'named':
-                rec_order = ref.get('order') if isinstance(ref, dict) else getattr(ref, 'order', None)
+                rec_order = _ref_attr(ref, 'order')
                 if rec_order is not None and float(rec_order) < req_order_raw - 1e-12:
-                    name = ref.get('name', '') if isinstance(ref, dict) else getattr(ref, 'name', '')
-                    key = ('named', name, rec_order, req_order_int)
-                    if key not in seen_warnings:
-                        seen_warnings.add(key)
-                        insufficient_items.append({
-                            'name': name,
-                            'kind': 'named_expr',
-                            'order': rec_order,
-                            'required_order': req_order_int,
-                        })
+                    warning = (_ref_attr(ref, 'name', ''), 'named_expr', rec_order)
+
+            if warning is not None:
+                name, kind, rec_order = warning
+                key = (kind, name, rec_order, req_order_int)
+                if key not in seen_warnings:
+                    seen_warnings.add(key)
+                    insufficient_items.append({
+                        'name': name,
+                        'kind': kind,
+                        'order': rec_order,
+                        'required_order': req_order_int,
+                    })
 
     return max_evolved_needed, insufficient_items
 
@@ -449,7 +445,6 @@ def validate_input_identifiers(expr_str: str, local_dict: dict):
     """
     if not expr_str or not expr_str.strip():
         return
-    import io, tokenize
     try:
         toks = list(tokenize.tokenize(io.BytesIO(expr_str.encode('utf-8')).readline))
     except Exception:
@@ -459,7 +454,8 @@ def validate_input_identifiers(expr_str: str, local_dict: dict):
             name = tok.string
             if name.count('_') >= 2 and name not in local_dict and name not in RESERVED_NAMES:
                 raise ValueError(
-                    f"不规范输入：未定义的复合变量名 '{name}'。若要执行乘法运算，请在变量之间使用空格/'@'（多模乘法）或'*'（单模乘法）分隔。"
+                    f"Invalid input: undefined compound identifier '{name}'. To multiply, separate the "
+                    f"variables with a space / '@' (multimode product) or '*' (single-mode product)."
                 )
 
 
@@ -549,6 +545,15 @@ def _prepare_wm_evaluation(
             return sc if sc is not None else x.expr
         return sympify(x)
 
+    def _raw_args(args) -> list:
+        return [a if isinstance(a, bool) else _unwrap_scalar(a) for a in args]
+
+    def _split_pat_args(args):
+        """Split pattern arguments into (explicit leading annihilation flag or None, exponents)."""
+        exps = _raw_args(args)
+        explicit_ann = exps.pop(0) if (exps and isinstance(exps[0], bool)) else None
+        return explicit_ann, (exps or [1])
+
     def _make_boson_num(item):
         return WMWrapper.from_val(BosonNum(_resolve_mode_name(item)), p)
 
@@ -561,29 +566,22 @@ def _prepare_wm_evaluation(
         return WMWrapper.from_val(val, p)
 
     def _make_pat(item, *args):
-        raw_args = [a if isinstance(a, bool) else _unwrap_scalar(a) for a in args]
+        explicit_ann, exps = _split_pat_args(args)
 
+        # Multimode canonical operator A (or its adjoint)
         is_A = isinstance(item, WMWrapper) and (item is init_ops['A'] or item == init_ops['A'])
         is_dagA = (isinstance(item, WMWrapper) and item.b_left is None
                    and list(item.dict_repr.keys()) == [(False, 1)]
                    and item.dict_repr[(False, 1)].table == {_vpk: S.One})
         if is_A or is_dagA:
-            is_ann = is_A
-            exps = list(raw_args)
-            if exps and isinstance(exps[0], bool):
-                is_ann = exps.pop(0)
-            if not exps:
-                exps = [1]
+            is_ann = is_A if explicit_ann is None else explicit_ann
             int_exps = [int(sympify(e)) for e in exps]
             if any(e < 0 for e in int_exps):
                 raise ValueError("Pattern exponents must be non-negative integers.")
             return WMWrapper(p, {_tdz(is_ann, int_exps): PF1})
 
+        # Evolved / multimode wrapped operators: alternate the operator and its adjoint
         if isinstance(item, WMWrapper) and (item.b_left is not None or set(item.dict_repr.keys()) != {(None,)}):
-            exps = list(raw_args)
-            explicit_ann = exps.pop(0) if (exps and isinstance(exps[0], bool)) else None
-            if not exps:
-                exps = [1]
             if item.b_left is not None and len(item.dict_repr) == 1:
                 b_first = next(iter(item.dict_repr))
                 op_ann = item if b_first.is_annihilation else item.adjoint()
@@ -598,6 +596,7 @@ def _prepare_wm_evaluation(
                 is_a = not is_a
             return res
 
+        # Plain single-mode field operators
         if isinstance(item, WMWrapper):
             pf_item = item.dict_repr.get((None,), PF1)
             if pf_item.table:
@@ -609,19 +608,13 @@ def _prepare_wm_evaluation(
             op = item
 
         if isinstance(op, Dagger):
-            inner = op.args[0]
-            is_ann = False
+            inner, is_ann = op.args[0], False
         else:
-            inner = op
-            is_ann = op.is_annihilation
+            inner, is_ann = op, op.is_annihilation
+        if explicit_ann is not None:
+            is_ann = explicit_ann
 
         name = str(op_mode_map.get(inner.name, inner.name))
-        exps = list(raw_args)
-        if exps and isinstance(exps[0], bool):
-            is_ann = exps.pop(0)
-        if not exps:
-            exps = [1]
-
         is_fermion = (mode_kind_map.get(name) == 'fermion') or isinstance(inner, (FermionOp, FermionPat))
         if is_fermion:
             return WMWrapper.from_val(FermionPat(name, is_ann, *exps), p)
@@ -632,8 +625,7 @@ def _prepare_wm_evaluation(
         return WMWrapper(p, PF({(b_key, ()): tail}))
 
     def _make_op_pat(pat_cls, item, *args):
-        raw_args = [a if isinstance(a, bool) else _unwrap_scalar(a) for a in args]
-        return WMWrapper.from_val(pat_cls(_resolve_mode_name(item), *raw_args), p)
+        return WMWrapper.from_val(pat_cls(_resolve_mode_name(item), *_raw_args(args)), p)
 
     def _wrap_fn(fn):
         def _inner(item):
@@ -647,52 +639,43 @@ def _prepare_wm_evaluation(
             return WMWrapper.from_val(fn(sympify(raw_item)), p)
         return _inner
 
+    def _diff_fn(expr, *args, **kwargs):
+        if isinstance(expr, WMWrapper):
+            return expr.diff(*args, gc=s.gc, **kwargs)
+        return diff(expr, *args, **kwargs)
+
+    def wrap(v):
+        return WMWrapper.from_val(v, p)
+
     w_g_internal = WMWrapper(p, PF({_vpk: s.gc * t_}))
     w_g_internal._is_g = True
     w_g_internal._gc = s.gc
 
-    w_t = WMWrapper.from_val(t_, p)
+    w_t = wrap(t_)
     w_t._is_t = True
 
     pm_internal = s.pm if proc == 'fwm' else (pm if mismatch else S.Zero)
 
     local_dict: Dict[str, Any] = {
-        'i': WMWrapper.from_val(I, p),
-        'I': WMWrapper.from_val(I, p),
-        'pi': WMWrapper.from_val(pi, p),
-        'e': WMWrapper.from_val(exp(1), p),
-        'exp': _wrap_fn(exp),
-        'sin': _wrap_fn(sin),
-        'cos': _wrap_fn(cos),
-        'sinh': _wrap_fn(sinh),
-        'cosh': _wrap_fn(cosh),
-        'tanh': _wrap_fn(tanh),
-        'sqrt': _wrap_fn(sqrt),
-        'dag': lambda item: WMWrapper.from_val(item, p).adjoint(),
-        'Dagger': lambda item: WMWrapper.from_val(item, p).adjoint(),
-        'dagger': lambda item: WMWrapper.from_val(item, p).adjoint(),
-        'N_': _make_boson_num,
-        'BosonNum': _make_boson_num,
-        'Pat': _make_pat,
-        'pattern': _make_pat,
-        'BP': lambda item, *args: _make_op_pat(BosonPat, item, *args),
-        'BosonPat': lambda item, *args: _make_op_pat(BosonPat, item, *args),
-        'FP': lambda item, *args: _make_op_pat(FermionPat, item, *args),
-        'FermionPat': lambda item, *args: _make_op_pat(FermionPat, item, *args),
+        'i': wrap(I),
+        'I': wrap(I),
+        'pi': wrap(pi),
+        'e': wrap(exp(1)),
+        **{k: _wrap_fn(fn) for k, fn in ELEMENTARY_FUNCS.items()},
+        **dict.fromkeys(DAGGER_ALIASES, lambda item: wrap(item).adjoint()),
+        **dict.fromkeys(('N_', 'BosonNum'), _make_boson_num),
+        **dict.fromkeys(('Pat', 'pattern'), _make_pat),
+        **dict.fromkeys(('BP', 'BosonPat'), partial(_make_op_pat, BosonPat)),
+        **dict.fromkeys(('FP', 'FermionPat'), partial(_make_op_pat, FermionPat)),
         'MMN': _make_mmn,
         'MMN2': _make_mmn2,
         't': w_t,
         'g': w_g_internal,
-        'diff': lambda expr, *args, **kwargs: expr.diff(*args, gc=s.gc, **kwargs) if isinstance(expr, WMWrapper) else diff(expr, *args, **kwargs),
-        'Derivative': lambda expr, *args, **kwargs: expr.diff(*args, gc=s.gc, **kwargs) if isinstance(expr, WMWrapper) else diff(expr, *args, **kwargs),
-        'nlc': WMWrapper.from_val(nlc, p),
-        'pm': WMWrapper.from_val(pm_internal, p),
-        'n_m': WMWrapper.from_val(S.One if single_mode else nm, p),
-        'a_0': init_ops['a_0'],
-        'a_1': init_ops['a_1'],
-        'a_2': init_ops['a_2'],
-        'A': init_ops['A'],
-        'N_t': init_ops['N_t'],
+        **dict.fromkeys(('diff', 'Derivative'), _diff_fn),
+        'nlc': wrap(nlc),
+        'pm': wrap(pm_internal),
+        'n_m': wrap(S.One if single_mode else nm),
+        **{k: init_ops[k] for k in ('a_0', 'a_1', 'a_2', 'A', 'N_t')},
         'a_p': sol[0],
         'a_s': sol[1],
         'a_i': sol[2],
@@ -701,86 +684,58 @@ def _prepare_wm_evaluation(
     disp_subs: Dict[Any, Any] = {}
 
     for sym_def in symbols:
-        s_name = (sym_def.get('name') or '').strip()
-        valid, err_msg = is_valid_variable_name(s_name)
-        if not valid:
-            raise ValueError(f"Invalid symbol identifier: {err_msg}")
+        s_name = validated_name(sym_def, 'symbol')
         d_name = (sym_def.get('display_name') or '').strip()
+        builtin_key = sym_def.get('builtin_key')
 
-        if s_name == 'nlc' or sym_def.get('builtin_key') == 'nlc':
-            local_dict[s_name] = WMWrapper.from_val(nlc, p)
+        if s_name == 'nlc' or builtin_key == 'nlc':
+            local_dict[s_name] = wrap(nlc)
             if d_name and d_name not in ('nlc', r'\chi', 'χ'):
                 disp_subs[nlc] = Symbol(d_name)
-            continue
-        if s_name == 'pm' or sym_def.get('builtin_key') == 'pm':
+        elif s_name == 'pm' or builtin_key == 'pm':
             if not mismatch:
-                local_dict[s_name] = WMWrapper.from_val(pm_internal, p)
+                local_dict[s_name] = wrap(pm_internal)
             else:
-                local_dict[s_name] = WMWrapper.from_val(pm, p)
+                local_dict[s_name] = wrap(pm)
                 if d_name and d_name not in ('pm', 'Δk', r'\Delta k'):
                     disp_subs[pm] = Symbol(d_name)
-            continue
-
-        kwargs = {}
-        if sym_def.get('is_positive'): kwargs['positive'] = True
-        elif sym_def.get('is_nonnegative'): kwargs['nonnegative'] = True
-        elif sym_def.get('is_integer'): kwargs['integer'] = True
-        elif sym_def.get('is_real'): kwargs['real'] = True
-        sym_obj = Symbol(s_name, **kwargs)
-        local_dict[s_name] = WMWrapper.from_val(sym_obj, p)
-        if d_name and d_name != s_name:
-            disp_subs[sym_obj] = Symbol(d_name)
+        else:
+            sym_obj = Symbol(s_name, **symbol_assumptions(sym_def))
+            local_dict[s_name] = wrap(sym_obj)
+            if d_name and d_name != s_name:
+                disp_subs[sym_obj] = Symbol(d_name)
 
     for op_def in operators:
-        op_name = (op_def.get('name') or '').strip()
-        valid, err_msg = is_valid_variable_name(op_name)
-        if not valid:
-            raise ValueError(f"Invalid operator identifier: {err_msg}")
+        op_name = validated_name(op_def, 'operator')
+        d_name = (op_def.get('display_name') or '').strip()
 
-        op_type = op_def.get('type')
-        if op_type == 'operator' or ('kind' in op_def and 'mode_index' not in op_def):
+        if op_def.get('type') == 'operator' or ('kind' in op_def and 'mode_index' not in op_def):
             kind = op_def.get('kind', 'boson')
             mode_kind_map[op_name] = kind
             op_mode_map[op_name] = op_name
-            op_obj = BosonOp(op_name) if kind == 'boson' else FermionOp(op_name)
-            local_dict[op_name] = WMWrapper.from_val(op_obj, p)
-
-            d_name = (op_def.get('display_name') or '').strip()
+            local_dict[op_name] = wrap(BosonOp(op_name) if kind == 'boson' else FermionOp(op_name))
             if d_name and d_name != op_name:
                 disp_subs[Symbol(op_name)] = Symbol(d_name)
         else:
             mode_idx = int(op_def.get('mode_index', 0))
             if 0 <= mode_idx <= 2:
-                local_dict[op_name] = sol[mode_idx]
                 default_mode_name = f'a_{mode_idx}'
+                local_dict[op_name] = sol[mode_idx]
                 op_mode_map[op_name] = default_mode_name
                 mode_kind_map[op_name] = 'boson'
                 mode_kind_map[default_mode_name] = 'boson'
-
-                d_name = (op_def.get('display_name') or '').strip()
                 if d_name and d_name != default_mode_name:
                     disp_subs[Symbol(default_mode_name)] = Symbol(d_name)
 
     for mm_def in mm_operators:
-        mm_name = (mm_def.get('name') or '').strip()
-        valid, err_msg = is_valid_variable_name(mm_name)
-        if not valid:
-            raise ValueError(f"Invalid multimode operator identifier: {err_msg}")
-        mm_kind = mm_def.get('mm_kind', 'COP')
-        local_dict[mm_name] = init_ops['A'] if mm_kind == 'COP' else init_ops['N_t']
+        mm_name = validated_name(mm_def, 'multimode operator')
+        local_dict[mm_name] = init_ops['A'] if mm_def.get('mm_kind', 'COP') == 'COP' else init_ops['N_t']
 
-    for ne in named_expressions:
-        ne_name = (ne.get('name') or '').strip()
-        valid, err_msg = is_valid_variable_name(ne_name)
-        if not valid:
-            raise ValueError(f"Invalid expression identifier: {err_msg}")
-
-        val_obj = ne.get('val')
-        if val_obj is not None:
-            w_ne = WMWrapper.from_val(val_obj, p)
-            if single_mode:
-                w_ne = w_ne.to_single_mode()
-            local_dict[ne_name] = w_ne
+    def _bind_named(ne_name: str, ne: Dict[str, Any], w_ne: WMWrapper, save: bool) -> None:
+        if single_mode:
+            w_ne = w_ne.to_single_mode()
+        local_dict[ne_name] = w_ne
+        if save:
             save_wm_variable(
                 ne_name,
                 w_ne,
@@ -794,16 +749,16 @@ def _prepare_wm_evaluation(
                 mismatch=mismatch,
                 single_mode=single_mode
             )
+
+    for ne in named_expressions:
+        ne_name = validated_name(ne, 'expression')
+
+        if ne.get('val') is not None:
+            _bind_named(ne_name, ne, wrap(ne['val']), save=True)
         elif ne_name in WM_VARIABLES:
-            w_ne = WM_VARIABLES[ne_name]
-            if single_mode:
-                w_ne = w_ne.to_single_mode()
-            local_dict[ne_name] = w_ne
+            _bind_named(ne_name, ne, WM_VARIABLES[ne_name], save=False)
         elif ne_name in PF_VARIABLES:
-            w_ne = WMWrapper.from_val(PF_VARIABLES[ne_name], p)
-            if single_mode:
-                w_ne = w_ne.to_single_mode()
-            local_dict[ne_name] = w_ne
+            _bind_named(ne_name, ne, wrap(PF_VARIABLES[ne_name]), save=False)
         else:
             ne_str = (ne.get('source_input') or ne.get('sourceInput') or '').strip()
             if not ne_str:
@@ -811,30 +766,14 @@ def _prepare_wm_evaluation(
             try:
                 validate_input_identifiers(ne_str, local_dict)
                 parsed_ne = parse_expr(ne_str, local_dict=local_dict, transformations=WM_TRANSFORMS)
-                w_ne = WMWrapper.from_val(parsed_ne, p)
-                if single_mode:
-                    w_ne = w_ne.to_single_mode()
-                local_dict[ne_name] = w_ne
-                save_wm_variable(
-                    ne_name,
-                    w_ne,
-                    solver=s,
-                    latex_t=ne.get('latex_t'),
-                    latex_g=ne.get('latex_g'),
-                    order=ne.get('order'),
-                    leading_order=ne.get('leading_order'),
-                    dc=is_dc,
-                    process=proc,
-                    mismatch=mismatch,
-                    single_mode=single_mode
-                )
+                _bind_named(ne_name, ne, wrap(parsed_ne), save=True)
             except Exception as e:
                 raise ValueError(f"Failed to evaluate named expression '{ne_name}': {e}")
 
     try:
         validate_input_identifiers(text, local_dict)
         parsed_target = parse_expr(text, local_dict=local_dict, transformations=WM_TRANSFORMS)
-        wrapper_target = WMWrapper.from_val(parsed_target, p)
+        wrapper_target = wrap(parsed_target)
     except Exception as e:
         raise ValueError(f"Calculation failed: {e}")
 
@@ -890,13 +829,15 @@ def eval_combination_assertions(
         def _postprocess_pf(pf_item: PF) -> PF:
             if not pf_item:
                 return pf_item
+            # p2s_group works on _g; npf parts keep t_ and are converted by t_to_g
+            pf_item = pf_item.apply(lambda t: t.subs({t_: _g / s.gc}))
             if order >= 0 or pf_item.expr(False).has(t_):
                 return pf_item.apply(
                     lambda t: p.n_simp(d_p2s(_g, p.p2s_group(t)).subs({_g: s.gc * t_}))
                 )
             return pf_item.apply(p.n_simp)
 
-        val = val.expand(order, True, s.gc).apply(_postprocess_pf)
+        val = val.expand(order).apply(_postprocess_pf)
         if proc == 'fwm' and not mismatch:
             val = s._zq(val)
         if single_mode:
@@ -904,20 +845,8 @@ def eval_combination_assertions(
         val_t = val
         val_g = t_to_g(val_t, process=proc, mismatch=mismatch)
 
-    expr_disp_t = val_t.expr
-    expr_disp_g = val_g.expr
-    if disp_subs:
-        try:
-            expr_disp_t = expr_disp_t.subs(disp_subs)
-        except Exception:
-            pass
-        try:
-            expr_disp_g = expr_disp_g.subs(disp_subs)
-        except Exception:
-            pass
-
-    latex_t = latex(expr_disp_t)
-    latex_g = latex(expr_disp_g)
+    latex_t = latex(safe_subs(val_t.expr, disp_subs))
+    latex_g = latex(safe_subs(val_g.expr, disp_subs))
     latex_curr = latex_g if use_gain else latex_t
 
     try:
@@ -925,13 +854,10 @@ def eval_combination_assertions(
     except Exception:
         leading_order = 0
 
-    sol_len = len(s)
-
-    global LAST_EVAL_WM
-    LAST_EVAL_WM = {
+    LAST_EVAL_WM.clear()
+    LAST_EVAL_WM.update({
         'val_t': val_t,
         'val_g': val_g,
-        'val': val_t,
         'solver': s,
         'latex_t': latex_t,
         'latex_g': latex_g,
@@ -941,9 +867,9 @@ def eval_combination_assertions(
         'process': proc,
         'mismatch': mismatch,
         'single_mode': single_mode,
-    }
+    })
 
-    return latex_curr, latex_t, latex_g, leading_order, sol_len
+    return latex_curr, latex_t, latex_g, leading_order, len(s)
 
 
 def eval_operator_combination(
@@ -959,19 +885,8 @@ def eval_operator_combination(
     single_mode: bool = False,
     process: Optional[str] = None,
 ) -> Tuple[str, str, str, Union[int, float], int]:
+    """Evaluates an operator combination without any input-state assertions."""
     return eval_combination_assertions(
-        text=text,
-        dc=dc,
-        order=order,
-        use_gain=use_gain,
-        symbols=symbols,
-        operators=operators,
-        mm_operators=mm_operators,
-        named_expressions=named_expressions,
-        mismatch=mismatch,
-        single_mode=single_mode,
-        coherent_drive=False,
-        vacuum_signal=False,
-        vacuum_other_weak=False,
-        process=process,
+        text, dc, order, use_gain, symbols, operators, mm_operators, named_expressions,
+        mismatch=mismatch, single_mode=single_mode, process=process,
     )

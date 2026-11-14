@@ -56,6 +56,11 @@ class WMSolver(Sequence):
     def get_sol(self, order: int):
         raise NotImplementedError
 
+    def _expand_g(self, w: WMWrapper, order) -> WMWrapper:
+        """Expands w to the given order and rewrites t_ as _g / gc for the g-domain dsolve."""
+        sub = {t_: _g / self.gc}
+        return w.expand(order).apply(lambda t: t.subs(sub), on_npf=True)
+
 
 class TWMSolver(WMSolver):
     """
@@ -129,7 +134,7 @@ class TWMSolver(WMSolver):
                                       b_f: {(None,): self.fdf0(False, mode)}}))
                 t1 = -term1 if mode == 0 else term1
                 rhs = p.d_add(t1, -term2, last_sol[mode] @ (s3 * self.nd))
-                w_rhs = (rhs @ gc2).expand(order, True, self.gc)
+                w_rhs = self._expand_g(rhs @ gc2, order)
                 sol = w_rhs.apply(
                     lambda t: p.n_simp(dsd2(_g, p.p2s_group(t), dc, subs=self.gc * t_))
                 )
@@ -156,7 +161,7 @@ class TWMSolver(WMSolver):
         else:
             def _d1ts():
                 b = self._sol[0][0] if dc else self._sol[0][2]
-                w_rhs = (self.dd_last * (-I * nlc / self.gc)).expand(order, True, self.gc)
+                w_rhs = self._expand_g(self.dd_last * (-I * nlc / self.gc), order)
                 s0 = w_rhs.apply(lambda t: p.n_simp(dsd1(_g, p.p2s_group(t), subs=self.gc * t_)))
                 return s0 + b
 
@@ -227,7 +232,7 @@ class FWMSolver(WMSolver):
         dd2 = sol_0[1] @ sol_0[0].adjoint() @ sol_0[2]
 
         self.reset_pe()
-        w_rhs = ((dd2 + xpm_c + coeff @ xpm_t) @ (-2 * I * nlc / self.gc)).expand(1, True, self.gc)
+        w_rhs = self._expand_g((dd2 + xpm_c + coeff @ xpm_t) @ (-2 * I * nlc / self.gc), 1)
         s0 = w_rhs.apply(lambda t: p.n_simp(dsd1(_g, p.p2s_group(t), subs=self.gc * t_)))
 
         sol_1 = (sol_0[0] + s0, sol_0[1], sol_0[2])

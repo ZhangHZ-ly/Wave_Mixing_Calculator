@@ -16,8 +16,8 @@ from sympy.core.exprtools import factor_terms
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.commutator import Commutator
 from ..wm_variables import *
-from ..op_pattern import BosonPat, BosonNum, FermionPat, NumShift
-from ..pattern_perturb import BSC, PF, pf, PF0, PF1, PE
+from ..op_pattern import BosonNum, NumShift
+from ..pattern_perturb import BSC, PF, PF0, PF1, PE
 from ..pattern_perturb.pattern_form import pf_add, _vpk, _ps, _mps, _key
 from ..pattern_perturb.perturb_expander import perturb_rec
 from ..dsolve_pm import group_terms
@@ -171,10 +171,20 @@ class WMProcessor:
             return bool(b0.is_annihilation)
         return bool(b0.is_annihilation) == bool(p)
 
-    def expand_func_d(self, func, order, *ds, sub_g: bool = False, gc=None):
+    def expand_func_d(self, func, order, *ds, with_order=False):
+        """
+        Perturbatively expands func(*ds) of WMWrapper-convertible arguments up to `order`.
+        Returns the summed WMWrapper, or, if with_order=True, a generator of
+        (WMWrapper, order) pairs, one per perturbative term (orders may repeat).
+        Input validation is performed eagerly in both cases.
+        """
         from .wm_wrapper import WMWrapper
         if not ds:
-            return self.from_expr(func())
+            f0 = sympify(func())
+            w = WMWrapper.from_val(f0, self)
+            if not with_order:
+                return w
+            return iter(((w, self.pe.leading_order(f0)[1]),) if w else ())
 
         ord_lims, flo = self.pe.handle_order_limits(func, len(ds))
         x0_list = []
@@ -183,12 +193,13 @@ class WMProcessor:
             w = WMWrapper.from_val(d, self)
             if w.b_left is not None:
                 raise ValueError('The expression does not support expand-with-func')
-            odt = defaultdict(dict)
+            odl = defaultdict(list)
             for k, v in w.dict_repr.items():
-                for op, p in self.pe.expand_pf(v, order, True).items():
+                for p, op in self.pe.expand_pf(v, order, True):
                     if op < ol:
                         raise ValueError('The input exceeds order limit')
-                    odt[op][k] = p
+                    odl[op].append({k: p})
+            odt = {op: md for op, dl in odl.items() if (md := _merge_dicts(dl))}
             if ol is S.NegativeInfinity:
                 if not odt:
                     raise ValueError('Unappropriate input for the function')
@@ -216,20 +227,22 @@ class WMProcessor:
             raise ValueError('The function is not properly defined')
         nol = order - flo
         if nol < 0:
-            return WMWrapper(self, {}, None)
+            terms = iter(())
+        else:
+            @perturb_rec(_comm = lambda *_: False,
+                         _is_comm = lambda d: getattr(d.as_scalar, 'is_commutative', False),
+                         _is_num = lambda d: bool(d.as_scalar),
+                         _add=self.d_add, _mul=lambda args: reduce(mul, args), independent=True)
+            def term(df):
+                if (val := df.subs(subs_dict)) != 0:
+                    return WMWrapper(self, {(None,): PF({_vpk: val})}, None)
 
-        @perturb_rec(_comm = lambda *_: False,
-                     _is_comm = lambda d: getattr(d.as_scalar, 'is_commutative', False),
-                     _is_num = lambda d: bool(d.as_scalar),
-                     _add=self.d_add, _mul=lambda args: reduce(mul, args), independent=True)
-        def term(df):
-            if (val := df.subs(subs_dict)) != 0:
-                return WMWrapper(self, {(None,): PF({_vpk: val})}, None)
+            # perturb_rec yields orders relative to the leading order flo
+            terms = ((t, o + flo) for t, o in term(perturb_list, nol, dummies, f_sym))
 
-        res = self.d_add(*(t for t, _ in term(perturb_list, nol, dummies, f_sym)))
-        if sub_g and gc is not None:
-            return res.apply(lambda t: t.subs({t_: _g / gc}), on_npf=True)
-        return res
+        if with_order:
+            return terms
+        return self.d_add(*(t for t, _ in terms))
 
     def n_simp(self, expr):
         n1, n2 = self.a[0].names
@@ -530,7 +543,7 @@ class WMProcessor:
         return expr.replace(
             lambda x: isinstance(x, (MultimodeNum, MultimodeNum2, MultimodeCOP)),
             lambda x: x.mode_expr
-        ).subs({nm: 1, Symbol('n_m'): S.One})
+        ).subs({nm: S.One})
 
     def _smk(self, k) -> PF:
         """Single-mode PF representation of a dict key (BosonOp or multimode tuple)."""
@@ -547,73 +560,6 @@ class WMProcessor:
             i = not i
         b, t = BSC(bs).result_ind()
         return PF({(b, ()): t})
-
-    def _mmn_only(self, expr: Expr) -> bool:
-        if isinstance(expr, BosonPat):
-            return expr.is_hermitian or not expr.has(*self.a[0].names)
-        if isinstance(expr, (FermionPat, MultimodeNum, MultimodeNum2)):
-            return True
-        if isinstance(expr, MultimodeCOP):
-            return False
-        if hasattr(expr, 'args'):
-            return all(self._mmn_only(arg) for arg in expr.args)
-        return True
-
-    def from_expr(self, val):
-        """
-        Converts an Expr, PF, dict, WMWrapper, or string/number into a WMWrapper.
-        """
-        from .wm_wrapper import WMWrapper
-        if isinstance(val, WMWrapper):
-            return val if val.dc == self.dc else WMWrapper(self, val.dict_repr, val.b_left)
-        if isinstance(val, PF):
-            return WMWrapper(self, val, None)
-        if isinstance(val, dict):
-            return WMWrapper(self, val, None)
-        if isinstance(val, str) and val in self.init_ops:
-            return self.init_ops[val]
-
-        expr = sympify(val)
-        if isinstance(expr, MultimodeCOP):
-            return WMWrapper(self, {(bool(expr.annih1), 1): PF1}, None)
-
-        weak_names = self.a[0].names
-        if isinstance(expr, BosonOp) and expr.name in weak_names:
-            return WMWrapper(self, {expr: {(None,): PF1}})
-
-        if self._mmn_only(expr):
-            return WMWrapper(
-                self,
-                {(None,): pf(expr, as_dict=None, ignore=(MultimodeNum, MultimodeNum2, MultimodeCOP))},
-                None
-            )
-
-        if isinstance(expr, BosonPat) and expr.name in weak_names:
-            pp, np = expr.num_repr()
-            if isinstance(pp, BosonPat):
-                if pp.exps[0] > 1:
-                    raise ValueError('Solution parity unbalanced')
-                b = BosonOp(*pp.args[:2])
-                w = WMWrapper(self, {b: {(None,): PF({_vpk: np})}}, b_left=True)
-                return w if w.b_left == (self.dc ^ w.parity) else w.flip()
-            return WMWrapper(self, {(None,): PF({_vpk: np})}, None)
-
-        if expr.has(MultimodeCOP) or any(
-            getattr(b, 'name', None) in weak_names
-            for b in expr.atoms(BosonOp, BosonPat)
-            if not isinstance(b, BosonNum)
-        ):
-            if expr.is_Add:
-                return self.d_add(*(self.from_expr(arg) for arg in expr.args))
-            if expr.is_Mul:
-                res = self.from_expr(expr.args[0])
-                for arg in expr.args[1:]:
-                    res = res * self.from_expr(arg)
-                return res
-            if expr.is_Pow:
-                return self.from_expr(expr.base) ** expr.exp
-
-        return WMWrapper(self, {(None,): pf(expr, as_dict=None)}, None)
 
 def _dr_prep(d: dict):
     new_d = defaultdict(list)

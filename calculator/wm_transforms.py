@@ -47,12 +47,12 @@ def t_to_g(
         gc = gc.subs({nd: nd_drive})
         if proc != 'fwm' and not mismatch:
             gc = _ps(gc)
-        inv_gc = bottom_up(1 / gc, _ps)
-        sub_dict = {t_: gain * inv_gc, _g: gain, nd: nd_drive}
+        g_sym, extra_subs = gain, {nd: nd_drive}
     else:
-        nd_drive = nd
-        inv_gc = bottom_up(1 / gc, _ps)
-        sub_dict = {t_: g_hat * inv_gc, _g: g_hat}
+        g_sym, extra_subs = g_hat, {}
+
+    inv_gc = bottom_up(1 / gc, _ps)
+    sub_dict = {t_: g_sym * inv_gc, _g: g_sym, **extra_subs}
 
     f = lambda expr: bn_simp(expr.subs(sub_dict))
     return obj.apply(f, on_npf=True) if hasattr(obj, 'apply') else f(obj)
