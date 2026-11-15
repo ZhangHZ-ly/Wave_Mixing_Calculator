@@ -19,6 +19,7 @@ from calculator import (
     FWM_SOLVER,
     normalize_process,
     process_is_dc,
+    is_degenerate,
 )
 
 
@@ -76,6 +77,7 @@ class NamedExprDef(BaseModel):
     dc: Optional[bool] = None
     process: Optional[str] = None
     single_mode: Optional[bool] = None
+    degenerate: Optional[bool] = None
 
 
 class SaveVarRequest(BaseModel):
@@ -110,6 +112,8 @@ class CombinationRequest(BaseModel):
     order: int = 1
     use_gain: bool = False
     single_mode: bool = False
+    # degenerate signal / idler (effective only with single_mode in down-conversion)
+    degenerate: bool = False
     symbols: List[SymbolDef] = []
     operators: List[OperatorDef] = []
     mm_operators: List[MMOperatorDef] = []
@@ -124,6 +128,8 @@ class AssertionRequest(CombinationRequest):
 
 class CascadeRequest(AssertionRequest):
     cascade_symbol: str
+    # phases (phi_0, phi_1, phi_2) of the input operators: real numbers or symbols, '' for 0
+    cascade_phases: List[str] = ['', '', '']
 
 
 def _format_lead_ord(val: Union[int, float]) -> Union[int, float]:
@@ -208,13 +214,14 @@ def api_combination(req: CombinationRequest):
     try:
         proc = normalize_process(req.process, req.dc)
         is_dc = process_is_dc(proc)
-        latex_curr, latex_t, latex_g, leading_order, sol_len = eval_operator_combination(
+        latex_curr, latex_t, latex_g, leading_order, sol_len, res_order = eval_operator_combination(
             req.text,
             dc=is_dc,
             mismatch=req.mismatch,
             order=req.order,
             use_gain=req.use_gain,
             single_mode=req.single_mode,
+            degenerate=req.degenerate,
             symbols=[s.model_dump() for s in req.symbols],
             operators=[op.model_dump() for op in req.operators],
             mm_operators=[mm.model_dump() for mm in req.mm_operators],
@@ -227,10 +234,12 @@ def api_combination(req: CombinationRequest):
             "latex_t": str(latex_t),
             "latex_g": str(latex_g),
             "leading_order": lead_ord,
-            "order": int(req.order),
+            # accuracy order of the result (the product rule may lower it below the preset)
+            "order": _format_lead_ord(res_order),
             "sol_len": int(sol_len),
             "process": proc,
             "single_mode": bool(req.single_mode),
+            "degenerate": is_degenerate(proc, req.single_mode, req.degenerate),
         }
     except Exception as e:
         import traceback
@@ -243,13 +252,14 @@ def api_combination_assert(req: AssertionRequest):
     try:
         proc = normalize_process(req.process, req.dc)
         is_dc = process_is_dc(proc)
-        latex_curr, latex_t, latex_g, leading_order, sol_len = eval_combination_assertions(
+        latex_curr, latex_t, latex_g, leading_order, sol_len, res_order = eval_combination_assertions(
             req.text,
             dc=is_dc,
             mismatch=req.mismatch,
             order=req.order,
             use_gain=req.use_gain,
             single_mode=req.single_mode,
+            degenerate=req.degenerate,
             coherent_drive=req.coherent_drive,
             vacuum_signal=req.vacuum_signal,
             vacuum_other_weak=req.vacuum_other_weak,
@@ -265,10 +275,12 @@ def api_combination_assert(req: AssertionRequest):
             "latex_t": str(latex_t),
             "latex_g": str(latex_g),
             "leading_order": lead_ord,
-            "order": int(req.order),
+            # accuracy order of the result (the product rule may lower it below the preset)
+            "order": _format_lead_ord(res_order),
             "sol_len": int(sol_len),
             "process": proc,
             "single_mode": bool(req.single_mode),
+            "degenerate": is_degenerate(proc, req.single_mode, req.degenerate),
         }
     except Exception as e:
         import traceback
@@ -281,14 +293,16 @@ def api_combination_cascade(req: CascadeRequest):
     try:
         proc = normalize_process(req.process, req.dc)
         is_dc = process_is_dc(proc)
-        latex_curr, latex_t, latex_g, leading_order, sol_len = eval_cascaded_combination(
+        latex_curr, latex_t, latex_g, leading_order, sol_len, res_order = eval_cascaded_combination(
             req.text,
             dc=is_dc,
             mismatch=req.mismatch,
             order=req.order,
             use_gain=req.use_gain,
             single_mode=req.single_mode,
+            degenerate=req.degenerate,
             cascade_symbol=req.cascade_symbol,
+            cascade_phases=req.cascade_phases,
             coherent_drive=req.coherent_drive,
             vacuum_signal=req.vacuum_signal,
             vacuum_other_weak=req.vacuum_other_weak,
@@ -304,11 +318,14 @@ def api_combination_cascade(req: CascadeRequest):
             "latex_t": str(latex_t),
             "latex_g": str(latex_g),
             "leading_order": lead_ord,
-            "order": int(req.order),
+            # accuracy order of the result (the product rule may lower it below the preset)
+            "order": _format_lead_ord(res_order),
             "sol_len": int(sol_len),
             "process": proc,
             "single_mode": bool(req.single_mode),
+            "degenerate": is_degenerate(proc, req.single_mode, req.degenerate),
             "cascade_symbol": req.cascade_symbol,
+            "cascade_phases": req.cascade_phases,
         }
     except Exception as e:
         import traceback
@@ -328,12 +345,18 @@ def api_save_variable(req: SaveVarRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+class ResetPERequest(BaseModel):
+    clear: bool = False  # True: drop all custom orders; False: only restore the base mode orders
+
+
 @app.post("/api/combination/reset")
-def api_reset_combination():
+def api_reset_combination(req: Optional[ResetPERequest] = None):
+    clear = bool(req and req.clear)
     try:
         for p in {s.processor for pair in TWM_SOLVERS for s in pair} | {FWM_SOLVER.processor}:
-            p._init_pe()
-        return {"status": "success", "message": "WM processor PE reset to defaults"}
+            p._init_pe(clear=clear)
+        msg = "WM processor PE reset to defaults" if clear else "WM processor base mode orders restored"
+        return {"status": "success", "message": msg, "clear": clear}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

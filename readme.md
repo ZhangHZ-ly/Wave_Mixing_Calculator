@@ -218,7 +218,7 @@ Configure these **before** evaluating an expression:
 
 - **Mixing Process Type** — *Down-conversion*, *Frequency Conversion / State Transfer*, or *Four-Wave Mixing*.
 - **Phase-Matching Condition** — *Phase Matched* ($\Delta k = 0$; for FWM: *SPM Compensated*, $\Delta k = 2\chi \hat N_0$) or *Arbitrary Phase Mismatch* (keeps $\Delta k$ as a symbol).
-- **Retained Order** — the perturbative order kept in the result. The strong field counts as order $-1$ (TWM) or $-1/2$ (FWM), the weak fields as order 0, and $\chi$ as order 1. Order 0 is the undepleted-pump (parametric) approximation; order 1 includes the first pump-depletion correction. Four-wave mixing currently supports orders up to 1.
+- **Retained Order** — the perturbative order kept in the result. The strong field counts as order $-1$ (TWM) or $-1/2$ (FWM), the weak fields as order 0, and $\chi$ as order 1. Order 0 is the undepleted-pump (parametric) approximation; order 1 includes the first pump-depletion correction. Every product is truncated at the order it is accurate to: the sum of the leading orders of its factors plus the smallest of their relative accuracies (accuracy order minus leading order), so that no unnecessary higher-order terms are carried along. The result may therefore be accurate to a lower order than the preset; its actual order is reported and saved. Four-wave mixing currently supports orders up to 1: its solutions apply up to order 1 for the pump and $1/2$ for the weak fields, so e.g. $\hat N_0(t)$ or $\sum_\text{modes}\hat N_1(t)$ at preset order 1 is accurate to order $1/2$.
 
 #### Step 2 — Enter the expression
 
@@ -236,7 +236,7 @@ In addition to the general syntax, the following objects are predefined in this 
 | `t`, `g` | Time and parametric gain. |
 | `n_m` | Number of mode pairs. |
 
-**Multiplication rule.** Implicit multiplication (a space, e.g. `dag(a_s) a_s`) is the **multimode product**: paired weak-field operators are summed over all modes, giving e.g. $\sum_\text{modes}\hat N_1(t)$. An explicit `*` (e.g. `dag(a_s)*a_s`) is the **single-mode product**, i.e. the observable of one signal mode. Ticking **Single-mode processing** replaces all multimode operators with single-mode ones ($n_m = 1$).
+**Multiplication rule.** Implicit multiplication (a space, e.g. `dag(a_s) a_s`) is the **multimode product**: paired weak-field operators are summed over all modes, giving e.g. $\sum_\text{modes}\hat N_1(t)$. An explicit `*` (e.g. `dag(a_s)*a_s`) is the **single-mode product**, i.e. the observable of one signal mode. Ticking **Single-mode processing** replaces all multimode operators with single-mode ones ($n_m = 1$). For down-conversion, the select between *Single-mode* and *processing* chooses **non-degenerate** (default) or **degenerate** processing; the choice can be changed at any time but takes effect only while the box is ticked. Degenerate processing merges signal and idler into one mode $a_1$ ($H = \chi(a_0^\dagger a_1^2 + a_0 a_1^{\dagger 2})/2$): every input object is mapped by $\sum a_1 a_2 \to a_1^2/2$, $\sum(1+\hat N_1+\hat N_2) \to \hat N_1 + 1/2$, $n_m \to 1/2$, $a_2 \to a_1$ before evaluation, so `@` and `*` both become exact single-mode products, either vacuum assertion puts $a_1$ in vacuum, and a cascaded stage uses the phase $\varphi_1$ only.
 
 Examples:
 
@@ -245,18 +245,18 @@ Examples:
 - `dag(a_s)*a_s` — photon number of a single signal mode;
 - `a_s a_i` — two-mode correlation $\sum_\text{modes} a_1(t)a_2(t)$.
 
-**Cascaded system.** Tick *Cascaded system: evolve for* to let the calculated expression evolve through a second, identical wave-mixing stage for a further time. The time box defaults to `t` (the same duration as the first stage); you can replace it with the name of a new or existing custom commutative symbol, e.g. `t_c`. The box can be edited at any time, but it only takes effect while the checkbox is ticked. An empty box means `t`.
+**Cascaded system.** Tick *Cascaded system: time* to let the calculated expression evolve through a second, identical wave-mixing stage for a further time. The time box defaults to `t` (the same duration as the first stage); you can replace it with the name of a new or existing custom commutative symbol, e.g. `t_c`. The phase boxes $\varphi_0, \varphi_1, \varphi_2$ (default 0) give each input operator of the second stage a phase, $a_k \to e^{i\varphi_k} a_k(t_c)$; the multimode operators take the phases of their two fields. A phase is a real number (e.g. `pi/2`), a real custom symbol, or a new name (created as a real symbol). The boxes can be edited at any time, but they only take effect while the checkbox is ticked. An empty time box means `t`, an empty phase box 0.
 
 #### Step 3 — Calculate and read the result
 
 Click **Calculate Evolution**. The result is shown as a function of time $t$; **Display in terms of gain** rewrites it in terms of the parametric gain operator $\hat g$ (e.g. $\hat g = \chi t\sqrt{\hat N_0}$ for phase-matched down-conversion), which usually gives a much more compact form. Click again to switch back to time.
 
-**Save to Table** stores the result (in its time or gain form) as a named variable that can be reused in later Tab 3 expressions — for example, save `dag(a_s) a_s` as `Ns` and then compute `Ns^2 - Ns`.
+**Save to Table** stores the result (in its time or gain form) as a named variable that can be reused in later Tab 3 expressions — for example, save `dag(a_s) a_s` as `Ns` and then compute `Ns^2 - Ns`. The variable is recorded with the order its result actually reaches; when this is below the preset (see Step 1), a notice is shown after the calculation and the save dialog marks it.
 
 Before calculating, the page checks your expression against the presets and warns you when
 
-- a referenced variable was computed with a **lower retained order** than the current preset (*Force Continue* proceeds anyway, at the risk of missing expansion terms), or
-- a referenced variable was computed under a **different mixing process** or **single-mode setting** (results would be mathematically inconsistent).
+- a referenced variable was computed with a **lower retained order** than the current preset (*Force Continue* proceeds anyway; the result then carries the order it actually reaches, which is shown and saved instead of the preset order), or
+- a referenced variable was computed under a **different mixing process** or **single-mode setting** (including degenerate vs. non-degenerate single mode) (results would be mathematically inconsistent).
 
 #### Step 4 — Input State Assertions
 
@@ -296,11 +296,11 @@ The web page talks to the FastAPI backend through JSON endpoints, which can also
 | `POST /api/single_mode` | Tab 1 calculation. |
 | `POST /api/pattern_form` | Tab 2 calculation (`use_rem` for the remainder mode). |
 | `POST /api/solve` | Raw perturbative solution of one field (`var_index` 0/1/2) at a given order. |
-| `POST /api/combination` | Tab 3 evolution of an expression. |
+| `POST /api/combination` | Tab 3 evolution of an expression. Besides `text`, `process`, `mismatch`, `order` and `use_gain`, it accepts `single_mode` and `degenerate` (effective only together with `single_mode` in down-conversion). The response `order` is the accuracy order the result actually reaches. |
 | `POST /api/combination/assert` | Tab 3 evaluation under input-state assertions. |
 | `POST /api/combination/cascade` | Tab 3 cascaded-system evolution. |
 | `POST /api/variable/save` | Save the latest result as a named variable. |
-| `POST /api/combination/reset` | Reset the custom perturbative orders of the wave-mixing processors. |
+| `POST /api/combination/reset` | Restore the base mode orders of the wave-mixing processors; with `{"clear": true}`, also drop all custom orders (used by *Reset Defaults*). |
 
 Example:
 
@@ -321,5 +321,6 @@ For anything beyond the web workflow, use the `cas_qwm` library directly — see
 | Formulas are shown as raw LaTeX | KaTeX could not be loaded. Check the internet connection, or run `python setup_offline.py` once. |
 | A calculation seems to hang | Higher retained orders (≥ 2) and phase-mismatched presets take considerably longer the first time; wait for the solver, or lower the order. |
 | *"… is not defined"* / parsing error | Every symbol and operator must be defined in the tab's table. Check for typos and for reserved names. |
-| Order or condition warning dialog | A referenced saved variable was computed with a lower order or under a different preset. Recompute it under the current preset, or choose *Force Continue*. |
+| Order or condition warning dialog | A referenced saved variable was computed with a lower order or under a different preset. Recompute it under the current preset, or choose *Force Continue* (the result then reaches a lower order, which is reported and saved). |
+| Result order below the preset | A factor limits the accuracy of a product: a saved variable of a lower order, or (four-wave mixing) the highest order the solutions apply to. |
 | Port 8000 is in use | Start the server on another port: `uvicorn main:app --port 8001`. |

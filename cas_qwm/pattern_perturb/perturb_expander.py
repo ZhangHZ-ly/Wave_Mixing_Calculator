@@ -1,4 +1,5 @@
-from sympy.core.containers import Tuple, Dict
+from sympy.core.basic import Basic
+from sympy.core.containers import Tuple
 from sympy.core.singleton import S
 from sympy.core.add import Add
 from sympy.core.mul import Mul
@@ -350,6 +351,11 @@ def perturb_rec( _comm=None, _is_comm=None, _is_num=None,
         return wrapper
     return decorator
 
+def _akey(k):
+    """Normalized key of PE.assumptions: strings (mode names) are sympified to Symbols."""
+    return k if isinstance(k, Basic) else sympify(k)
+
+
 class PE:
     """
     Includes methods that can expand an expression
@@ -365,8 +371,11 @@ class PE:
                         Commutator, AntiCommutator, UidCommutator})
     __slots__ = ('assumptions', 'rc', 'rs', 'rp', '_lo_cache', '_subs_cache')
 
-    def __init__(self, assumptions):
-        self.assumptions = Dict(assumptions)
+    def __init__(self, assumptions=None):
+        # Plain dict with sympified keys/values (see _akey); faster lookups than a sympy Dict
+        self.assumptions = {} if assumptions is None else {
+            _akey(k): sympify(v) for k, v in dict(assumptions).items()
+        }
         self.rc = set()
         self.rs = {Symbol}
         self.rp = {
@@ -408,21 +417,26 @@ class PE:
             case 'p':
                 self.rp[t] = (id, fh)
     
-    def update(self, orders: dict | None = None):
-        """Update assumptions with custom symbol/mode orders."""
-        assumptions = dict(self.assumptions)
-        clr = False
+    def update(self, orders: dict | None = None, clear: bool = False):
+        """
+        Update assumptions with custom symbol/mode orders (an order of 0 removes the entry).
+        If clear is True, all previous assumptions are dropped first, so that only `orders`
+        remain; registered types are kept.
+        """
+        assumptions = self.assumptions
+        clr = clear and bool(assumptions)
+        if clear:
+            assumptions.clear()
         if orders:
             for k, v in orders.items():
                 if v is not None:
-                    if assumptions.get(k, v) != sympify(v):
+                    k, v = _akey(k), sympify(v)
+                    if assumptions.get(k, S.Zero) != v:
                         clr = True
                     if v == 0:
-                        if k in assumptions:
-                            del assumptions[k]
+                        assumptions.pop(k, None)
                     else:
-                        assumptions[k] = sympify(v)
-        self.assumptions = Dict(assumptions)
+                        assumptions[k] = v
         if clr:
             self._lo_cache.clear()
             self._subs_cache.clear()
@@ -461,7 +475,7 @@ class PE:
             return expr, S.Zero
         if isinstance(expr, tuple(self.rs)):
             if expr in self.assumptions:
-                return expr, sympify(self.assumptions[expr])
+                return expr, self.assumptions[expr]
             name = getattr(expr, 'name', None)
             if name:
                 for k, v in self.assumptions.items():
@@ -473,11 +487,11 @@ class PE:
         if isinstance(expr, tuple(self.rp)):
             id, fh = self.rp[next(t for t in self.rp if isinstance(expr, t))]
             eid = getattr(expr, id)
-            if eid in self.assumptions and self.assumptions[eid] != 0:
-                return expr, fh(expr) * sympify(self.assumptions[eid])
+            if (o := self.assumptions.get(_akey(eid), S.Zero)) != 0:
+                return expr, fh(expr) * o
             name = getattr(eid, 'name', str(eid))
-            if name in self.assumptions and self.assumptions[name] != 0:
-                return expr, fh(expr) * sympify(self.assumptions[name])
+            if (o := self.assumptions.get(_akey(name), S.Zero)) != 0:
+                return expr, fh(expr) * o
             return expr, S.Zero
         if expr in self._lo_cache:
             return self._lo_cache[expr]
@@ -775,7 +789,14 @@ class PE:
                 return
             yield from term(ao, n, d0, f_arg)
 
-    def lo_pf(self, pf: PF, **kwargs):
+    def lo_order_pf(self, pf: PF):
+        """
+        Leading order of a pattern-form expression (S.Infinity if it vanishes), without
+        expanding it.
+        """
+        return self.lo_pf(pf, _order_only=True)
+
+    def lo_pf(self, pf: PF, _order_only=False, **kwargs):
         """
         Returns the leading-order pattern-form expression and its order under kwargs rules.
         """
@@ -806,13 +827,16 @@ class PE:
                 elif cond:
                     m = on
 
+        if _order_only:
+            return m
         if m is S.Infinity:
             return PF(), S.Infinity
 
         new_t = dict()
         for (bs, fs), t in pf.table.items():
             nb = Add(*(self.leading_order(b)[1] for b in bs + fs))
-            new_t[(bs, fs)] = Add(*(e[0] for e in self.expand_expr(t, m-nb, **kwargs)))
+            if (v := Add(*(e[0] for e in self.expand_expr(t, m-nb, **kwargs)))) != 0:
+                new_t[(bs, fs)] = v  # the higher-order entries vanish
         return PF(new_t, Add(*(e[0] for e in self.expand_expr(pf.npf, m, **kwargs)))), m
 
     def expand_pf(self, pf: PF, n, with_order=False, **kwargs):
@@ -826,7 +850,8 @@ class PE:
         new_t = dict()
         for (bs, fs), t in pf.table.items():
             nb = Add(*(self.leading_order(b)[1] for b in bs + fs))
-            new_t[(bs, fs)] = Add(*(e[0] for e in self.expand_expr(t, n-nb, **kwargs)))
+            if (v := Add(*(e[0] for e in self.expand_expr(t, n-nb, **kwargs)))) != 0:
+                new_t[(bs, fs)] = v  # the entries beyond order n vanish
         return PF(new_t, Add(*(e[0] for e in self.expand_expr(pf.npf, n, **kwargs))))
 
     def _expand_pf_terms(self, pf: PF, n, **kwargs):
@@ -856,7 +881,7 @@ class PE:
             pe_cohr = self.copy(cache=False)
         else:
             pe_cohr = self
-        assump = dict(pe_cohr.assumptions)
+        assump = pe_cohr.assumptions  # updated in place (pe_cohr is a copy unless update_self)
         if update_cohr_dict:
             ncd = {}
             for k, v in cohr_dict.items():
@@ -880,7 +905,6 @@ class PE:
                     weights.append(-2 * assump[bname])
             return bn
         bottom_up(expr, _reg)
-        pe_cohr.assumptions = Dict(assump)
 
         if not Ns:
             yield from pe_cohr.expand_expr(expr, n, **kwargs)
@@ -935,7 +959,7 @@ class PE:
         """
         n = sympify(n)
         pe_cohr = self.copy(cache=False)
-        assump = dict(pe_cohr.assumptions)
+        assump = pe_cohr.assumptions  # updated in place on the copy
         ncd = {}
         for k, v in cohr_dict.items():
             if hasattr(k, 'name'):
@@ -970,7 +994,6 @@ class PE:
                 else:
                     bs_rest.append(b)
             ntl[(tuple(bs_rest), fs)].append(tail)
-        pe_cohr.assumptions = assump
 
         new_table = {}
         new_npf = Add(*(t[0] for t in pe_cohr.cohr_avr(p.npf, cohr_dict, n, True, False, **kwargs)))

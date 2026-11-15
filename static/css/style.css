@@ -768,6 +768,7 @@
   .wm-option {
     display: inline-flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 0.4rem;
     font-size: 0.875rem;
     font-weight: 600;
@@ -778,8 +779,15 @@
     font-weight: 600;
     margin-bottom: 0;
   }
-  .wm-option-text {
+  .wm-option-text,
+  .form-group label.wm-option-label {
     white-space: nowrap;
+  }
+  /* one "phi_k = [ ]" unit of the cascaded system, kept on one line */
+  .wm-phase {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
   }
   .wm-input-options input[type="text"].wm-cascade-input {
     width: 7.5ch;
@@ -787,8 +795,26 @@
     font-family: monospace;
     font-size: 0.875rem;
   }
+  .wm-input-options input[type="text"].wm-cascade-input.wm-cascade-phase {
+    width: 6ch;
+  }
   .wm-input-options input[type="text"].wm-cascade-input.invalid {
     border-color: #dc2626;
+  }
+  /* inline select of a processing option (e.g. single-mode degeneracy), same look whether ticked or not */
+  .wm-input-options select.wm-option-select {
+    width: auto;
+    padding: 0.2rem 0.4rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    background: #fff;
+    cursor: pointer;
+  }
+  .wm-input-options select.wm-option-select[hidden] {
+    display: none;
+  }
+  .form-group label.wm-option-label[for] {
+    cursor: pointer;
   }
 
   /* Toast Notification */

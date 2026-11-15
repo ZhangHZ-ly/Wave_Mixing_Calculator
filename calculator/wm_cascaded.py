@@ -3,7 +3,9 @@ Cascaded wave-mixing evolution for Tab 3.
 
 A calculated expression E (written in the t = 0 input operators a_0, a_1, a_2) is evolved
 for a further time t_c by substituting every input-operator object with its evolved
-counterpart at t_c:
+counterpart at t_c, each input operator a_k carrying an optional real phase phi_k
+(a_k -> exp(i phi_k) a_k(t_c); the multimode COPs take the phases of their two modes, i.e. the
+phases are assumed to be the same for all the modes of a field):
 - E is split into terms of definite perturbative order by WMWrapper.expand(..., with_order=True);
 - in each term, the parts built from a_0, a_1, a_2 inside the number-operator tails
   (n_drive, multimode numbers) are replaced by dummies and lambdified into a handle,
@@ -11,7 +13,7 @@ counterpart at t_c:
 - the operator parts (single-mode keys, multimode COP products, driving-field patterns)
   are multiplied out from the evolved operators.
 Evolved multimode objects and n_drive are computed by multimode products (@) and cached
-in evo_cache, per solver and solution order.
+in evo_cache, per solver, solution order, relative accuracy and phases.
 """
 from __future__ import annotations
 import math
@@ -27,12 +29,15 @@ from cas_qwm.parametric_multimode import (
 from cas_qwm.parametric_multimode.wm_processor import t_, nm, a_p, a_s, a_i
 from sympy.core.add import Add
 from sympy.core.expr import Expr
+from sympy.core.function import Function
 from sympy.core.mul import Mul
-from sympy.core.numbers import Integer, Rational
+from sympy.core.numbers import E, Float, I, Integer, Rational, pi
 from sympy.core.singleton import S
 from sympy.core.sorting import default_sort_key
 from sympy.core.symbol import Dummy, Symbol
 from sympy.core.sympify import sympify
+from sympy.functions.elementary.exponential import exp
+from sympy.parsing.sympy_parser import parse_expr
 from sympy.physics.quantum.boson import BosonOp
 from sympy.polys.polyerrors import PolynomialError
 from sympy.polys.polytools import Poly
@@ -40,10 +45,12 @@ from sympy.printing.pycode import SymPyPrinter
 from sympy.utilities.lambdify import lambdify
 
 from .common import is_valid_variable_name, symbol_assumptions
-from .wave_mixing import WMEvalContext, _prepare_wm_evaluation, finalize_wm_result, get_evolved_sol
+from .wave_mixing import (WMEvalContext, _prepare_wm_evaluation, coherent_alpha, finalize_wm_result,
+                          get_evolved_sol)
 from .wm_transforms import apply_assertions
 
-__all__ = ['tc', 'evo_cache', 'cascade_evolve', 'resolve_cascade_symbol', 'eval_cascaded_combination']
+__all__ = ['tc', 'evo_cache', 'cascade_evolve', 'resolve_cascade_symbol', 'resolve_cascade_phase',
+           'eval_cascaded_combination']
 
 tc = Dummy('t_c', nonnegative=True)  # further evolution time of the cascaded stage
 # {(solver, solution order): {input-operator object: evolved WMWrapper at t_c}}
@@ -90,14 +97,21 @@ class _Evolver:
     lo_X + rel, where `rel` is the largest relative accuracy needed by any term
     (target order minus the lowest term order), so that no product carries terms
     beyond the retained order.
+
+    With `degenerate`, the evolved operators are those of the degenerate single mode a_1
+    (signal = idler), which carries the phase phi_1 (phi_2 is not used).
     """
 
-    def __init__(self, s: WMSolver, sol_order: int, rel):
+    def __init__(self, s: WMSolver, sol_order: int, rel, phases=(S.Zero, S.Zero, S.Zero),
+                 degenerate: bool = False):
         self.s = s
         self.p = s.processor
         self.sol_order = sol_order
         self.rel = sympify(rel)
-        self.cache = evo_cache[(s, sol_order, self.rel)]
+        self.phases = tuple(sympify(ph) for ph in phases)
+        # degenerate: the evolved operators are those of the degenerate single mode a_1
+        self.degenerate = bool(degenerate)
+        self.cache = evo_cache[(s, sol_order, self.rel, self.phases, self.degenerate)]
         self._sol = None
         self.weak_names = set(self.p.a[0].names)
 
@@ -111,8 +125,10 @@ class _Evolver:
     @property
     def sol(self) -> tuple:
         if self._sol is None:
-            self._sol = tuple(w.apply(lambda e: e.subs(t_, tc), on_npf=True)
-                              for w in get_evolved_sol(self.s, self.sol_order))
+            sol = get_evolved_sol(self.s, self.sol_order)
+            if self.degenerate:
+                sol = tuple(w.to_single_mode(degenerate=True) for w in sol)
+            self._sol = tuple(w.apply(lambda e: e.subs(t_, tc), on_npf=True) for w in sol)
         return self._sol
 
     def _cached(self, key, build):
@@ -121,10 +137,19 @@ class _Evolver:
         return self.cache[key]
 
     def op(self, b: BosonOp) -> WMWrapper:
-        """Single-mode input operator a_k or a_k^dagger."""
+        """
+        Single-mode input operator a_k or a_k^dagger, evolved and with its phase:
+        exp(i phi_k) a_k(t_c) or exp(-i phi_k) a_k^dagger(t_c).
+        """
         def build():
-            w = self.sol[_MODE_INDEX[b.name]]
-            return self.trunc(w if b.is_annihilation else w.adjoint(), self.lo(b.name))
+            k = _MODE_INDEX[b.name]
+            w = self.sol[k]
+            w = self.trunc(w if b.is_annihilation else w.adjoint(), self.lo(b.name))
+            phi = self.phases[k]
+            if phi != 0:
+                factor = exp(I * phi if b.is_annihilation else -I * phi)
+                w = w.apply(lambda e: e * factor, on_npf=True)
+            return w
         return self._cached(b, build)
 
     def cop(self, c: MultimodeCOP) -> WMWrapper:
@@ -192,16 +217,14 @@ class _Evolver:
         leading order of the evolved atom).
         """
         def build():
-            w = self.atom(x)
-            if w.b_left is not None or not w.dict_repr:
-                return False, S.Zero
-            los = {k: self.p.pe.lo_pf(v) for k, v in w.dict_repr.items()}
-            m = min(o for _, o in los.values())
-            lead = {k: lp for k, (lp, o) in los.items() if o == m}
-            lp = lead.get((None,))
-            scalar = (set(lead) == {(None,)} and lp.npf == 0 and set(lp.table) <= {_vpk})
-            return scalar, m
+            lead, m = self.atom(x).leading()
+            return lead is not None and lead.as_scalar is not None, (m if lead is not None else S.Zero)
         return self._cached(('leading', x), build)
+
+    def has_nonscalar(self, expr: Expr) -> bool:
+        """Whether expr contains atoms whose evolved forms do not have a scalar leading part."""
+        return any(self.is_mode_atom(a) and not self.atom_leading(a)[0]
+                   for a in expr.atoms(*_MODE_ATOMS))
 
     def func(self, expr: Expr, atoms: dict, order) -> WMWrapper:
         """
@@ -220,11 +243,12 @@ class _Evolver:
 
     def tail(self, tail: Expr, order) -> WMWrapper:
         """
-        Evolves a number-operator tail up to the absolute order `order`. The input-operator
+        Evolves a number-operator expression up to the absolute order `order`. The input-operator
         objects are replaced by dummies: those whose evolved forms have a scalar leading part
-        (e.g. n_drive) enter the lambdified handle of expand_func_d; the others (weak-field and
-        multimode numbers, mixing with the multimode COPs) must appear polynomially and are
-        multiplied out from their evolved forms.
+        (e.g. n_drive) enter a lambdified handle of expand_func_d; the others (weak-field and
+        multimode numbers, mixing with the multimode COPs) are multiplied out from their evolved
+        forms where they appear polynomially. Otherwise the expression is decomposed (see
+        `structural`).
         """
         p = self.p
         atoms = sorted((x for x in tail.atoms(*_MODE_ATOMS) if self.is_mode_atom(x)),
@@ -242,8 +266,7 @@ class _Evolver:
         try:
             terms = Poly(expr, *ys).terms()
         except PolynomialError:
-            raise ValueError('Cascaded evolution requires the weak-field and multimode number '
-                             'operators to appear polynomially in the expression')
+            return self.structural(tail, order)
         parts = []
         for monom, coeff in terms:
             w_mon = WMWrapper(p, PF1)
@@ -254,6 +277,59 @@ class _Evolver:
                     mon_o += m * self.atom_leading(poly_atoms[y])[1]
             parts.append(self.func(coeff, func_atoms, order - mon_o) @ w_mon)
         return p.d_add(*parts)
+
+    def structural(self, x: Expr, order) -> WMWrapper:
+        """
+        Evolves a number-operator expression that is not polynomial in the atoms without scalar
+        leading parts, node by node up to the absolute order `order`:
+        - sums and products are evolved term / factor-wise (the factors free of such atoms are
+          kept together in one handle);
+        - positive integer powers are multiplied out;
+        - other powers are expanded by expand_func_d, which requires the leading part of the
+          evolved base to be a scalar / number-operator expression;
+        - functions are expanded by expand_func_d around their evolved arguments.
+        """
+        p = self.p
+        lo = lambda e: p.pe.leading_order(e)[1]
+        if x.is_Add:
+            return p.d_add(*(self.tail(a, order) for a in x.args))
+        if x.is_Mul:
+            plain = [f for f in x.args if not self.has_nonscalar(f)]
+            factors = ([Mul(*plain)] if plain else []) + [f for f in x.args if self.has_nonscalar(f)]
+            los = [lo(f) for f in factors]
+            w = None
+            for j, f in enumerate(factors):
+                # each factor is needed up to the order left by the other factors
+                wf = self.tail(f, order - Add(*los[:j], *los[j + 1:]))
+                w = wf if w is None else (w @ wf).expand(order - Add(*los[j + 1:]))
+            return w
+        if x.is_Pow:
+            b, e = x.args
+            if any(self.is_mode_atom(a) for a in e.atoms(*_MODE_ATOMS)):
+                raise ValueError(f'Cascaded evolution does not support exponents containing '
+                                 f'the wave-mixing modes: {x}')
+            lb = lo(b)
+            if e.is_Integer and e > 0:
+                wb = self.tail(b, order - (e - 1) * lb)
+                w = wb
+                for k in range(2, int(e) + 1):
+                    w = (w @ wb).expand(order - (e - k) * lb)
+                return w
+            wb = self.tail(b, order - lo(x) + lb)
+            lead, _ = wb.leading()
+            if lead is None or lead.as_scalar is None:
+                raise ValueError(
+                    f'Cascaded evolution of {x}: the leading part of the evolved base is not a '
+                    f'scalar or number-operator expression, so the power cannot be expanded')
+            return p.expand_func_d(lambda y: y ** e, order, wb)
+        if isinstance(x, Function):
+            lx = lo(x)
+            args = [self.tail(a, order - lx + lo(a)) for a in x.args]
+            try:
+                return p.expand_func_d(lambda *ys: x.func(*ys), order, *args)
+            except ValueError as err:
+                raise ValueError(f'Cascaded evolution of {x}: {err}')
+        raise ValueError(f'Cascaded evolution does not support {x}')
 
     def npf(self, npf: Expr) -> WMWrapper:
         if any(self.is_mode_atom(x) for x in npf.atoms(BosonOp, BosonPat, MultimodeNum,
@@ -331,9 +407,10 @@ def _required_sol_order(s: WMSolver, pieces: dict, order) -> int:
     return req
 
 
-def cascade_evolve(ctx: WMEvalContext, order: int) -> WMWrapper:
+def cascade_evolve(ctx: WMEvalContext, order: int, phases=(S.Zero, S.Zero, S.Zero)) -> WMWrapper:
     """
-    Evolves the parsed expression of ctx for a further time t_c (the Dummy `tc`),
+    Evolves the parsed expression of ctx for a further time t_c (the Dummy `tc`), with the
+    real phases (phi_0, phi_1, phi_2) of the input operators (a_k -> exp(i phi_k) a_k(t_c)),
     retaining terms up to the given absolute perturbative order.
     """
     s = ctx.solver
@@ -345,7 +422,7 @@ def cascade_evolve(ctx: WMEvalContext, order: int) -> WMWrapper:
         return WMWrapper(p)
 
     rel = order - min(pieces)  # largest relative accuracy needed by any term
-    ev = _Evolver(s, _required_sol_order(s, pieces, order), rel)
+    ev = _Evolver(s, _required_sol_order(s, pieces, order), rel, phases, ctx.degenerate)
     return p.d_add(*(ev.wrapper(p.d_add(*ws), order) for ws in pieces.values()))
 
 
@@ -374,6 +451,44 @@ def resolve_cascade_symbol(name: str, ctx: WMEvalContext) -> Expr:
     return Symbol(name, nonnegative=True)
 
 
+_PHASE_CONSTANTS = {'pi': pi, 'E': E}
+
+
+def resolve_cascade_phase(text: str, ctx: WMEvalContext, k: int) -> Expr:
+    """
+    Returns the phase phi_k of the input operator a_k in the cascaded system: a real numeric
+    expression (e.g. 0, -1.5, pi/2), a user-defined real commutative symbol, or a new real
+    symbol (empty: 0). Names of preset objects, built-in parameters, non-real symbols and
+    defined expressions / operators are rejected.
+    """
+    text = (text or '').strip()
+    if not text:
+        return S.Zero
+    label = f'Phase phi_{k}'
+    if is_valid_variable_name(text)[0] and text not in _PHASE_CONSTANTS:
+        for sym_def in ctx.symbols:
+            if (sym_def.get('name') or '').strip() == text:
+                if sym_def.get('builtin_key') or text in ('nlc', 'pm'):
+                    raise ValueError(f"{label} '{text}' conflicts with a built-in parameter.")
+                sym = Symbol(text, **symbol_assumptions(sym_def))
+                if not sym.is_real:
+                    raise ValueError(f"{label} '{text}' must be a real symbol (set it as real, "
+                                     f"integer, nonnegative or positive).")
+                return sym
+        if text in ctx.local_dict:
+            raise ValueError(f"{label} '{text}' conflicts with a preset object or a defined "
+                             f"expression / operator.")
+        return Symbol(text, real=True)
+    try:
+        val = parse_expr(text, local_dict=dict(_PHASE_CONSTANTS), global_dict={
+            'Integer': Integer, 'Float': Float, 'Rational': Rational, 'Symbol': Symbol})
+    except Exception:
+        raise ValueError(f"{label} '{text}' is neither a number nor a symbol name.")
+    if not isinstance(val, Expr) or val.free_symbols or val.is_real is not True:
+        raise ValueError(f"{label} '{text}' must be a real number or a real symbol.")
+    return val
+
+
 def eval_cascaded_combination(
     text: str,
     dc: bool,
@@ -384,25 +499,31 @@ def eval_cascaded_combination(
     mm_operators: List[Dict[str, Any]],
     named_expressions: List[Dict[str, Any]],
     cascade_symbol: str,
+    cascade_phases: Optional[List[str]] = None,
     mismatch: bool = False,
     single_mode: bool = False,
     coherent_drive: bool = False,
     vacuum_signal: bool = False,
     vacuum_other_weak: bool = False,
     process: Optional[str] = None,
-) -> Tuple[str, str, str, Union[int, float], int]:
+    degenerate: bool = False,
+) -> Tuple[str, str, str, Union[int, float], int, Union[int, float]]:
     """
     Evaluates an operator combination evolved for a further time `cascade_symbol`
-    (cascaded system), optionally under input-state assertions.
+    (cascaded system), with the input-operator phases `cascade_phases` (phi_0, phi_1, phi_2;
+    real numbers or symbols, default 0), optionally under input-state assertions.
     """
     ctx = _prepare_wm_evaluation(
-        text, dc, order, symbols, operators, mm_operators, named_expressions, mismatch, single_mode, process=process
+        text, dc, order, symbols, operators, mm_operators, named_expressions, mismatch, single_mode,
+        process=process, degenerate=degenerate,
     )
     t_sym = resolve_cascade_symbol(cascade_symbol, ctx)
-    val = cascade_evolve(ctx, order).apply(lambda e: e.subs(tc, t_sym), on_npf=True)
+    phases = tuple(resolve_cascade_phase(ph, ctx, k)
+                   for k, ph in enumerate((list(cascade_phases or []) + ['', '', ''])[:3]))
+    val = cascade_evolve(ctx, order, phases).apply(lambda e: e.subs(tc, t_sym), on_npf=True)
     val_t, val_g = apply_assertions(
         val, ctx.solver, order, process=ctx.proc, mismatch=ctx.mismatch, single_mode=single_mode,
-        coherent_drive=coherent_drive, vacuum_signal=vacuum_signal, vacuum_other_weak=vacuum_other_weak,
-        times=(t_sym,),
+        degenerate=ctx.degenerate, coherent_drive=coherent_drive, vacuum_signal=vacuum_signal, vacuum_other_weak=vacuum_other_weak,
+        times=(t_sym,), alpha=coherent_alpha(ctx),
     )
     return finalize_wm_result(ctx, val_t, val_g, order, use_gain)

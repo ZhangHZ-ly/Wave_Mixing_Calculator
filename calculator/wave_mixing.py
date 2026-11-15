@@ -18,7 +18,7 @@ from sympy.core.expr import Expr
 from sympy.core.function import diff
 from sympy.core.numbers import I, pi
 from sympy.core.singleton import S
-from sympy.core.symbol import Symbol
+from sympy.core.symbol import Dummy, Symbol
 from sympy.core.sympify import sympify
 from sympy.functions.elementary.exponential import exp
 from sympy.parsing.sympy_parser import parse_expr
@@ -36,7 +36,7 @@ from .common import (
     symbol_assumptions,
     validated_name,
 )
-from .conditions import normalize_process, process_is_dc
+from .conditions import normalize_process, process_is_dc, is_degenerate
 from .wm_transforms import t_to_g, apply_assertions
 from .pf_expr import PF_VARIABLES
 
@@ -103,7 +103,13 @@ def save_wm_variable(
     proc = normalize_process(kwargs.get('process'), kwargs.get('dc'))
     s = solver if isinstance(solver, WMSolver) else get_wm_solver(proc, mismatch=bool(kwargs.get('mismatch', False)))
     w = WMWrapper.from_val(val_t, s.processor)
-    w = WMWrapper(w.processor, dict(w.dict_repr), w.b_left)
+    order = kwargs.pop('order', None)
+    # accuracy order: the recorded one, or the wrapper's own if lower
+    if order is not None and not w.is_exact:
+        order = min(sympify(order), w.order)
+    elif order is None:
+        order = w.order
+    w = WMWrapper(w.processor, dict(w.dict_repr), w.b_left, order)
     w.name = name
     w.val_t = w
     w.val_g = val_g if val_g is not None else t_to_g(
@@ -138,6 +144,7 @@ def save_latest_wm_variable(name: str, **kwargs) -> Optional[WMWrapper]:
         process=proc,
         mismatch=LAST_EVAL_WM.get('mismatch', False),
         single_mode=LAST_EVAL_WM.get('single_mode'),
+        degenerate=LAST_EVAL_WM.get('degenerate', False),
         **kwargs
     )
 
@@ -483,6 +490,7 @@ class WMEvalContext:
     mismatch: bool
     single_mode: bool
     symbols: List[Dict[str, Any]] = field(default_factory=list)
+    degenerate: bool = False
 
 
 def _prepare_wm_evaluation(
@@ -496,14 +504,22 @@ def _prepare_wm_evaluation(
     mismatch: bool = False,
     single_mode: bool = False,
     process: Optional[str] = None,
+    degenerate: bool = False,
 ):
     """
     Prepares and algebraically evaluates wave-mixing operator combinations in Tab 3.
     Returns a WMEvalContext holding the parsed wrapper and the evaluation settings.
+
+    degenerate (effective only with single_mode in down-conversion): every input object
+    (evolved and initial operators, multimode operators, named expressions) is converted to
+    the degenerate single mode (signal = idler = a_1) before parsing, so that all products
+    are exact single-mode products of the degenerate process.
     """
     proc = normalize_process(process, dc)
     is_dc = process_is_dc(proc)
     mismatch = bool(mismatch)
+    degenerate = is_degenerate(proc, single_mode, degenerate)
+    _sm = (lambda w: w.to_single_mode(degenerate=True)) if degenerate else (lambda w: w)
     s = get_wm_solver(proc, mismatch=mismatch)
     p = s.processor
 
@@ -520,9 +536,13 @@ def _prepare_wm_evaluation(
     if proc == 'fwm':
         evolved_order = min(1, evolved_order)
     p._evolved_order = evolved_order
-    sol = get_evolved_sol(s, evolved_order)
+    sol = tuple(_sm(w) for w in get_evolved_sol(s, evolved_order))
 
-    init_ops = p.init_ops
+    init_ops = ({k: _sm(w) for k, w in p.init_ops.items()} if degenerate else p.init_ops)
+    # degenerate: the converted evolved operators and their adjoints, as (annihilation wrapper,
+    # is_annihilation) pairs, so that patterns of them are recognized
+    deg_evolved = ([pair for w in sol for pair in ((w, True), (w.adjoint(), False))]
+                   if degenerate else [])
 
     op_mode_map = {
         'a_0': 'a_0', 'a_p': 'a_0',
@@ -576,15 +596,15 @@ def _prepare_wm_evaluation(
         return explicit_ann, (exps or [1])
 
     def _make_boson_num(item):
-        return WMWrapper.from_val(BosonNum(_resolve_mode_name(item)), p)
+        return _sm(WMWrapper.from_val(BosonNum(_resolve_mode_name(item)), p))
 
     def _make_mmn(name, disp=0):
-        return WMWrapper.from_val(MultimodeNum(_resolve_mode_name(name), _unwrap_scalar(disp)), p)
+        return _sm(WMWrapper.from_val(MultimodeNum(_resolve_mode_name(name), _unwrap_scalar(disp)), p))
 
     def _make_mmn2(disp=0):
         d_val = _unwrap_scalar(disp)
         val = p.mmn2 + d_val * nm if d_val != 0 else p.mmn2
-        return WMWrapper.from_val(val, p)
+        return _sm(WMWrapper.from_val(val, p))
 
     def _make_pat(item, *args):
         explicit_ann, exps = _split_pat_args(args)
@@ -594,12 +614,27 @@ def _prepare_wm_evaluation(
         is_dagA = (isinstance(item, WMWrapper) and item.b_left is None
                    and list(item.dict_repr.keys()) == [(False, 1)]
                    and item.dict_repr[(False, 1)].table == {_vpk: S.One})
+        if degenerate and isinstance(item, WMWrapper) and not (is_A or is_dagA):
+            is_dagA = item == init_ops['A'].adjoint()
         if is_A or is_dagA:
             is_ann = is_A if explicit_ann is None else explicit_ann
             int_exps = [int(sympify(e)) for e in exps]
             if any(e < 0 for e in int_exps):
                 raise ValueError("Pattern exponents must be non-negative integers.")
-            return WMWrapper(p, {_tdz(is_ann, int_exps): PF1})
+            return _sm(WMWrapper(p, {_tdz(is_ann, int_exps): PF1}))
+
+        # Degenerate single mode: patterns of the converted evolved operators
+        deg_match = (next(((w, ann) for w, ann in deg_evolved if item is w or item == w), None)
+                     if degenerate and isinstance(item, WMWrapper) else None)
+        if deg_match is not None:
+            w, ann = deg_match
+            op_ann = w if ann else w.adjoint()
+            is_a = ann if explicit_ann is None else bool(explicit_ann)
+            res = WMWrapper(p, PF1)
+            for e in exps:
+                res = res * ((op_ann if is_a else op_ann.adjoint()) ** int(sympify(e)))
+                is_a = not is_a
+            return res
 
         # Evolved / multimode wrapped operators: alternate the operator and its adjoint
         if isinstance(item, WMWrapper) and (item.b_left is not None or set(item.dict_repr.keys()) != {(None,)}):
@@ -644,18 +679,28 @@ def _prepare_wm_evaluation(
         bp = BosonPat(name, is_ann, *exps)
         a_op, tail = bp.num_repr()
         b_key = (a_op,) if a_op is not S.One else ()
-        return WMWrapper(p, PF({(b_key, ()): tail}))
+        return _sm(WMWrapper(p, PF({(b_key, ()): tail})))
 
     def _make_op_pat(pat_cls, item, *args):
-        return WMWrapper.from_val(pat_cls(_resolve_mode_name(item), *_raw_args(args)), p)
+        return _sm(WMWrapper.from_val(pat_cls(_resolve_mode_name(item), *_raw_args(args)), p))
 
     def _wrap_fn(fn):
         def _inner(item):
             if isinstance(item, WMWrapper):
                 sc = item.as_scalar
                 if sc is not None:
-                    return WMWrapper(p, PF({_vpk: sympify(fn(sc))}))
+                    res = WMWrapper(p, PF({_vpk: sympify(fn(sc))}))
+                    if not item.is_exact and res:
+                        acc = res.lo + item.rel_order  # relative accuracy is kept
+                        if acc.is_number and acc.is_finite:
+                            res = res.with_order(acc)
+                    return res
                 if item.b_left is None:
+                    # power handles (e.g. sqrt) follow the power rules of WMWrapper
+                    x = Dummy()
+                    fx = sympify(fn(x))
+                    if fx.is_Pow and fx.base == x:
+                        return item ** fx.exp
                     return p.expand_func_d(fn, evolved_order, item)
             raw_item = item.expr if isinstance(item, WMWrapper) else item
             return WMWrapper.from_val(fn(sympify(raw_item)), p)
@@ -696,7 +741,7 @@ def _prepare_wm_evaluation(
         **dict.fromkeys(('diff', 'Derivative'), _diff_fn),
         'nlc': wrap(nlc),
         'pm': wrap(pm_internal),
-        'n_m': wrap(S.One if single_mode else nm),
+        'n_m': wrap(S.Half if degenerate else (S.One if single_mode else nm)),
         **{k: init_ops[k] for k in ('a_0', 'a_1', 'a_2', 'A', 'N_t')},
         'a_p': sol[0],
         'a_s': sol[1],
@@ -754,8 +799,11 @@ def _prepare_wm_evaluation(
         local_dict[mm_name] = init_ops['A'] if mm_def.get('mm_kind', 'COP') == 'COP' else init_ops['N_t']
 
     def _bind_named(ne_name: str, ne: Dict[str, Any], w_ne: WMWrapper, save: bool) -> None:
+        # a value without an accuracy of its own takes the recorded order of the table entry
+        if w_ne.is_exact and ne.get('order') is not None:
+            w_ne = w_ne.with_order(ne['order'])
         if single_mode:
-            w_ne = w_ne.to_single_mode()
+            w_ne = w_ne.to_single_mode(degenerate=degenerate)
         local_dict[ne_name] = w_ne
         if save:
             save_wm_variable(
@@ -764,12 +812,13 @@ def _prepare_wm_evaluation(
                 solver=s,
                 latex_t=ne.get('latex_t'),
                 latex_g=ne.get('latex_g'),
-                order=ne.get('order'),
+                order=None if w_ne.is_exact else w_ne.order,
                 leading_order=ne.get('leading_order'),
                 dc=is_dc,
                 process=proc,
                 mismatch=mismatch,
-                single_mode=single_mode
+                single_mode=single_mode,
+                degenerate=degenerate
             )
 
     for ne in named_expressions:
@@ -802,8 +851,32 @@ def _prepare_wm_evaluation(
     return WMEvalContext(
         val=wrapper_target, solver=s, sol=sol, evolved_order=evolved_order,
         disp_subs=disp_subs, local_dict=local_dict, proc=proc, is_dc=is_dc,
-        mismatch=mismatch, single_mode=single_mode, symbols=list(symbols),
+        mismatch=mismatch, single_mode=single_mode, symbols=list(symbols), degenerate=degenerate,
     )
+
+
+def _latex_key(text: str) -> str:
+    """Normalized LaTeX rendering of a symbol's display text (alpha_0, \\alpha_{0}, α_0, ...)."""
+    return ''.join(latex(Symbol(text.replace('α', r'\alpha '))).split())
+
+
+def coherent_alpha(ctx: WMEvalContext) -> Symbol:
+    """
+    Coherent amplitude symbol of the strong driving field (alpha_0 for dc, alpha_2 for fc).
+    A user-defined commutative symbol displayed as that amplitude (its display text, or its
+    name without one, renders as \\alpha_0 / \\alpha_2), whatever its name, is used as is
+    (with its assumptions), so that it merges with the amplitude of the assertion.
+    """
+    name = 'alpha_0' if ctx.is_dc else 'alpha_2'
+    target = _latex_key(name)
+    for sym_def in ctx.symbols:
+        s_name = (sym_def.get('name') or '').strip()
+        if not s_name or sym_def.get('builtin_key'):
+            continue
+        shown = (sym_def.get('display_name') or '').strip() or s_name
+        if _latex_key(shown) == target:
+            return Symbol(s_name, **symbol_assumptions(sym_def))
+    return Symbol(name)
 
 
 def finalize_wm_result(
@@ -812,13 +885,16 @@ def finalize_wm_result(
     val_g: WMWrapper,
     order: int,
     use_gain: bool,
-) -> Tuple[str, str, str, Union[int, float], int]:
+) -> Tuple[str, str, str, Union[int, float], int, Union[int, float]]:
     """
     Renders the time / gain results, computes the leading order and records the
     result as the latest Tab 3 evaluation (for saving to the table).
-    Returns: (latex_curr, latex_t, latex_g, leading_order, solver_length)
+    The accuracy order of the result follows the product rule of WMWrapper (the referenced
+    variables entering with their recorded orders), so it may fall below the preset `order`.
+    Returns: (latex_curr, latex_t, latex_g, leading_order, solver_length, result_order)
     """
     s, proc = ctx.solver, ctx.proc
+    res_order = order if val_t.is_exact else min(val_t.order, order)
     latex_t = latex(safe_subs(val_t.expr, ctx.disp_subs))
     latex_g = latex(safe_subs(val_g.expr, ctx.disp_subs))
     latex_curr = latex_g if use_gain else latex_t
@@ -835,15 +911,16 @@ def finalize_wm_result(
         'solver': s,
         'latex_t': latex_t,
         'latex_g': latex_g,
-        'order': order,
+        'order': res_order,
         'leading_order': leading_order,
         'dc': ctx.is_dc,
         'process': proc,
         'mismatch': ctx.mismatch,
         'single_mode': ctx.single_mode,
+        'degenerate': ctx.degenerate,
     })
 
-    return latex_curr, latex_t, latex_g, leading_order, len(s)
+    return latex_curr, latex_t, latex_g, leading_order, len(s), res_order
 
 
 def eval_combination_assertions(
@@ -861,7 +938,8 @@ def eval_combination_assertions(
     vacuum_signal: bool = False,
     vacuum_other_weak: bool = False,
     process: Optional[str] = None,
-) -> Tuple[str, str, str, Union[int, float], int]:
+    degenerate: bool = False,
+) -> Tuple[str, str, str, Union[int, float], int, Union[int, float]]:
     """
     Evaluates operator combination (optionally under input-state assertions):
     - coherent_drive: strong driving field input is in coherent state |alpha>
@@ -869,11 +947,13 @@ def eval_combination_assertions(
     - vacuum_other_weak: remaining weak field (a_2 if is_dc else a_0) input is in vacuum |0>
     """
     ctx = _prepare_wm_evaluation(
-        text, dc, order, symbols, operators, mm_operators, named_expressions, mismatch, single_mode, process=process
+        text, dc, order, symbols, operators, mm_operators, named_expressions, mismatch, single_mode,
+        process=process, degenerate=degenerate,
     )
     val_t, val_g = apply_assertions(
         ctx.val, ctx.solver, order, process=ctx.proc, mismatch=ctx.mismatch, single_mode=single_mode,
-        coherent_drive=coherent_drive, vacuum_signal=vacuum_signal, vacuum_other_weak=vacuum_other_weak,
+        degenerate=ctx.degenerate, coherent_drive=coherent_drive, vacuum_signal=vacuum_signal, vacuum_other_weak=vacuum_other_weak,
+        alpha=coherent_alpha(ctx),
     )
     return finalize_wm_result(ctx, val_t, val_g, order, use_gain)
 
@@ -890,9 +970,10 @@ def eval_operator_combination(
     mismatch: bool = False,
     single_mode: bool = False,
     process: Optional[str] = None,
-) -> Tuple[str, str, str, Union[int, float], int]:
+    degenerate: bool = False,
+) -> Tuple[str, str, str, Union[int, float], int, Union[int, float]]:
     """Evaluates an operator combination without any input-state assertions."""
     return eval_combination_assertions(
         text, dc, order, use_gain, symbols, operators, mm_operators, named_expressions,
-        mismatch=mismatch, single_mode=single_mode, process=process,
+        mismatch=mismatch, single_mode=single_mode, process=process, degenerate=degenerate,
     )

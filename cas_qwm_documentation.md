@@ -282,8 +282,10 @@ Non-integer orders (e.g. `-1/2`) are allowed. Functions are expanded as multivar
 | `leading_order(expr)` | `(leading_term, order)`. |
 | `expand_pf(pf, n, with_order=False)` | Expansion of a `PF` object up to order `n`. |
 | `lo_pf(pf)` | Leading-order part of a `PF` and its order. |
+| `lo_order_pf(pf)` | Leading order of a `PF` only (`oo` if it vanishes), without expanding it. |
 | `cohr_avr(expr, cohr_dict, n)` / `cohr_pf(pf, cohr_dict, n)` | Expectation value under coherent states `{mode: alpha}`, expanded up to order `n`. |
-| `update(orders)` | Add / change orders of symbols or modes. |
+| `update(orders, clear=False)` | Add / change orders of symbols or modes (an order of 0 removes the entry); `clear=True` first drops all previous orders. Registered types are kept. |
+| `assumptions` | Plain `dict` of orders; string keys (mode names) are sympified to `Symbol`s. |
 | `register(type, category, ...)` | Teach the expander the order rule of a new expression type (`'c'` constant, `'s'` symbol, `'p'` pattern). |
 | `handle_order_limits(handle, n_args=1)` | Analyse the order constraints of a function handle. |
 | `copy(cache=False)` | Copy of the expander. |
@@ -362,10 +364,10 @@ TWMSolver(dc=True, mismatch=False)
 FWMSolver()
 ```
 
-Perturbative solvers of the Heisenberg equations. A solver is a read-only sequence: `solver.get_sol(order)` returns the 3-tuple of `WMWrapper` objects `(a_0(t), a_1(t), a_2(t))` accurate up to `order`, and `solver.sol_expr(mode, order)` returns the corresponding SymPy expression (including the phase factors of a mismatched process).
+Perturbative solvers of the Heisenberg equations. A solver is a read-only sequence: `solver.get_sol(order)` returns the 3-tuple of `WMWrapper` objects `(a_0(t), a_1(t), a_2(t))` accurate up to `order`, each labeled with its actual accuracy order (`solver.sol_orders(order)`: in TWM the weak fields are corrected at even orders and the driving field at odd orders only, so a solution is accurate up to the order before its next correction), and `solver.sol_expr(mode, order)` returns the corresponding SymPy expression (including the phase factors of a mismatched process).
 
 - **`TWMSolver`** — three-wave mixing driven by one strong field (pump for `dc=True`, idler for `dc=False`). The strong field is of order $-1$, the weak fields of order 0, and $\chi$ of order 1. Orders $\ge -1$ are solved recursively on demand and cached, so the first call of a high order can be slow. `mismatch=True` keeps a symbolic $\Delta k$.
-- **`FWMSolver`** — four-wave mixing with a degenerate monochromatic pump of order $-1/2$, including self- and cross-phase modulation. The solutions of orders $-1$, $0$ and $1$ (first pump-depletion correction) are computed at construction.
+- **`FWMSolver`** — four-wave mixing with a degenerate monochromatic pump of order $-1/2$, including self- and cross-phase modulation. The solutions of orders $-1$, $0$ and $1$ (first pump-depletion correction) are computed at construction. Each stored solution carries the highest order it applies to: the pump, of leading order $-1/2$ with its first depletion correction at $1/2$, applies up to order 0 (solutions $-1$, $0$) and 1 (solution 1); the weak fields, whose first correction (order 1) is not computed, up to order $1/2$ ($-1/2$ for the vanishing solution $-1$). Products of them, and hence Tab 3 results, may thus be accurate to a lower order than the preset (e.g. $1/2$ for $\hat N_0$ at preset order 1).
 
 Common attributes: `processor` (the underlying `WMProcessor`), `dc`, `nd` (number operator of the driving field), `pe` (the `PE` used), `gc` (gain coefficient, $g = g_c\,t$).
 
@@ -387,11 +389,15 @@ Module-level instances: `twm_processors` (`(WMProcessor(False), WMProcessor(True
 ### `WMWrapper`
 
 ```python
-WMWrapper(processor, dict_repr=None, b_left=None)
+WMWrapper(processor, dict_repr=None, b_left=None, order=EXACT, truncate=True)
 WMWrapper.from_val(val, processor)
 ```
 
 Algebraic container for multimode wave-mixing expressions; the solver outputs are `WMWrapper` objects. Internally, an expression is stored as a dict of multimode exponent tuples to `PF` objects, optionally with one unpaired weak-field operator on the left (`b_left=True`) or right (`b_left=False`).
+
+Every wrapper carries an accuracy `order`: the absolute perturbative order up to which it is accurate, `+oo` (`EXACT`, the default) for an exact expression, which is accurate to all orders. A product (`*` or `@`) of factors with leading orders $l_1, l_2$ and orders $o_1, o_2$ is accurate to $l_1 + l_2 + \min(o_1 - l_1,\, o_2 - l_2)$ (an exact factor counting as $+\infty$ relative accuracy); the factor more accurate than needed is truncated beforehand, and every partial product is truncated at that order inside `WMProcessor.d_mul`. Sums take the lowest order of their terms (the more accurate terms are truncated there), `expand(n)` and `eval_coherent(n)` lower it to `n`, `expand_func_d` keeps the relative accuracy of its arguments, and the other transformations keep it. Leading orders are compared with `exceeds(a, b)` (from `cas_qwm.parametric_multimode`), which is `False` when undecidable (e.g. symbolic orders); a product whose target order is not a number is left untruncated and exact.
+
+A finite `order` given to the constructor truncates the content at that order (`truncate=False` skips this for content known to have no terms beyond it), and `with_order(order)` truncates when it lowers the order. The solver outputs are therefore cut at their accuracy labels, and a saved variable bound with a lower recorded order loses the terms it cannot support.
 
 | Member | Description |
 |---|---|
@@ -400,10 +406,12 @@ Algebraic container for multimode wave-mixing expressions; the solver outputs ar
 | `+`, `-`, `/` by scalars, `**` | Usual algebra. |
 | `adjoint()` | Hermitian adjoint. |
 | `expr` | Conversion to a SymPy expression. |
+| `order`, `lo`, `rel_order`, `is_exact` | Accuracy order (`+oo` if exact), leading order (`+oo` if zero), their difference, and whether the order is `+oo`. |
+| `with_order(order, truncate=True)` | Copy with another accuracy order, truncated there when the order is lowered. |
 | `expand(order, with_order=False)` | Truncate / expand to a perturbative order; with `with_order=True`, yields `(term, order)` pairs. |
 | `eval_vacuum(vac_modes)` | (Partial) expectation value with the given weak modes (`'a_1'`, `'a_2'`, …) in vacuum. |
 | `eval_coherent(order=0)` | Expectation value with the driving field in a coherent state $|\alpha\rangle$ (`alpha_0` or `alpha_2`). |
-| `to_single_mode()` | Replace multimode operators by single-mode ones ($n_m = 1$). |
+| `to_single_mode(degenerate=False)` | Replace multimode operators by single-mode ones ($n_m = 1$). With `degenerate=True` (dc only), map onto degenerate down-conversion (signal = idler = $a_1$, $H = \chi(a_0^\dagger a_1^2 + a_0 a_1^{\dagger 2})/2$) via $\sum a_1 a_2 \to a_1^2/2$, $\sum(1 + \hat N_1 + \hat N_2) \to \hat N_1 + 1/2$, $\sum(\hat N_j + d) \to (\hat N_1 + d)/2$, $n_m \to 1/2$, $a_2 \to a_1$. This map preserves all commutators the multimode solutions use, so it is exact for the solver outputs and for `@` products (a multimode sum $\sum \hat N_j$ becomes $\hat N_1/2$). Take single-mode products (`*`) of weak-field operators after the conversion. |
 | `diff(*symbols, gc=None)` | Derivative (w.r.t. time or gain). |
 | `apply(f, on_npf=False)` | Apply `f` to every number-operator coefficient. |
 | `flip()`, `as_scalar`, `parity`, `dc` | Internal representation helpers. |
@@ -434,9 +442,10 @@ Base processor shared by the solvers and wrappers of one process: it stores the 
 | Member | Description |
 |---|---|
 | `init_ops` | Input-operator wrappers at $t = 0$: `'a_0'`, `'a_1'`, `'a_2'` (and aliases `'a_p'`, `'a_s'`, `'a_i'`), the multimode canonical operator `'A'` and the multimode number operator `'N_t'`. |
-| `expand_func_d(func, order, *ds, with_order=False)` | Perturbative expansion of `func(*ds)` with `WMWrapper` arguments. |
+| `expand_func_d(func, order, *ds, with_order=False)` | Perturbative expansion of `func(*ds)` with `WMWrapper` arguments, accurate to $\min(\text{order},\ l_f + \min_j(o_j - l_j))$ with $l_f$ the leading order of `func` and $o_j, l_j$ the accuracy and leading orders of the inexact arguments. |
 | `p2s(expr, xs=(t_,), simp=None)` | Product-to-sum transformation of hyperbolic (dc) or trigonometric (fc) functions of time, grouping terms by time dependence. |
-| `d_add(*ws)` | Sum of several wrappers. |
+| `d_add(*ws)` | Sum of several wrappers, accurate to the lowest order of its terms (vanishing terms included). |
+| `d_mul(d0, d1, d2, mid=None, sc=False, order=None)` | Accumulates the products of two `{tuple: PF}` dicts (with an optional middle operator `mid`) into `d0`; with `order`, pairs whose leading orders already exceed it are skipped and every product is truncated there. |
 | `bd_swap`, `bp_swap`, `bt_swap`, `tp_swap`, `tcp_swap` | Commutation of single-mode operators, `PF` objects and multimode exponent tuples. |
 
 ```python
@@ -496,4 +505,4 @@ Every name below can be imported directly from `cas_qwm`.
 | `pattern_perturb` | `BSC`, `FSC`, `PF`, `pf`, `pf_add`, `PF0`, `PF1`, `PE`, `perturb_rec` |
 | `parametric_multimode` | `a_p`, `a_s`, `a_i`, `t_`, `nlc`, `pm`, `nm`, `_g`, `p2s`, `dsolve_pm1`, `dsolve_pm2`, `MultimodeCOP`, `MultimodeNum`, `MultimodeNum2`, `WMProcessor`, `twm_processors`, `fwm_processor`, `vac_pf`, `WMWrapper`, `WMSolver`, `TWMSolver`, `FWMSolver` |
 
-Further functions (e.g. `pattern_form`, `is_pattern_form`, `bn_simp` in `cas_qwm.pattern_perturb.pattern_form`, and the Jacobi elliptic functions in `cas_qwm.jacobi`) can be imported from their submodules.
+Further functions (e.g. `pattern_form`, `is_pattern_form`, `bn_simp` in `cas_qwm.pattern_perturb.pattern_form`, `EXACT` and `exceeds` in `cas_qwm.parametric_multimode`, and the Jacobi elliptic functions in `cas_qwm.jacobi`) can be imported from their submodules.

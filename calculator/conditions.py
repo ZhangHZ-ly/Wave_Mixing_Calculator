@@ -35,6 +35,14 @@ def process_is_dc(process: str) -> bool:
     return normalize_process(process) != 'twm_fc'
 
 
+def is_degenerate(process: str, single_mode: bool, degenerate: bool) -> bool:
+    """
+    Effective degenerate single-mode processing (signal = idler): only with single-mode
+    processing of three-wave down-conversion.
+    """
+    return bool(single_mode) and bool(degenerate) and normalize_process(process) == 'twm_dc'
+
+
 class LogicRelation(str, Enum):
     """
     Propositional logic relation between expression state (E) and calculation preset (P).
@@ -120,6 +128,14 @@ CONDITION_REGISTRY: Dict[str, ConditionRule] = {
         label_false='Multimode',
         convert_method='to_single_mode',
         conflict_msg='Expressions created under Single Mode cannot be used in Multimode calculations because multimode summation and mode degeneracy details were collapsed.'
+    ),
+    'degenerate': ConditionRule(
+        key='degenerate',
+        name='Single-mode Degeneracy',
+        relation=LogicRelation.XNOR,
+        label_true='Degenerate',
+        label_false='Non-degenerate',
+        conflict_msg='Single-mode expressions of degenerate (signal = idler) and non-degenerate down-conversion are built on different mode structures and cannot be mixed.'
     ),
 }
 

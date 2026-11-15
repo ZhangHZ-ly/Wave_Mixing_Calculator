@@ -17,7 +17,7 @@ from sympy.core.sorting import default_sort_key
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.commutator import Commutator
 from ..wm_variables import *
-from ..op_pattern import BosonNum, NumShift
+from ..op_pattern import BosonNum, BosonPat, NumShift
 from ..pattern_perturb import BSC, PF, PF0, PF1, PE
 from ..pattern_perturb.pattern_form import pf_add, _vpk, _ps, _mps, _key
 from ..pattern_perturb.perturb_expander import perturb_rec
@@ -27,7 +27,7 @@ from sympy.functions.elementary.trigonometric import cos, sin
 from .multimode import (MultimodeCOP, MultimodeNum, MultimodeNum2)
 import warnings
 
-__all__ = ['WMProcessor', '_g', 'nm', 'vac_pf']
+__all__ = ['WMProcessor', '_g', 'nm', 'vac_pf', 'exceeds']
 
 warnings.simplefilter('once', UserWarning)
 
@@ -80,6 +80,10 @@ _g = Dummy('g', real=True)  # Dummy symbol for the parametric gain
 nm = Symbol('n_m', nonnegative=True)  # Mode count symbol n_m
 
 _e = lambda p: S.Zero if p == 1 else (p.exp if p.is_Pow else S.One)
+
+def exceeds(a, b) -> bool:
+    """Whether the order a is certainly above the order b (False when undecidable)."""
+    return bool((a > b) == True)
 _simp_frac = lambda e: (Pow(factor_terms(e.base, fraction=True), e.exp)
                         if e.is_Pow and e.base.is_Add else e)
 
@@ -106,16 +110,20 @@ class WMProcessor:
                               MultimodeCOP(a_p.name, a_s.name, 1)))
         self.mmn2 = MultimodeNum2(*self.a[0].args[:3])
         self.base_orders = {**dict.fromkeys(self.a[0].names, S.Zero),
-                            self.nd.name: sympify(drive_order)}
-        self._init_pe()
-
-    def _init_pe(self):
-        """(Re)initializes the perturbation expander with the base mode orders of this process."""
-        self.pe = PE({nlc: S.One})
+                            self.nd.name: sympify(drive_order), nlc: S.One}
+        self.pe = PE()
         self.pe.register(MultimodeNum)
         self.pe.register(MultimodeNum2)
         self.pe.register(MultimodeCOP)
-        self.pe.update(self.base_orders)
+        self._init_pe()
+
+    def _init_pe(self, clear=False):
+        """
+        Restores the base mode orders of this process in the perturbation expander.
+        If clear is True, all custom orders are dropped as well (the expander is reset
+        to its initial state; registered types are kept).
+        """
+        self.pe.update(self.base_orders, clear=clear)
 
     @cached_property
     def init_ops(self) -> dict:
@@ -190,8 +198,11 @@ class WMProcessor:
         Returns the summed WMWrapper, or, if with_order=True, a generator of
         (WMWrapper, order) pairs, one per perturbative term (orders may repeat).
         Input validation is performed eagerly in both cases.
+        The summed result is accurate up to min(order, flo + min_j(order_j - lo_j)), with flo
+        the leading order of func and order_j, lo_j the accuracy and leading orders of the
+        inexact arguments.
         """
-        from .wm_wrapper import WMWrapper
+        from .wm_wrapper import WMWrapper, _omin
         if not ds:
             f0 = sympify(func())
             w = WMWrapper.from_val(f0, self)
@@ -202,6 +213,7 @@ class WMProcessor:
         ord_lims, flo = self.pe.handle_order_limits(func, len(ds))
         x0_list = []
         perturb_list = []
+        rels = []  # relative accuracies of the inexact arguments
         for j, (d, ol) in enumerate(zip(ds, ord_lims)):
             w = WMWrapper.from_val(d, self)
             if w.b_left is not None:
@@ -225,6 +237,8 @@ class WMProcessor:
                 x0_list.append(v0[(None,)].table[_vpk])
             else:
                 raise ValueError('Unappropriate input for the function')
+            if not w.is_exact:
+                rels.append(w.order - ol)
             for od, td in odt.items():
                 if td:
                     perturb_list.append((j, od - ol, WMWrapper(self, td, None)))
@@ -255,7 +269,8 @@ class WMProcessor:
 
         if with_order:
             return terms
-        return self.d_add(*(t for t, _ in terms))
+        acc = _omin(order, *(flo + r for r in rels))
+        return self.d_add(*(t for t, _ in terms)).with_order(acc)
 
     def n_simp(self, expr):
         n1, n2 = self.a[0].names
@@ -372,23 +387,31 @@ class WMProcessor:
         """
         Adds multiple WMWrapper objects together, collecting identical keys.
         """
-        from .wm_wrapper import WMWrapper
+        from .wm_wrapper import WMWrapper, _omin
         items = []
+        orders = []  # accuracy orders of all terms, including vanishing ones
         for w in ws:
+            if isinstance(w, WMWrapper):
+                orders.append(w.order)
             if not w:
                 continue
             if not isinstance(w, WMWrapper):
                 w = WMWrapper.from_val(w, self)
             if w.dict_repr:
                 items.append(w)
+        # the sum is accurate to the lowest order of its terms: the more accurate terms are
+        # truncated there, so that the merged result needs no further truncation
+        acc = _omin(*orders)
+        items = [w if w.order == acc else w.with_order(acc) for w in items]
+        items = [w for w in items if w.dict_repr]
 
         if not items:
-            return WMWrapper(self, {}, None)
+            return WMWrapper(self, {}, None, acc)
         if len(items) == 1:
             return items[0]
 
         if all(w.b_left is None for w in items):
-            return WMWrapper(self, _merge_dicts(w.dict_repr for w in items), None)
+            return WMWrapper(self, _merge_dicts(w.dict_repr for w in items), None, acc, False)
 
         if all(w.b_left is not None for w in items):
             parities = {self.f_parity(tuple(w.dict_repr)) for w in items}
@@ -405,11 +428,19 @@ class WMProcessor:
                         for nk, nv in self.bd_swap(k, v, to_left=b_left).items():
                             result[nk].append(nv)
             out = {k: m for k, vs in result.items() if (m := _merge_dicts(vs))}
-            return WMWrapper(self, out, b_left if out else None)
+            return WMWrapper(self, out, b_left if out else None, acc, False)
 
         raise ValueError("Cannot add expressions with and without single-mode weak-field operators")
 
-    def d_mul(self, d0: defaultdict, d1: dict, d2: dict, mid=None, sc=False):
+    def d_mul(self, d0: defaultdict, d1: dict, d2: dict, mid=None, sc=False, order=None):
+        """
+        Accumulates the products of the {tuple: PF} dicts d1 * [mid] * d2 into d0.
+        `mid` is a middle operator: a bool (the multimode / single-mode COP of self.a[mid],
+        `sc` selecting the single-mode one) or a number-operator expression.
+        With `order`, the products are truncated at that absolute perturbative order: the
+        pairs whose leading orders already exceed it are skipped (the reorderings and the
+        weak-field middle operators only raise the order).
+        """
         if not d1 or not d2:
             return
         if isinstance(mid, bool):
@@ -418,16 +449,30 @@ class WMProcessor:
             mid_op = mid
             sc = False
         use_mid_t = isinstance(mid, bool) and not sc
+        if order is not None:
+            lo = self.pe.lo_order_pf
+            lo2s = {k2: lo(v2) for k2, v2 in d2.items()}
         for k1, v1 in d1.items():
+            if order is not None:
+                lo1 = lo(v1)
+                ks2 = [k2 for k2, o2 in lo2s.items() if not exceeds(lo1 + o2, order)]
+                if not ks2:
+                    continue
+            else:
+                ks2 = d2
             v1_mid = v1 if mid_op is None else v1 * mid_op
             if not v1_mid:
                 continue
-            for k2, v2 in d2.items():
+            for k2 in ks2:
+                v2 = d2[k2]
                 if not v2:
                     continue
                 k_right = _t_mul((mid, 1), k2) if use_mid_t else k2
                 for k_new, p_new in self.tp_swap(k_right, v1_mid, to_left=True):
-                    if (prod := p_new * v2):
+                    prod = p_new * v2
+                    if order is not None and prod:
+                        prod = self.pe.expand_pf(prod, order)
+                    if prod:
                         d0[_t_mul(k1, k_new)].append(prod)
 
     def tp_swap(self, k: tuple, p: PF, to_left=False):
@@ -615,27 +660,81 @@ class WMProcessor:
             to_left=to_left, _head=new_head, _tail=_tail
         )
 
-    def _sm_expr(self, expr):
-        """Simplifies number operators and mode count in scalar/coefficient expressions."""
-        return expr.replace(
-            lambda x: isinstance(x, (MultimodeNum, MultimodeNum2, MultimodeCOP)),
-            lambda x: x.mode_expr
-        ).subs({nm: S.One})
+    def _deg_op(self, b):
+        """Renames a weak-field operator / pattern of mode 2 to mode 1 (degenerate limit)."""
+        n1, n2 = self.a[0].names
+        if getattr(b, 'name', None) != n2:
+            return b
+        if isinstance(b, BosonNum):
+            return BosonNum(n1)
+        return BosonPat(n1, b.left_base.is_annihilation, *b.exps)
 
-    def _smk(self, k) -> PF:
-        """Single-mode PF representation of a dict key (BosonOp or multimode tuple)."""
+    def _sm_expr(self, expr, degenerate=False):
+        """
+        Simplifies number operators and mode count in scalar/coefficient expressions.
+
+        degenerate=True (dc only) applies the degenerate mapping (signal = idler = a_1):
+        Σ(1 + N_1 + N_2) -> N_1 + 1/2, Σ(N_j + d) -> (N_1 + d)/2, Σ(a_1 a_2) -> a_1**2/2,
+        mode-2 operators -> mode-1 operators and n_m -> 1/2.
+        """
+        if not degenerate:
+            return expr.replace(
+                lambda x: isinstance(x, (MultimodeNum, MultimodeNum2, MultimodeCOP)),
+                lambda x: x.mode_expr
+            ).subs({nm: S.One})
+        n1, n2 = self.a[0].names
+        bn = BosonNum(n1)
+
+        def _deg(x):
+            if isinstance(x, MultimodeCOP):
+                return BosonOp(n1, x.annih1) * BosonOp(n1, x.annih2) / 2
+            if isinstance(x, MultimodeNum2):
+                return bn + S.Half
+            if isinstance(x, MultimodeNum):
+                return (bn + x.displacement) / 2 if x.name in (n1, n2) else x.mode_expr
+            return self._deg_op(x)
+
+        return expr.replace(
+            lambda x: (isinstance(x, (MultimodeNum, MultimodeNum2, MultimodeCOP))
+                       or (isinstance(x, (BosonOp, BosonPat)) and x.name == n2)),
+            _deg
+        ).subs({nm: S.Half})
+
+    def _sm_pf(self, p: PF, degenerate=False) -> PF:
+        """Single-mode conversion of a PF (tails, npf and, if degenerate, its table keys)."""
+        p = p.apply(lambda e: self._sm_expr(e, degenerate), on_npf=True)
+        n2 = self.a[0].names[1]
+        if not (degenerate and p and any(b.name == n2 for bs, _ in p.table for b in bs)):
+            return p
+        terms = [PF(npf=p.npf)] if p.npf != 0 else []
+        for (bs, fs), t in p.table.items():
+            if any(b.name == n2 for b in bs):
+                bs, c = BSC([self._deg_op(b) for b in bs]).result_ind()
+                t = c * t
+            terms.append(PF({(bs, fs): t}))
+        return pf_add(*terms)
+
+    def _smk(self, k, degenerate=False) -> PF:
+        """
+        Single-mode PF representation of a dict key (BosonOp or multimode tuple);
+        degenerate=True maps Σ(a_1 a_2) to a_1**2/2 and mode-2 operators to mode 1.
+        """
         if isinstance(k, BosonOp):
-            return PF({((k,), ()): S.One})
+            return PF({((self._deg_op(k) if degenerate else k,), ()): S.One})
         bs = []
         i, *exps = k
         if not exps:
             return PF1
         for e in exps:
             b1, b2 = Mul.make_args(self.a[i].mode_expr)
+            if degenerate:
+                b2 = self._deg_op(b2)
             bs.append(b1**e)
             bs.append(b2**e)
             i = not i
         b, t = BSC(bs).result_ind()
+        if degenerate:
+            t = t / 2**sum(exps)
         return PF({(b, ()): t})
 
 def _dr_prep(d: dict):

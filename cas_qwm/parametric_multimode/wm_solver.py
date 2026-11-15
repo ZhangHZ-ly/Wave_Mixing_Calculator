@@ -10,7 +10,7 @@ from ..pattern_perturb.pattern_form import PF, _vpk
 from ..dsolve_pm import dsd1, dsd2
 from .multimode import MultimodeNum2
 from .wm_processor import WMProcessor, a_p, a_s, a_i, t_, nlc, _g
-from .wm_wrapper import WMWrapper
+from .wm_wrapper import WMWrapper, EXACT
 
 __all__ = ['pm', 'twm_processors', 'fwm_processor', 'WMSolver', 'TWMSolver', 'FWMSolver']
 
@@ -28,12 +28,15 @@ class WMSolver(Sequence):
     Protected list-like container storing perturbative wave-mixing solutions
     as 3-tuples of WMWrapper objects per order.
     """
-    __slots__ = ('processor', 'pm', '_sol')
+    __slots__ = ('processor', 'pm', '_sol', '_labeled')
 
     def __init__(self, processor: WMProcessor, mismatch=False):
         self.processor = processor
         self.pm = pm if mismatch else S.Zero
+        # exact (unlabeled) solutions used by the recursion; get_sol returns copies labeled
+        # with their accuracy order (cached in _labeled)
         self._sol = []
+        self._labeled = {}
 
     @property
     def dc(self) -> bool:
@@ -60,12 +63,31 @@ class WMSolver(Sequence):
         raise TypeError(f"'{self.__class__.__name__}' object does not support item deletion")
 
     def get_sol(self, order: int):
+        """
+        3-tuple of the solutions (a_0(t), a_1(t), a_2(t)) accurate up to `order`, as wrappers
+        whose `order` attribute is set to their actual accuracy (see sol_orders).
+        """
+        if order not in self._labeled:
+            self._labeled[order] = tuple(w.with_order(o) for w, o in
+                                         zip(self._get_sol(order), self.sol_orders(order)))
+        return self._labeled[order]
+
+    def sol_orders(self, order: int) -> tuple:
+        """Accuracy orders of the three solutions of get_sol(order)."""
+        return (order,) * 3
+
+    def _get_sol(self, order: int):
+        """Solutions accurate up to `order`, without accuracy label (exact arithmetic)."""
         raise NotImplementedError
 
     def _expand_g(self, w: WMWrapper, order) -> WMWrapper:
-        """Expands w to the given order and rewrites t_ as _g / gc for the g-domain dsolve."""
+        """
+        Expands w to the given order and rewrites t_ as _g / gc for the g-domain dsolve.
+        The result is kept unlabeled (exact arithmetic): the recursion needs the products of
+        the lower-order solutions without truncation.
+        """
         sub = {t_: _g / self.gc}
-        return w.expand(order).apply(lambda t: t.subs(sub), on_npf=True)
+        return w.expand(order).apply(lambda t: t.subs(sub), on_npf=True).with_order(EXACT)
 
 
 class TWMSolver(WMSolver):
@@ -77,6 +99,15 @@ class TWMSolver(WMSolver):
         d/dt a1 = -i χ a0 a2† exp(i Δk t),
         d/dt a2 = -i χ a1† a0 exp(i Δk t)
     """
+
+    def sol_orders(self, order: int) -> tuple:
+        """
+        The weak fields are corrected at even orders only and the strong driving field at odd
+        orders only, so a solution is accurate up to the order before its next correction:
+        order + 1 for the weak fields at even orders and for the drive at odd orders.
+        """
+        drive = 0 if self.dc else 2
+        return tuple(order + 1 if bool(order & 1) == (m == drive) else order for m in range(3))
 
     def __init__(self, dc=True, mismatch=False):
         super().__init__(twm_processors[bool(dc)], mismatch=mismatch)
@@ -119,13 +150,13 @@ class TWMSolver(WMSolver):
                                                       S.Zero, -I * nlc / self.gc)})
         self.fdf0 = _fdf0
 
-    def get_sol(self, order: int):
+    def _get_sol(self, order: int):
         if order < -1:
             raise ValueError('The order should be at least -1')
         i = order + 1
         if len(self._sol) > i:
             return self._sol[i]
-        last_sol = self.get_sol(order - 1)
+        last_sol = self._get_sol(order - 1)
         p = self.processor
         dc = self.dc
         gc_m2 = self.gc**(-2)
@@ -235,9 +266,26 @@ class FWMSolver(WMSolver):
         s0 = w_rhs.apply(lambda t: p.n_simp(dsd1(_g, p.p2s_group(t), subs=self.gc * t_)))
 
         sol_1 = (sol_0[0] + s0, sol_0[1], sol_0[2])
-        self._sol = [sol_m1, sol_0, sol_1]
+        # Each stored solution carries the highest order it applies to (orders of FWM come in
+        # steps of 1/2: the pump has its leading order -1/2 and its first depletion correction
+        # s0 at 1/2, the next one, not computed, at 3/2; the weak fields have their leading
+        # order 0 and their first correction, not computed, at 1)
+        self._sol = [tuple(w.with_order(o) for w, o in zip(sols, orders))
+                     for sols, orders in zip((sol_m1, sol_0, sol_1), self._SOL_ORDERS)]
+
+    # highest applicable orders of the solutions (a_0, a_1, a_2) of orders -1, 0, 1
+    _SOL_ORDERS = ((S.Zero, -S.Half, -S.Half),
+                   (S.Zero, S.Half, S.Half),
+                   (S.One, S.Half, S.Half))
 
     def get_sol(self, order: int):
+        """The stored solutions, already labeled with their highest applicable orders."""
+        return self._get_sol(order)
+
+    def sol_orders(self, order: int) -> tuple:
+        return tuple(w.order for w in self._get_sol(order))
+
+    def _get_sol(self, order: int):
         if order < -1 or order > 1:
             raise ValueError(f"Order {order} out of range for FWMSolver (supports orders -1, 0, 1)")
         return self._sol[order + 1]

@@ -22,6 +22,7 @@ function renderWorkspaceTable(ws) {
   const isDc = getWmDc();
   const orderVal = parseInt(getWmOrderValue());
   const isSingleMode = getWmSingleMode();
+  const isDegenerate = getWmDegenerate();
 
   // Tab 2 badges span the full cell width
   const badge = (cls, text, full = !isWm) => `<span class="badge ${cls}${full ? ' badge-full' : ''}">${text}</span>`;
@@ -81,8 +82,10 @@ function renderWorkspaceTable(ws) {
         const itemProc = itemProcess(item);
         const isProcMismatch = (itemProc !== null && itemProc !== curProcess && itemHasDefaultOps(item));
         const isSmMismatch = (item.single_mode === true && !isSingleMode);
+        const itemDeg = (item.degenerate === true);
+        const isDegMismatch = (item.single_mode === true && isSingleMode && itemDeg !== isDegenerate);
 
-        if (isProcMismatch || isSmMismatch) {
+        if (isProcMismatch || isSmMismatch || isDegMismatch) {
           tr.classList.add('row-danger');
           if (isProcMismatch) {
             const itemProcLabel = PROCESS_LABELS[itemProc] || itemProc;
@@ -93,6 +96,11 @@ function renderWorkspaceTable(ws) {
           if (isSmMismatch) {
             typeBadge += ` <span class="badge badge-danger" title="Created under Single Mode, incompatible with current Multimode preset!">single-mode conflict</span>`;
             attrOrDef = `[WARNING: Single Mode Inconsistency]\nCreated under Single Mode (n_m=1), but current preset is Multimode.\n\n` + attrOrDef;
+          }
+          if (isDegMismatch) {
+            const lbl = d => (d ? 'Degenerate' : 'Non-degenerate');
+            typeBadge += ` <span class="badge badge-danger" title="Created under ${lbl(itemDeg)} Single Mode, incompatible with the current ${lbl(isDegenerate)} Single Mode preset!">degeneracy conflict</span>`;
+            attrOrDef = `[WARNING: Single-Mode Degeneracy Inconsistency]\nCreated under ${lbl(itemDeg)} Single Mode, but current preset is ${lbl(isDegenerate)} Single Mode.\n\n` + attrOrDef;
           }
         } else if (typeof item.order === 'number' && !isNaN(orderVal) && item.order < orderVal) {
           tr.classList.add('row-warning');
@@ -166,6 +174,7 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
   const curProcess = getWmProcess();
   const curDc = getWmDc();
   const curSingleMode = getWmSingleMode();
+  const curDegenerate = getWmDegenerate();
   const curOrderRaw = parseInt(getWmOrderValue());
   const curOrder = isNaN(curOrderRaw) ? 1 : curOrderRaw;
   const curMismatch = getWmMismatch();
@@ -263,12 +272,14 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
   }
 
   // 5. Single-Mode Attribute
-  const smLabelOf = isSm => (isSm ? 'Single-Mode (n_m = 1)' : 'Multimode');
+  const smLabelOf = (isSm, isDeg = false) => (isSm
+    ? (isDeg ? 'Degenerate Single-Mode (n_m = 1/2)' : 'Single-Mode (n_m = 1)') : 'Multimode');
   if (item.type === 'named_expr') {
     const isSm = (item.single_mode === true);
-    const smLabel = smLabelOf(isSm);
+    const isDeg = isSm && (item.degenerate === true);
+    const smLabel = smLabelOf(isSm, isDeg);
     let smBadge;
-    if (isSm && !curSingleMode) {
+    if (isSm && (!curSingleMode || isDeg !== curDegenerate)) {
       smBadge = `<span class="badge badge-danger">${smLabel}</span>`;
     } else if (!isSm && curSingleMode) {
       smBadge = `<span class="badge badge-info">${smLabel}</span> <span class="details-note">(auto-convertible)</span>`;
@@ -277,7 +288,7 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
     }
     addRow('Multi/Single Mode', smBadge);
   } else if (item.type === 'evolved_op') {
-    addRow('Multi/Single Mode', `<span class="badge badge-info">${smLabelOf(curSingleMode)}</span>${AUTO_NOTE}`);
+    addRow('Multi/Single Mode', `<span class="badge badge-info">${smLabelOf(curSingleMode, curDegenerate)}</span>${AUTO_NOTE}`);
   } else if (item.type === 'mm_op') {
     addRow('Multi/Single Mode', `<span class="badge badge-info">Multimode</span>${AUTO_NOTE}`);
   } else {
@@ -643,7 +654,16 @@ function openSaveAnswerModal(ws) {
     const isSingleMode = (cachedWmResult && typeof cachedWmResult.single_mode === 'boolean')
       ? cachedWmResult.single_mode
       : getWmSingleMode();
-    document.getElementById('wm-save-order-val').textContent = `${orderInput.value} (Leading Order: ${leadingOrd}) | ${procLabel} | ${isSingleMode ? 'Single Mode' : 'Multimode'}`;
+    const isDeg = (cachedWmResult && typeof cachedWmResult.degenerate === 'boolean')
+      ? cachedWmResult.degenerate
+      : getWmDegenerate();
+    const modeLabel = isSingleMode ? (isDeg ? 'Degenerate Single Mode' : 'Single Mode') : 'Multimode';
+    // accuracy order of the result (from the product rule; may fall below the preset when
+    // referenced variables of insufficient order were used)
+    const presetOrd = parseInt(orderInput.value);
+    const resOrd = (cachedWmResult && typeof cachedWmResult.order === 'number') ? cachedWmResult.order : presetOrd;
+    const lowered = !isNaN(presetOrd) && resOrd < presetOrd ? ` (below preset ${presetOrd})` : '';
+    document.getElementById('wm-save-order-val').textContent = `${resOrd}${lowered} (Leading Order: ${leadingOrd}) | ${procLabel} | ${modeLabel}`;
   }
 
   renderModalFormulaWithTabs(document.getElementById('ne-expr-preview'), 'save', preview);
@@ -753,6 +773,9 @@ async function saveAnswerExpression() {
       single_mode: (cachedWmResult && typeof cachedWmResult.single_mode === 'boolean')
         ? cachedWmResult.single_mode
         : getWmSingleMode(),
+      degenerate: (cachedWmResult && typeof cachedWmResult.degenerate === 'boolean')
+        ? cachedWmResult.degenerate
+        : getWmDegenerate(),
       hasDefaultOps: exprContainsDefaultOperators(latexT, wmTableItems) || exprContainsDefaultOperators(latexG, wmTableItems),
       notes: notes
     }));

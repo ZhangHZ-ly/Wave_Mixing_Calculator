@@ -151,6 +151,19 @@ const CONDITION_RULES = {
     conflictMsg: 'Expressions created under Single Mode cannot be used in Multimode calculations because multimode summation and mode degeneracy details were collapsed.',
     checkApplies: (item) => item.single_mode === true,
     getExprVal: (item) => item.single_mode
+  },
+  degenerate: {
+    key: 'degenerate',
+    name: 'Single-mode Degeneracy',
+    relation: 'xnor',
+    labelTrue: 'Degenerate',
+    labelFalse: 'Non-degenerate',
+    conflictBadge: 'degeneracy conflict',
+    conflictTitle: 'Single-Mode Degeneracy Inconsistency Warning',
+    conflictMsg: 'Single-mode expressions of degenerate (signal = idler) and non-degenerate down-conversion are built on different mode structures and cannot be mixed.',
+    // only single-mode expressions carry a degeneracy (absent on older entries: non-degenerate)
+    checkApplies: (item) => item.single_mode === true,
+    getExprVal: (item) => item.degenerate === true
   }
 };
 
@@ -225,7 +238,8 @@ function extractWorkspaceDefinitions(ws) {
       leading_order: typeof ne.leadingOrder === 'number' ? ne.leadingOrder : (ne.leading_order ?? 0),
       dc: neDc,
       process: neProc,
-      single_mode: typeof ne.single_mode === 'boolean' ? ne.single_mode : null
+      single_mode: typeof ne.single_mode === 'boolean' ? ne.single_mode : null,
+      degenerate: typeof ne.degenerate === 'boolean' ? ne.degenerate : null
     };
   });
 
@@ -257,6 +271,23 @@ function getWmSingleMode() {
   return el ? el.checked : false;
 }
 
+// Degeneracy selected for single-mode processing (shown for down-conversion only), whether ticked or not
+function getWmDegeneracySelected() {
+  const el = document.getElementById('wm-sm-degeneracy');
+  return !!el && el.value === 'degenerate';
+}
+
+// Effective degenerate single-mode processing: single-mode ticked, down-conversion, 'degenerate' selected
+function getWmDegenerate() {
+  return getWmSingleMode() && getWmProcess() === 'twm_dc' && getWmDegeneracySelected();
+}
+
+// Label of the current multi/single-mode preset
+function wmModeText(isSingleMode = getWmSingleMode(), isDegenerate = getWmDegenerate()) {
+  if (!isSingleMode) return 'multimode';
+  return isDegenerate ? 'single-mode (degenerate)' : 'single-mode';
+}
+
 function getWorkspaceArray(ws) {
   return (ws === 'tab3') ? wmTableItems : tableItems;
 }
@@ -271,6 +302,21 @@ function saveWorkspaceToStorage(ws) {
   }
 }
 
+// Resets the perturbative orders of the backend WM processors.
+// clear = true: drop all custom orders (full reset); false: only restore the base mode orders.
+async function resetWmProcessorPE(clear) {
+  try {
+    const res = await fetch('/api/combination/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clear: !!clear })
+    });
+    if (!res.ok) throw new Error('Reset failed');
+  } catch (e) {
+    console.error('Failed to reset WM processor PE:', e);
+  }
+}
+
 async function resetTableDefaults(ws) {
   if (ws === 'tab3') {
     if (!confirm('Reset Tab 3 table to default parametric symbols and operators?')) return;
@@ -281,12 +327,7 @@ async function resetTableDefaults(ws) {
     wmTableItems = defaults;
     saveWmTableItemsToStorage();
     renderWmTable();
-    try {
-      const res = await fetch('/api/combination/reset', { method: 'POST' });
-      if (!res.ok) throw new Error('Reset failed');
-    } catch (e) {
-      console.error('Failed to reset WM processor PE:', e);
-    }
+    await resetWmProcessorPE(true);
     showToast('Tab 3 table reset to defaults.');
   } else {
     if (!confirm('Reset Tab 2 table to default symbols and operators?')) return;
@@ -504,6 +545,7 @@ async function restoreBaseOperators(ws) {
 
   saveWmTableItemsToStorage();
   renderWmTable();
+  await resetWmProcessorPE(false);
   if (restoredCount > 0) {
     showToast(`Base operator solutions restored (${restoredCount} updated/recovered).`);
   } else {

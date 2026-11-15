@@ -20,6 +20,9 @@ function onWmProcessChange() {
 }
 
 function onWmPresetChange() {
+  // the degeneracy select of single-mode processing only exists for down-conversion
+  const degSelect = document.getElementById('wm-sm-degeneracy');
+  if (degSelect) degSelect.hidden = getWmProcess() !== 'twm_dc';
   renderWmTable();
   if (activeEditItem && activeWorkspace === 'tab3') {
     const isOpen = id => document.getElementById(id)?.classList.contains('active');
@@ -44,9 +47,14 @@ function onWmPresetChange() {
 
     const mismatchText = wmMismatchLabel(curProcess, getWmMismatch());
     const gainText = wmUseGain ? 'gain (g)' : 'time (t)';
-    const modeText = getWmSingleMode() ? 'single-mode' : 'multimode';
+    const modeText = wmModeText();
     const cascadeSym = getWmCascadeSymbol();
-    const cascadeText = cascadeSym !== null ? ` | cascaded (+${cascadeSym || '?'})` : '';
+    let cascadeText = '';
+    if (cascadeSym !== null) {
+      const phases = getWmCascadePhases();
+      const phaseText = phases.some(ph => ph !== '0') ? `, φ = (${phases.join(', ')})` : '';
+      cascadeText = ` | cascaded (+${cascadeSym || '?'}${phaseText})`;
+    }
     tag.textContent = `${procText} | ${mismatchText} | order=${getWmOrderValue()} | ${gainText} | ${modeText}${cascadeText}`;
   }
   updateAssertLabels();
@@ -80,9 +88,44 @@ function onWmCascadeToggle(focus = true) {
   onWmPresetChange();
 }
 
-function onWmCascadeSymbolInput() {
-  document.getElementById('wm-cascade-symbol')?.classList.remove('invalid');
+// Input handler of the cascade time / phase boxes (el: the edited box, default the time box)
+function onWmCascadeSymbolInput(el) {
+  (el || document.getElementById('wm-cascade-symbol'))?.classList.remove('invalid');
   onWmPresetChange();
+}
+
+// Trimmed phases (phi_0, phi_1, phi_2) of the cascaded system; empty boxes fall back to '0'
+function getWmCascadePhases() {
+  return [0, 1, 2].map(k => (document.getElementById(`wm-cascade-phi-${k}`)?.value || '').trim() || '0');
+}
+
+// A user symbol is real if any of its (real-implying) assumptions is set
+function isRealSymbolItem(item) {
+  return !!(item.isReal || item.isInteger || item.isNonnegative || item.isPositive);
+}
+
+// Validates a phase of the cascaded system: a real numeric expression (digits, operators and pi),
+// a real custom commutative symbol, or a new identifier (created as a real symbol).
+// Returns { error, isNew }.
+function validateCascadePhase(text, k) {
+  const label = `Cascaded system: phase φ_${k}`;
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(text) && text !== 'pi') {
+    const check = validateVariableName(text);
+    if (!check.valid) return { error: `${label}: ${check.error}` };
+    const item = wmTableItems.find(x => x.name === text);
+    if (item) {
+      if (item.type === 'symbol' && !isBuiltinSymbol(item)) {
+        if (isRealSymbolItem(item)) return { error: '', isNew: false };
+        return { error: `${label}: symbol '${text}' must be real (set it as real, integer, nonnegative or positive).` };
+      }
+      const kind = isBuiltinSymbol(item) ? 'built-in parameter' : (ITEM_TYPE_LABELS[item.type] || item.type);
+      return { error: `${label}: '${text}' conflicts with the ${kind} '${text}'.` };
+    }
+    if (WM_PRESET_NAMES.has(text)) return { error: `${label}: '${text}' conflicts with a preset object.` };
+    return { error: '', isNew: true };
+  }
+  if (/^[0-9.+\-*/()\s]*$/.test(text.replace(/\bpi\b/g, ''))) return { error: '', isNew: false };
+  return { error: `${label}: '${text}' must be a real number (e.g. pi/2) or a real symbol.` };
 }
 
 // Validates the cascade time: 't', a custom commutative symbol, or a new identifier.
@@ -106,6 +149,7 @@ function validateCascadeSymbol(name) {
 
 // Reads and validates the cascade time; returns undefined if the cascaded system is disabled,
 // null (with an error shown) if invalid, or { name, isNew }
+// null (with an error shown) if invalid, or { name, isNew, phases: [{ text, isNew }] }
 function readWmCascade(output) {
   const name = getWmCascadeSymbol();
   if (name === null) return undefined;
@@ -115,27 +159,48 @@ function readWmCascade(output) {
     showOutputError(output, error);
     return null;
   }
-  return { name, isNew };
+  const phases = [];
+  for (const [k, text] of getWmCascadePhases().entries()) {
+    const res = validateCascadePhase(text, k);
+    if (res.error) {
+      document.getElementById(`wm-cascade-phi-${k}`)?.classList.add('invalid');
+      showOutputError(output, res.error);
+      return null;
+    }
+    phases.push({ text, isNew: res.isNew });
+  }
+  return { name, isNew, phases };
 }
 
-// Creates a nonnegative commutative symbol for a new cascade time (name = display text)
+// Creates the new symbols of the cascaded system (name = display text): a nonnegative
+// commutative symbol for a new cascade time and real commutative symbols for new phases
 function ensureCascadeSymbol(cascade) {
-  if (!cascade || !cascade.isNew || wmTableItems.some(x => x.name === cascade.name)) return;
-  wmTableItems.push({
-    id: String(Date.now()),
-    type: 'symbol',
-    name: cascade.name,
-    displayName: cascade.name,
-    isReal: false,
-    isInteger: false,
-    isNonnegative: true,
-    isPositive: false,
-    order: 0,
-    notes: 'Further evolution time of the cascaded system'
+  if (!cascade) return;
+  const created = [];
+  const add = (name, nonnegative, notes) => {
+    if (wmTableItems.some(x => x.name === name)) return;
+    wmTableItems.push({
+      id: `${Date.now()}_${created.length}`,
+      type: 'symbol',
+      name,
+      displayName: name,
+      isReal: !nonnegative,
+      isInteger: false,
+      isNonnegative: nonnegative,
+      isPositive: false,
+      order: 0,
+      notes
+    });
+    created.push(`${nonnegative ? 'nonnegative' : 'real'} '${name}'`);
+  };
+  if (cascade.isNew) add(cascade.name, true, 'Further evolution time of the cascaded system');
+  cascade.phases.forEach((ph, k) => {
+    if (ph.isNew) add(ph.text, false, `Phase of a_${k} in the cascaded system`);
   });
+  if (!created.length) return;
   saveWmTableItemsToStorage();
   renderWmTable();
-  showToast(`Created nonnegative commutative symbol '${cascade.name}' for the cascaded system.`);
+  showToast(`Created commutative symbol${created.length > 1 ? 's' : ''} ${created.join(', ')} for the cascaded system.`);
 }
 
 
@@ -250,14 +315,15 @@ function getReferencedNamedExprs(exprText, allNamedExprs) {
   return referenced;
 }
 
-function collectConditionConflicts(input, curProcess, isSingleMode) {
+function collectConditionConflicts(input, curProcess, isSingleMode, isDegenerate = false) {
   const allNamedExprs = wmTableItems.filter(x => x.type === 'named_expr');
   const referencedNamedExprs = getReferencedNamedExprs(input, allNamedExprs);
 
   const conflicts = [];
   const currentPresets = {
     process: curProcess,
-    single_mode: isSingleMode
+    single_mode: isSingleMode,
+    degenerate: isDegenerate
   };
 
   for (const item of referencedNamedExprs) {
@@ -274,6 +340,10 @@ function collectConditionConflicts(input, curProcess, isSingleMode) {
         reason = `created under ${exprLabel}, incompatible with current preset (${curLabel})`;
       } else if (key === 'single_mode') {
         reason = `created under Single Mode, incompatible with current Multimode preset`;
+      } else if (key === 'degenerate') {
+        if (!isSingleMode) continue;  // already reported by the single-mode rule
+        const lbl = v => (v ? rule.labelTrue : rule.labelFalse);
+        reason = `created under ${lbl(exprVal)} Single Mode, incompatible with current ${lbl(isDegenerate)} Single Mode preset`;
       } else {
         reason = `created under ${key}=${exprVal}, incompatible with current preset (${presetVal})`;
       }
@@ -691,10 +761,11 @@ function readWmPresets(output) {
 // Ask the user to confirm (1) preset-condition conflicts and (2) insufficient accuracy orders of
 // referenced variables. Returns false if the user cancelled.
 async function confirmWmWarnings(input, ctx, output) {
-  const conflicts = collectConditionConflicts(input, ctx.curProcess, ctx.isSingleMode);
+  const conflicts = collectConditionConflicts(input, ctx.curProcess, ctx.isSingleMode, ctx.isDegenerate);
   if (conflicts.length > 0) {
     const procLabel = PROCESS_LABELS[ctx.curProcess] || ctx.curProcess;
-    const presetSummary = `process=${procLabel}, single_mode=${ctx.isSingleMode ? 'True' : 'False'}`;
+    const degText = ctx.isSingleMode && ctx.curProcess === 'twm_dc' ? `, degenerate=${ctx.isDegenerate ? 'True' : 'False'}` : '';
+    const presetSummary = `process=${procLabel}, single_mode=${ctx.isSingleMode ? 'True' : 'False'}${degText}`;
     const proceed = await confirmConditionWarning(
       conflicts,
       presetSummary,
@@ -727,12 +798,21 @@ function buildWmRequest(input, ctx, useGain, extra = {}) {
     order: ctx.orderVal,
     use_gain: useGain,
     single_mode: ctx.isSingleMode,
+    degenerate: ctx.isDegenerate,
     symbols,
     operators,
     mm_operators: mmOperators,
     named_expressions: namedExprs,
     ...extra
   };
+}
+
+// The result order follows the product rule (sum of the leading orders + the smallest relative
+// accuracy of the factors), so referenced variables of insufficient order lower it below the preset
+function notifyLoweredOrder(ctx, resOrder) {
+  if (typeof resOrder === 'number' && resOrder < ctx.orderVal) {
+    showToast(`Result accurate up to order ${resOrder} (below the preset order ${ctx.orderVal}).`);
+  }
 }
 
 // Lazily record a longer TWM solver solution length (drives the evolved-operator accuracy in the table)
@@ -757,6 +837,7 @@ async function runWm() {
 
   onWmPresetChange();
   ctx.isSingleMode = getWmSingleMode();
+  ctx.isDegenerate = getWmDegenerate();
   const cascade = readWmCascade(output);
   if (cascade === null) return;
 
@@ -767,7 +848,7 @@ async function runWm() {
 
   try {
     const data = cascade
-      ? await postJson('/api/combination/cascade', buildWmRequest(input, ctx, useGain, { cascade_symbol: cascade.name }), 'Cascaded calculation failed')
+      ? await postJson('/api/combination/cascade', buildWmRequest(input, ctx, useGain, { cascade_symbol: cascade.name, cascade_phases: cascade.phases.map(ph => ph.text) }), 'Cascaded calculation failed')
       : await postJson('/api/combination', buildWmRequest(input, ctx, useGain), 'Combination calculation failed');
 
     cachedWmResult = data;
@@ -777,6 +858,7 @@ async function runWm() {
     currentWmExpr = data.expr_str;
 
     updateCachedSolLen(ctx, data.sol_len);
+    notifyLoweredOrder(ctx, data.order);
 
     output.innerHTML = '';
     renderMath(currentWmLatex, output);
@@ -855,7 +937,8 @@ function updateAssertModeTag() {
       ? `Δk ${rel} 2χ${chkDrive ? '|α₀|²' : 'N₀'}`
       : `Δk ${rel} 0`;
     const gainText = assertUseGain ? 'gain (g)' : 'time (t)';
-    const modeText = getWmSingleMode() ? 'single-mode' : 'multimode';
+    const modeText = cachedAssertResult.single_mode === undefined ? wmModeText()
+      : wmModeText(cachedAssertResult.single_mode, cachedAssertResult.degenerate === true);
     tag.className = 'badge badge-success';
     tag.textContent = `${condStr} | ${procText} | ${mismatchText} | order=${orderVal} | ${gainText} | ${modeText}`;
   } else {
@@ -905,6 +988,7 @@ async function runWmAssertions() {
   const ctx = readWmPresets(output);
   if (!ctx) return;
   ctx.isSingleMode = getWmSingleMode();
+  ctx.isDegenerate = getWmDegenerate();
   const cascade = readWmCascade(output);
   if (cascade === null) return;
 
@@ -920,13 +1004,14 @@ async function runWmAssertions() {
       vacuum_other_weak: vacOther
     };
     const data = cascade
-      ? await postJson('/api/combination/cascade', buildWmRequest(input, ctx, assertUseGain, { ...assertions, cascade_symbol: cascade.name }), 'Cascaded assertion calculation failed')
+      ? await postJson('/api/combination/cascade', buildWmRequest(input, ctx, assertUseGain, { ...assertions, cascade_symbol: cascade.name, cascade_phases: cascade.phases.map(ph => ph.text) }), 'Cascaded assertion calculation failed')
       : await postJson('/api/combination/assert', buildWmRequest(input, ctx, assertUseGain, assertions), 'Assertion calculation failed');
 
     cachedAssertResult = data;
     currentAssertLatex = (assertUseGain ? data.latex_g : data.latex_t) || data.latex || '';
 
     updateCachedSolLen(ctx, data.sol_len);
+    notifyLoweredOrder(ctx, data.order);
 
     output.innerHTML = '';
     renderMath(currentAssertLatex, output);

@@ -287,18 +287,30 @@ window.addEventListener('error', function(e) {
         <div class="wm-input-header">
           <label for="wm-input">WM Expression Input</label>
           <div class="wm-input-options">
-            <span class="wm-option" title="Evolve the result for a further time in a cascaded identical stage. Use 't', a custom commutative symbol, or a new name (created as a nonnegative symbol).">
+            <span class="wm-option" title="Evolve the result for a further time in a cascaded identical stage, each input operator a_k entering it with a phase: a_k → exp(i φ_k) a_k(t_c). The multimode operators take the phases of their two fields (the same for all modes).">
               <label class="checkbox-label wm-option-label">
                 <input type="checkbox" id="wm-cascade" onchange="onWmCascadeToggle()">
-                Cascaded system: evolve for
+                Cascaded system: time
               </label>
-              <input type="text" id="wm-cascade-symbol" class="wm-cascade-input" maxlength="32" value="t" placeholder="t" spellcheck="false" autocomplete="off" title="Further evolution time; takes effect only when the cascaded system is ticked" oninput="onWmCascadeSymbolInput()">
-              <span class="wm-option-text">further</span>
+              <input type="text" id="wm-cascade-symbol" class="wm-cascade-input" maxlength="32" value="t" placeholder="t" spellcheck="false" autocomplete="off" title="Further evolution time: 't', a custom commutative symbol, or a new name (created as a nonnegative symbol). Takes effect only when the cascaded system is ticked." oninput="onWmCascadeSymbolInput()">
+              <span class="wm-phase"><span class="wm-option-text">φ<sub>0</sub> =</span>
+                <input type="text" id="wm-cascade-phi-0" class="wm-cascade-input wm-cascade-phase" maxlength="32" value="0" placeholder="0" spellcheck="false" autocomplete="off" title="Phase of a_0 (real): a number such as pi/2, a real custom symbol, or a new name (created as a real symbol)" oninput="onWmCascadeSymbolInput(this)"></span>
+              <span class="wm-phase"><span class="wm-option-text">φ<sub>1</sub> =</span>
+                <input type="text" id="wm-cascade-phi-1" class="wm-cascade-input wm-cascade-phase" maxlength="32" value="0" placeholder="0" spellcheck="false" autocomplete="off" title="Phase of a_1 (real): a number such as pi/2, a real custom symbol, or a new name (created as a real symbol)" oninput="onWmCascadeSymbolInput(this)"></span>
+              <span class="wm-phase"><span class="wm-option-text">φ<sub>2</sub> =</span>
+                <input type="text" id="wm-cascade-phi-2" class="wm-cascade-input wm-cascade-phase" maxlength="32" value="0" placeholder="0" spellcheck="false" autocomplete="off" title="Phase of a_2 (real): a number such as pi/2, a real custom symbol, or a new name (created as a real symbol)" oninput="onWmCascadeSymbolInput(this)"></span>
             </span>
-            <label class="checkbox-label wm-option-label" title="Replace multimode operators with single-mode operators (n_m = 1) and unify into PF">
-              <input type="checkbox" id="wm-single-mode" onchange="onWmPresetChange()">
-              Single-mode processing
-            </label>
+            <span class="wm-option" title="Replace multimode operators with single-mode operators (n_m = 1) and unify into PF. In down-conversion, the degenerate option merges signal and idler into one mode a_1 (H = χ(a_0† a_1² + h.c.)/2, n_m = 1/2).">
+              <label class="checkbox-label wm-option-label">
+                <input type="checkbox" id="wm-single-mode" onchange="onWmPresetChange()">
+                Single-mode
+              </label>
+              <select id="wm-sm-degeneracy" class="wm-option-select" title="Degenerate (signal = idler) or non-degenerate single-mode processing; down-conversion only. Takes effect only when single-mode processing is ticked." onchange="onWmPresetChange()">
+                <option value="nondegenerate" selected>non-degenerate</option>
+                <option value="degenerate">degenerate</option>
+              </select>
+              <label for="wm-single-mode" class="wm-option-label">processing</label>
+            </span>
           </div>
         </div>
         <textarea id="wm-input" rows="3" placeholder="e.g. dag(a_p) a_p - N_(a_p) or a_s dag(a_s) + dag(a_i) a_i or a_s a_i" style="font-family: monospace; font-size: 1rem;">dag(a_p) a_p - N_(a_p)</textarea>
