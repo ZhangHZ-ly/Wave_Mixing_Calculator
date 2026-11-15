@@ -9,11 +9,12 @@ from sympy.core.symbol import Dummy, Symbol, symbols
 from sympy.core.numbers import Integer
 from sympy.core.add import Add
 from sympy.core.mul import Mul
-from sympy.core.power import Pow
 from sympy.core.function import _mexpand
 from sympy.core.traversal import bottom_up
 from sympy.core.exprtools import factor_terms
 from sympy.core.sorting import default_sort_key
+from sympy.polys.rationaltools import together
+from sympy.simplify.radsimp import collect
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.commutator import Commutator
 from ..wm_variables import *
@@ -25,11 +26,8 @@ from ..dsolve_pm import group_terms, TR8h_selective, TR8_selective
 from sympy.functions.elementary.hyperbolic import cosh, sinh
 from sympy.functions.elementary.trigonometric import cos, sin
 from .multimode import (MultimodeCOP, MultimodeNum, MultimodeNum2)
-import warnings
 
-__all__ = ['WMProcessor', '_g', 'nm', 'vac_pf', 'exceeds']
-
-warnings.simplefilter('once', UserWarning)
+__all__ = ['WMProcessor', '_g', 'nm', 'vac_pf']
 
 def _collapse_boson_num(expr, vac_names):
     if not isinstance(expr, Expr) or expr.is_number:
@@ -81,11 +79,6 @@ nm = Symbol('n_m', nonnegative=True)  # Mode count symbol n_m
 
 _e = lambda p: S.Zero if p == 1 else (p.exp if p.is_Pow else S.One)
 
-def exceeds(a, b) -> bool:
-    """Whether the order a is certainly above the order b (False when undecidable)."""
-    return bool((a > b) == True)
-_simp_frac = lambda e: (Pow(factor_terms(e.base, fraction=True), e.exp)
-                        if e.is_Pow and e.base.is_Add else e)
 
 class WMProcessor:
     """
@@ -93,15 +86,14 @@ class WMProcessor:
 
     Retains multi-object addition (d_add) and methods depending on lower-level
     objects (Expr, PF, BosonOp, tuple) or external parameters (order, func, vac_modes).
+    
+    :param dc: down-conversion (True) or frequency-conversion (False) mode structure.
+    :param drive_order: perturbative order of the strong driving-field operator
+    (e.g. -1 for three-wave mixing, -1/2 for four-wave mixing);
+    the two weak fields are always of order 0.
     """
 
     def __init__(self, dc=True, drive_order=S.NegativeOne):
-        """
-        :param dc: down-conversion (True) or frequency-conversion (False) mode structure.
-        :param drive_order: perturbative order of the strong driving-field operator
-            (e.g. -1 for three-wave mixing, -1/2 for four-wave mixing);
-            the two weak fields are always of order 0.
-        """
         self.dc = bool(dc)
         self.nd = BosonNum(a_p.name) if dc else BosonNum(a_i.name)
         self.a = ((MultimodeCOP(a_s.name, a_i.name, annih1=0),
@@ -118,11 +110,6 @@ class WMProcessor:
         self._init_pe()
 
     def _init_pe(self, clear=False):
-        """
-        Restores the base mode orders of this process in the perturbation expander.
-        If clear is True, all custom orders are dropped as well (the expander is reset
-        to its initial state; registered types are kept).
-        """
         self.pe.update(self.base_orders, clear=clear)
 
     @cached_property
@@ -202,13 +189,13 @@ class WMProcessor:
         the leading order of func and order_j, lo_j the accuracy and leading orders of the
         inexact arguments.
         """
-        from .wm_wrapper import WMWrapper, _omin
+        from .wm_wrapper import WMWrapper
         if not ds:
-            f0 = sympify(func())
-            w = WMWrapper.from_val(f0, self)
-            if not with_order:
-                return w
-            return iter(((w, self.pe.leading_order(f0)[1]),) if w else ())
+            terms = ((WMWrapper.from_val(t, self), o)
+                     for t, o in self.pe.expand_expr(sympify(func()), order))
+            if with_order:
+                return terms
+            return self.d_add(*(t for t, _ in terms)).with_order(order, False)
 
         ord_lims, flo = self.pe.handle_order_limits(func, len(ds))
         x0_list = []
@@ -269,7 +256,7 @@ class WMProcessor:
 
         if with_order:
             return terms
-        acc = _omin(order, *(flo + r for r in rels))
+        acc = min(order, *(flo + r for r in rels))
         return self.d_add(*(t for t, _ in terms)).with_order(acc)
 
     def n_simp(self, expr):
@@ -290,10 +277,16 @@ class WMProcessor:
                 has_mmn2 = self.mmn2 in expr.atoms(MultimodeNum2)
                 if len(weak_in_expr) == 2 or (len(weak_in_expr) == 1 and has_mmn2):
                     subbed = expr.replace(MultimodeNum, mmn_d).subs({self.mmn2: _n2})
-                    subbed = bottom_up(subbed, _simp_frac)
-                    r = factor_terms(_mexpand(subbed))
-                    if r.has(_n1):
-                        warnings.warn('Failed to combine the weak-field multimode number operators')
+                    # the sum is brought over a common denominator (with commuting dummies for
+                    # the number operators; together also normalises the bases of the powers),
+                    # so that the coefficients of the powers of _n1 that vanish drop out of the
+                    # expanded numerator; each coefficient is then divided by the denominator
+                    bn = {b: Dummy() for b in subbed.atoms(BosonNum)}
+                    num, den = together(subbed.xreplace(bn)).as_numer_denom()
+                    den = factor_terms(den)
+                    parts = collect(_mexpand(num), _n1, evaluate=False)
+                    r = factor_terms(Add(*(factor_terms(c / den) * k for k, c in parts.items())))
+                    r = r.xreplace({d: b for b, d in bn.items()})
                     expr = r.subs({_n1: MultimodeNum(n1), _n2: self.mmn2})
             if expr.is_Mul:
                 expr = _mps(expr, {self.nd: _nd})
@@ -387,7 +380,7 @@ class WMProcessor:
         """
         Adds multiple WMWrapper objects together, collecting identical keys.
         """
-        from .wm_wrapper import WMWrapper, _omin
+        from .wm_wrapper import WMWrapper
         items = []
         orders = []  # accuracy orders of all terms, including vanishing ones
         for w in ws:
@@ -401,7 +394,7 @@ class WMProcessor:
                 items.append(w)
         # the sum is accurate to the lowest order of its terms: the more accurate terms are
         # truncated there, so that the merged result needs no further truncation
-        acc = _omin(*orders)
+        acc = min(orders, default=S.Infinity)
         items = [w if w.order == acc else w.with_order(acc) for w in items]
         items = [w for w in items if w.dict_repr]
 
@@ -432,12 +425,12 @@ class WMProcessor:
 
         raise ValueError("Cannot add expressions with and without single-mode weak-field operators")
 
-    def d_mul(self, d0: defaultdict, d1: dict, d2: dict, mid=None, sc=False, order=None):
+    def d_mul(self, d0: defaultdict, d1: dict, d2: dict, mid=None, sc=False, order=S.Infinity):
         """
         Accumulates the products of the {tuple: PF} dicts d1 * [mid] * d2 into d0.
         `mid` is a middle operator: a bool (the multimode / single-mode COP of self.a[mid],
         `sc` selecting the single-mode one) or a number-operator expression.
-        With `order`, the products are truncated at that absolute perturbative order: the
+        With a finite `order`, the products are truncated at that absolute perturbative order: the
         pairs whose leading orders already exceed it are skipped (the reorderings and the
         weak-field middle operators only raise the order).
         """
@@ -449,13 +442,13 @@ class WMProcessor:
             mid_op = mid
             sc = False
         use_mid_t = isinstance(mid, bool) and not sc
-        if order is not None:
+        if (trunc := order is not S.Infinity):
             lo = self.pe.lo_order_pf
             lo2s = {k2: lo(v2) for k2, v2 in d2.items()}
         for k1, v1 in d1.items():
-            if order is not None:
+            if trunc:
                 lo1 = lo(v1)
-                ks2 = [k2 for k2, o2 in lo2s.items() if not exceeds(lo1 + o2, order)]
+                ks2 = [k2 for k2, o2 in lo2s.items() if lo1 + o2 <= order]
                 if not ks2:
                     continue
             else:
@@ -470,7 +463,7 @@ class WMProcessor:
                 k_right = _t_mul((mid, 1), k2) if use_mid_t else k2
                 for k_new, p_new in self.tp_swap(k_right, v1_mid, to_left=True):
                     prod = p_new * v2
-                    if order is not None and prod:
+                    if trunc and prod:
                         prod = self.pe.expand_pf(prod, order)
                     if prod:
                         d0[_t_mul(k1, k_new)].append(prod)
@@ -737,18 +730,25 @@ class WMProcessor:
             t = t / 2**sum(exps)
         return PF({(b, ()): t})
 
-def _dr_prep(d: dict):
-    new_d = defaultdict(list)
-    for k, v in d.items():
-        if not isinstance(k, Sequence) or not k or not isinstance(v, PF):
-            return None
-        i, *exps = k
-        new_k = _tdz(i, exps)
-        if not all(isinstance(x, Integer) and x >= 0 for x in new_k[1:]):
-            return None
-        if v:
-            new_d[new_k].append(v)
-    return {k: vs for k, v in new_d.items() if (vs := pf_add(*v))}
+    def _dr_prep(self, d: dict, order=S.Infinity):
+        """
+        Normalizes a {tuple: PF} dict (zero-free multimode exponent tuples, merged PFs), or
+        returns None if d is not such a dict. A finite `order` truncates every PF there.
+        """
+        new_d = defaultdict(list)
+        for k, v in d.items():
+            if not isinstance(k, Sequence) or not k or not isinstance(v, PF):
+                return None
+            i, *exps = k
+            new_k = _tdz(i, exps)
+            if not all(isinstance(x, Integer) and x >= 0 for x in new_k[1:]):
+                return None
+            if v:
+                new_d[new_k].append(v)
+        if order is S.Infinity:
+            return {k: vs for k, v in new_d.items() if (vs := pf_add(*v))}
+        return {k: vs for k, v in new_d.items()
+                if (vs := pf_add(*v)) and (vs := self.pe.expand_pf(vs, order))}
 
 def _t_mul(t1, t2, mid=None):
     if not isinstance(mid, bool):

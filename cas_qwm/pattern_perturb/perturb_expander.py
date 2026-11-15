@@ -431,7 +431,7 @@ class PE:
             for k, v in orders.items():
                 if v is not None:
                     k, v = _akey(k), sympify(v)
-                    if assumptions.get(k, S.Zero) != v:
+                    if assumptions.get(k, 0) != v:
                         clr = True
                     if v == 0:
                         assumptions.pop(k, None)

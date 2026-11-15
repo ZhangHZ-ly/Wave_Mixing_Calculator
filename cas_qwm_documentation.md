@@ -389,13 +389,13 @@ Module-level instances: `twm_processors` (`(WMProcessor(False), WMProcessor(True
 ### `WMWrapper`
 
 ```python
-WMWrapper(processor, dict_repr=None, b_left=None, order=EXACT, truncate=True)
+WMWrapper(processor, dict_repr=None, b_left=None, order=S.Infinity, truncate=True)
 WMWrapper.from_val(val, processor)
 ```
 
 Algebraic container for multimode wave-mixing expressions; the solver outputs are `WMWrapper` objects. Internally, an expression is stored as a dict of multimode exponent tuples to `PF` objects, optionally with one unpaired weak-field operator on the left (`b_left=True`) or right (`b_left=False`).
 
-Every wrapper carries an accuracy `order`: the absolute perturbative order up to which it is accurate, `+oo` (`EXACT`, the default) for an exact expression, which is accurate to all orders. A product (`*` or `@`) of factors with leading orders $l_1, l_2$ and orders $o_1, o_2$ is accurate to $l_1 + l_2 + \min(o_1 - l_1,\, o_2 - l_2)$ (an exact factor counting as $+\infty$ relative accuracy); the factor more accurate than needed is truncated beforehand, and every partial product is truncated at that order inside `WMProcessor.d_mul`. Sums take the lowest order of their terms (the more accurate terms are truncated there), `expand(n)` and `eval_coherent(n)` lower it to `n`, `expand_func_d` keeps the relative accuracy of its arguments, and the other transformations keep it. Leading orders are compared with `exceeds(a, b)` (from `cas_qwm.parametric_multimode`), which is `False` when undecidable (e.g. symbolic orders); a product whose target order is not a number is left untruncated and exact.
+Every wrapper carries an accuracy `order`: the absolute perturbative order up to which it is accurate, `+oo` (`S.Infinity`, the default) for an exact expression, which is accurate to all orders. A product (`*` or `@`) of factors with leading orders $l_1, l_2$ and orders $o_1, o_2$ is accurate to $l_1 + l_2 + \min(o_1 - l_1,\, o_2 - l_2)$ (an exact factor counting as $+\infty$ relative accuracy); the factor more accurate than needed is truncated beforehand, and every partial product is truncated at that order inside `WMProcessor.d_mul`. Sums take the lowest order of their terms (the more accurate terms are truncated there), `expand(n)` and `eval_coherent(n)` lower it to `n`, `expand_func_d` keeps the relative accuracy of its arguments, and the other transformations keep it.
 
 A finite `order` given to the constructor truncates the content at that order (`truncate=False` skips this for content known to have no terms beyond it), and `with_order(order)` truncates when it lowers the order. The solver outputs are therefore cut at their accuracy labels, and a saved variable bound with a lower recorded order loses the terms it cannot support.
 
@@ -442,10 +442,10 @@ Base processor shared by the solvers and wrappers of one process: it stores the 
 | Member | Description |
 |---|---|
 | `init_ops` | Input-operator wrappers at $t = 0$: `'a_0'`, `'a_1'`, `'a_2'` (and aliases `'a_p'`, `'a_s'`, `'a_i'`), the multimode canonical operator `'A'` and the multimode number operator `'N_t'`. |
-| `expand_func_d(func, order, *ds, with_order=False)` | Perturbative expansion of `func(*ds)` with `WMWrapper` arguments, accurate to $\min(\text{order},\ l_f + \min_j(o_j - l_j))$ with $l_f$ the leading order of `func` and $o_j, l_j$ the accuracy and leading orders of the inexact arguments. |
+| `expand_func_d(func, order, *ds, with_order=False)` | Perturbative expansion of `func(*ds)` with `WMWrapper` arguments (without arguments, of the constant `func()` by `PE.expand_expr`), accurate to $\min(\text{order},\ l_f + \min_j(o_j - l_j))$ with $l_f$ the leading order of `func` and $o_j, l_j$ the accuracy and leading orders of the inexact arguments. |
 | `p2s(expr, xs=(t_,), simp=None)` | Product-to-sum transformation of hyperbolic (dc) or trigonometric (fc) functions of time, grouping terms by time dependence. |
 | `d_add(*ws)` | Sum of several wrappers, accurate to the lowest order of its terms (vanishing terms included). |
-| `d_mul(d0, d1, d2, mid=None, sc=False, order=None)` | Accumulates the products of two `{tuple: PF}` dicts (with an optional middle operator `mid`) into `d0`; with `order`, pairs whose leading orders already exceed it are skipped and every product is truncated there. |
+| `d_mul(d0, d1, d2, mid=None, sc=False, order=S.Infinity)` | Accumulates the products of two `{tuple: PF}` dicts (with an optional middle operator `mid`) into `d0`; with a finite `order`, pairs whose leading orders already exceed it are skipped and every product is truncated there. |
 | `bd_swap`, `bp_swap`, `bt_swap`, `tp_swap`, `tcp_swap` | Commutation of single-mode operators, `PF` objects and multimode exponent tuples. |
 
 ```python
@@ -505,4 +505,4 @@ Every name below can be imported directly from `cas_qwm`.
 | `pattern_perturb` | `BSC`, `FSC`, `PF`, `pf`, `pf_add`, `PF0`, `PF1`, `PE`, `perturb_rec` |
 | `parametric_multimode` | `a_p`, `a_s`, `a_i`, `t_`, `nlc`, `pm`, `nm`, `_g`, `p2s`, `dsolve_pm1`, `dsolve_pm2`, `MultimodeCOP`, `MultimodeNum`, `MultimodeNum2`, `WMProcessor`, `twm_processors`, `fwm_processor`, `vac_pf`, `WMWrapper`, `WMSolver`, `TWMSolver`, `FWMSolver` |
 
-Further functions (e.g. `pattern_form`, `is_pattern_form`, `bn_simp` in `cas_qwm.pattern_perturb.pattern_form`, `EXACT` and `exceeds` in `cas_qwm.parametric_multimode`, and the Jacobi elliptic functions in `cas_qwm.jacobi`) can be imported from their submodules.
+Further functions (e.g. `pattern_form`, `is_pattern_form`, `bn_simp` in `cas_qwm.pattern_perturb.pattern_form`, and the Jacobi elliptic functions in `cas_qwm.jacobi`) can be imported from their submodules.

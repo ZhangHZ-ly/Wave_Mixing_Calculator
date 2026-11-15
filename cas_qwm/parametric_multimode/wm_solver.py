@@ -10,7 +10,7 @@ from ..pattern_perturb.pattern_form import PF, _vpk
 from ..dsolve_pm import dsd1, dsd2
 from .multimode import MultimodeNum2
 from .wm_processor import WMProcessor, a_p, a_s, a_i, t_, nlc, _g
-from .wm_wrapper import WMWrapper, EXACT
+from .wm_wrapper import WMWrapper
 
 __all__ = ['pm', 'twm_processors', 'fwm_processor', 'WMSolver', 'TWMSolver', 'FWMSolver']
 
@@ -87,7 +87,7 @@ class WMSolver(Sequence):
         the lower-order solutions without truncation.
         """
         sub = {t_: _g / self.gc}
-        return w.expand(order).apply(lambda t: t.subs(sub), on_npf=True).with_order(EXACT)
+        return w.expand(order).apply(lambda t: t.subs(sub), on_npf=True).with_order(S.Infinity)
 
 
 class TWMSolver(WMSolver):
