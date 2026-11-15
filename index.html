@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Quantum Operator Algebra Calculator</title>
+<!-- Inline (offline) tab icon; also prevents the browser's automatic /favicon.ico request -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚛️</text></svg>">
 <script>
 // Auto-detect & fallback to CDN if local KaTeX static assets fail to load
 window.addEventListener('error', function(e) {
@@ -129,9 +131,18 @@ window.addEventListener('error', function(e) {
         <span>Quantum Expression Processing with Pattern-Form</span>
       </div>
       <div class="form-group">
-        <label for="pf-input">Expression Input</label>
+        <div class="wm-input-header">
+          <label for="pf-input">Expression Input</label>
+          <div class="wm-input-options">
+            <label class="checkbox-label wm-option-label" title="Expand products and integer powers in the coefficients of the result (and in the remainder)">
+              <input type="checkbox" id="pf-expand" onchange="localStorage.setItem('qc_tab2_expand', this.checked ? '1' : '0')">
+              Expand output
+            </label>
+          </div>
+        </div>
         <textarea id="pf-input" rows="3" placeholder="e.g. (x*a + dag(a))**2 or Pat(a, 1, 2) + Pat(c, 1, 1) or saved PF variables like H" style="font-family: monospace; font-size: 1rem;">(x*a + dag(a))**2</textarea>
         <span class="form-tip">Shortcuts: <code>dag(a)</code> denotes \(a^\dagger\), <code>N_(a)</code> denotes number operator \(N_a\), <code>Pat(op, exps...)</code> or <code>pattern(...)</code> / <code>BP</code> / <code>FP</code> for pattern forms.</span>
+        <span class="form-tip"><b>Expand output:</b> Multiplies out products and integer powers in the number-operator coefficients, so that cancelling terms vanish.</span>
       </div>
 
       <div class="btn-group" style="margin-top: 1rem;">
@@ -269,15 +280,27 @@ window.addEventListener('error', function(e) {
 
     <!-- WM Expression Input & Processing -->
     <div class="card">
-      <div class="card-title" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+      <div class="card-title">
         <span>Wave Mixing (WM) Evolution Operator Calculation</span>
-        <label class="checkbox-label" style="font-size: 0.875rem; font-weight: 600; cursor: pointer; margin-bottom: 0;" title="Replace multimode operators with single-mode operators (n_m = 1) and unify into PF">
-          <input type="checkbox" id="wm-single-mode">
-          Single-mode processing
-        </label>
       </div>
       <div class="form-group">
-        <label for="wm-input">WM Expression Input</label>
+        <div class="wm-input-header">
+          <label for="wm-input">WM Expression Input</label>
+          <div class="wm-input-options">
+            <span class="wm-option" title="Evolve the result for a further time in a cascaded identical stage. Use 't', a custom commutative symbol, or a new name (created as a nonnegative symbol).">
+              <label class="checkbox-label wm-option-label">
+                <input type="checkbox" id="wm-cascade" onchange="onWmCascadeToggle()">
+                Cascaded system: evolve for
+              </label>
+              <input type="text" id="wm-cascade-symbol" class="wm-cascade-input" maxlength="32" value="t" placeholder="t" spellcheck="false" autocomplete="off" title="Further evolution time; takes effect only when the cascaded system is ticked" oninput="onWmCascadeSymbolInput()">
+              <span class="wm-option-text">further</span>
+            </span>
+            <label class="checkbox-label wm-option-label" title="Replace multimode operators with single-mode operators (n_m = 1) and unify into PF">
+              <input type="checkbox" id="wm-single-mode" onchange="onWmPresetChange()">
+              Single-mode processing
+            </label>
+          </div>
+        </div>
         <textarea id="wm-input" rows="3" placeholder="e.g. dag(a_p) a_p - N_(a_p) or a_s dag(a_s) + dag(a_i) a_i or a_s a_i" style="font-family: monospace; font-size: 1rem;">dag(a_p) a_p - N_(a_p)</textarea>
         <span class="form-tip">Shortcuts: space or <code>@</code> for multimode multiplication, <code>*</code> for single-mode multiplication, <code>dag(op)</code> for adjoint \((\dots)^\dagger\), <code>a_0, a_1, a_2</code> for initial (\(t=0\)) operators, <code>N_(…)</code> for initial number operator, <code>t</code> for time, <code>g</code> for parametric gain.</span>
       </div>

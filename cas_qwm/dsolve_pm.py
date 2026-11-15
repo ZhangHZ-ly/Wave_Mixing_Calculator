@@ -69,7 +69,7 @@ def TR8h_selective(rv, x, first=True):
             args.append((cosh(_safe_arg(a1 + a2)) - cosh(_safe_arg(a1 - a2)))/2)
         if s:
             args.append(sinh(_safe_arg(s.pop())))
-        return TR8h_selective(expand_mul(Mul(*args)), x)
+        return TR8h_selective(_mexpand(Mul(*args)), x)
 
     return bottom_up(rv, f)
 
@@ -131,7 +131,7 @@ def TR8_selective(rv, x, first=True):
             args.append((-cos(_safe_arg(a1 + a2)) + cos(_safe_arg(a1 - a2)))/2)
         if s:
             args.append(sin(_safe_arg(s.pop())))
-        return TR8_selective(expand_mul(Mul(*args)), x)
+        return TR8_selective(_mexpand(Mul(*args)), x)
 
     return bottom_up(rv, f)
 

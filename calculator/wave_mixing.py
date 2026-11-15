@@ -4,14 +4,14 @@ import io
 import math
 import re
 import tokenize
+from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from cas_qwm.dsolve_pm import d_p2s
 from cas_qwm.op_pattern import BosonNum, BosonPat, FermionPat
 from cas_qwm.pattern_perturb.pattern_form import _vpk
 from cas_qwm.parametric_multimode import *
-from cas_qwm.parametric_multimode.wm_processor import t_, _g, nm, _ps, nlc, _tdz
+from cas_qwm.parametric_multimode.wm_processor import t_, _g, nm, nlc, _tdz
 from cas_qwm.parametric_multimode.wm_solver import pm
 from cas_qwm.pattern_perturb import PF, PF1
 from sympy.core.expr import Expr
@@ -20,8 +20,6 @@ from sympy.core.numbers import I, pi
 from sympy.core.singleton import S
 from sympy.core.symbol import Symbol
 from sympy.core.sympify import sympify
-from sympy.core.traversal import bottom_up
-from sympy.functions.elementary.complexes import Abs
 from sympy.functions.elementary.exponential import exp
 from sympy.parsing.sympy_parser import parse_expr
 from sympy.physics.quantum.boson import BosonOp
@@ -39,7 +37,7 @@ from .common import (
     validated_name,
 )
 from .conditions import normalize_process, process_is_dc
-from .wm_transforms import t_to_g
+from .wm_transforms import t_to_g, apply_assertions
 from .pf_expr import PF_VARIABLES
 
 # Cached TWMSolver instances indexed by [dc][mismatch]
@@ -459,6 +457,34 @@ def validate_input_identifiers(expr_str: str, local_dict: dict):
                 )
 
 
+def get_evolved_sol(s: WMSolver, evolved_order: int) -> tuple:
+    """
+    Evolved (a_p, a_s, a_i) solution wrappers used for expression evaluation,
+    including the self-phase-modulation factor of the FWM pump.
+    """
+    sol = s.get_sol(evolved_order)
+    if isinstance(s, FWMSolver) and evolved_order >= 0:
+        spm_w = WMWrapper(s.processor, {(None,): PF({((), ()): exp(-I * nlc * s.nd * t_)})})
+        sol = (sol[0] @ spm_w, sol[1], sol[2])
+    return sol
+
+
+@dataclass
+class WMEvalContext:
+    """Parsed Tab 3 expression together with the evaluation settings it was parsed under."""
+    val: WMWrapper
+    solver: WMSolver
+    sol: tuple
+    evolved_order: int
+    disp_subs: Dict[Any, Any]
+    local_dict: Dict[str, Any]
+    proc: str
+    is_dc: bool
+    mismatch: bool
+    single_mode: bool
+    symbols: List[Dict[str, Any]] = field(default_factory=list)
+
+
 def _prepare_wm_evaluation(
     text: str,
     dc: bool,
@@ -473,14 +499,13 @@ def _prepare_wm_evaluation(
 ):
     """
     Prepares and algebraically evaluates wave-mixing operator combinations in Tab 3.
-    Returns: (wrapper_target, solver, disp_subs, proc, is_dc)
+    Returns a WMEvalContext holding the parsed wrapper and the evaluation settings.
     """
     proc = normalize_process(process, dc)
     is_dc = process_is_dc(proc)
     mismatch = bool(mismatch)
     s = get_wm_solver(proc, mismatch=mismatch)
     p = s.processor
-    s.reset_pe()
 
     needed_evolved_order, _ = analyze_expression_terms(
         text,
@@ -495,11 +520,7 @@ def _prepare_wm_evaluation(
     if proc == 'fwm':
         evolved_order = min(1, evolved_order)
     p._evolved_order = evolved_order
-    sol = s.get_sol(evolved_order)
-
-    if proc == 'fwm' and evolved_order >= 0:
-        spm_w = WMWrapper(p, {(None,): PF({((), ()): exp(-I * nlc * s.nd * t_)})})
-        sol = (sol[0] @ spm_w, sol[1], sol[2])
+    sol = get_evolved_sol(s, evolved_order)
 
     init_ops = p.init_ops
 
@@ -614,7 +635,8 @@ def _prepare_wm_evaluation(
         if explicit_ann is not None:
             is_ann = explicit_ann
 
-        name = str(op_mode_map.get(inner.name, inner.name))
+        name = str(inner.name)
+        name = op_mode_map.get(name, name)
         is_fermion = (mode_kind_map.get(name) == 'fermion') or isinstance(inner, (FermionOp, FermionPat))
         if is_fermion:
             return WMWrapper.from_val(FermionPat(name, is_ann, *exps), p)
@@ -777,7 +799,51 @@ def _prepare_wm_evaluation(
     except Exception as e:
         raise ValueError(f"Calculation failed: {e}")
 
-    return wrapper_target, s, disp_subs, proc, is_dc
+    return WMEvalContext(
+        val=wrapper_target, solver=s, sol=sol, evolved_order=evolved_order,
+        disp_subs=disp_subs, local_dict=local_dict, proc=proc, is_dc=is_dc,
+        mismatch=mismatch, single_mode=single_mode, symbols=list(symbols),
+    )
+
+
+def finalize_wm_result(
+    ctx: WMEvalContext,
+    val_t: WMWrapper,
+    val_g: WMWrapper,
+    order: int,
+    use_gain: bool,
+) -> Tuple[str, str, str, Union[int, float], int]:
+    """
+    Renders the time / gain results, computes the leading order and records the
+    result as the latest Tab 3 evaluation (for saving to the table).
+    Returns: (latex_curr, latex_t, latex_g, leading_order, solver_length)
+    """
+    s, proc = ctx.solver, ctx.proc
+    latex_t = latex(safe_subs(val_t.expr, ctx.disp_subs))
+    latex_g = latex(safe_subs(val_g.expr, ctx.disp_subs))
+    latex_curr = latex_g if use_gain else latex_t
+
+    try:
+        leading_order = compute_val_leading_order(val_t, s, dc=ctx.is_dc, process=proc)
+    except Exception:
+        leading_order = 0
+
+    LAST_EVAL_WM.clear()
+    LAST_EVAL_WM.update({
+        'val_t': val_t,
+        'val_g': val_g,
+        'solver': s,
+        'latex_t': latex_t,
+        'latex_g': latex_g,
+        'order': order,
+        'leading_order': leading_order,
+        'dc': ctx.is_dc,
+        'process': proc,
+        'mismatch': ctx.mismatch,
+        'single_mode': ctx.single_mode,
+    })
+
+    return latex_curr, latex_t, latex_g, leading_order, len(s)
 
 
 def eval_combination_assertions(
@@ -802,74 +868,14 @@ def eval_combination_assertions(
     - vacuum_signal: signal field (a_1) input is in vacuum |0>
     - vacuum_other_weak: remaining weak field (a_2 if is_dc else a_0) input is in vacuum |0>
     """
-    val, s, disp_subs, proc, is_dc = _prepare_wm_evaluation(
+    ctx = _prepare_wm_evaluation(
         text, dc, order, symbols, operators, mm_operators, named_expressions, mismatch, single_mode, process=process
     )
-    p = s.processor
-
-    vac_modes = []
-    if vacuum_signal:
-        vac_modes.append('a_1')
-    if vacuum_other_weak:
-        vac_modes.append('a_2' if is_dc else 'a_0')
-
-    if vac_modes:
-        val = val.eval_vacuum(vac_modes)
-
-    if coherent_drive:
-        if single_mode:
-            val = val.to_single_mode()
-        val_t = val.eval_coherent(order)
-        if proc == 'fwm' and not mismatch:
-            alpha_sym = Symbol('alpha_0')
-            pm_cohr = 2 * nlc * (Abs(alpha_sym) ** 2)
-            val_t = val_t.apply(lambda x: bottom_up(x.subs({s.pm: pm_cohr}), _ps), on_npf=True)
-        val_g = t_to_g(val_t, process=proc, mismatch=mismatch, coherent=True)
-    else:
-        def _postprocess_pf(pf_item: PF) -> PF:
-            if not pf_item:
-                return pf_item
-            # p2s_group works on _g; npf parts keep t_ and are converted by t_to_g
-            pf_item = pf_item.apply(lambda t: t.subs({t_: _g / s.gc}))
-            if order >= 0 or pf_item.expr(False).has(t_):
-                return pf_item.apply(
-                    lambda t: p.n_simp(d_p2s(_g, p.p2s_group(t)).subs({_g: s.gc * t_}))
-                )
-            return pf_item.apply(p.n_simp)
-
-        val = val.expand(order).apply(_postprocess_pf)
-        if proc == 'fwm' and not mismatch:
-            val = s._zq(val)
-        if single_mode:
-            val = val.to_single_mode()
-        val_t = val
-        val_g = t_to_g(val_t, process=proc, mismatch=mismatch)
-
-    latex_t = latex(safe_subs(val_t.expr, disp_subs))
-    latex_g = latex(safe_subs(val_g.expr, disp_subs))
-    latex_curr = latex_g if use_gain else latex_t
-
-    try:
-        leading_order = compute_val_leading_order(val_t, s, dc=is_dc, process=proc)
-    except Exception:
-        leading_order = 0
-
-    LAST_EVAL_WM.clear()
-    LAST_EVAL_WM.update({
-        'val_t': val_t,
-        'val_g': val_g,
-        'solver': s,
-        'latex_t': latex_t,
-        'latex_g': latex_g,
-        'order': order,
-        'leading_order': leading_order,
-        'dc': is_dc,
-        'process': proc,
-        'mismatch': mismatch,
-        'single_mode': single_mode,
-    })
-
-    return latex_curr, latex_t, latex_g, leading_order, len(s)
+    val_t, val_g = apply_assertions(
+        ctx.val, ctx.solver, order, process=ctx.proc, mismatch=ctx.mismatch, single_mode=single_mode,
+        coherent_drive=coherent_drive, vacuum_signal=vacuum_signal, vacuum_other_weak=vacuum_other_weak,
+    )
+    return finalize_wm_result(ctx, val_t, val_g, order, use_gain)
 
 
 def eval_operator_combination(

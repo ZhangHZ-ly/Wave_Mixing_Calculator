@@ -13,6 +13,7 @@ from sympy.core.power import Pow
 from sympy.core.function import _mexpand
 from sympy.core.traversal import bottom_up
 from sympy.core.exprtools import factor_terms
+from sympy.core.sorting import default_sort_key
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.commutator import Commutator
 from ..wm_variables import *
@@ -20,11 +21,13 @@ from ..op_pattern import BosonNum, NumShift
 from ..pattern_perturb import BSC, PF, PF0, PF1, PE
 from ..pattern_perturb.pattern_form import pf_add, _vpk, _ps, _mps, _key
 from ..pattern_perturb.perturb_expander import perturb_rec
-from ..dsolve_pm import group_terms
+from ..dsolve_pm import group_terms, TR8h_selective, TR8_selective
+from sympy.functions.elementary.hyperbolic import cosh, sinh
+from sympy.functions.elementary.trigonometric import cos, sin
 from .multimode import (MultimodeCOP, MultimodeNum, MultimodeNum2)
 import warnings
 
-__all__ = ['WMProcessor', 'wm_processors', '_g', 'nm', 'vac_pf']
+__all__ = ['WMProcessor', '_g', 'nm', 'vac_pf']
 
 warnings.simplefilter('once', UserWarning)
 
@@ -88,7 +91,13 @@ class WMProcessor:
     objects (Expr, PF, BosonOp, tuple) or external parameters (order, func, vac_modes).
     """
 
-    def __init__(self, dc=True):
+    def __init__(self, dc=True, drive_order=S.NegativeOne):
+        """
+        :param dc: down-conversion (True) or frequency-conversion (False) mode structure.
+        :param drive_order: perturbative order of the strong driving-field operator
+            (e.g. -1 for three-wave mixing, -1/2 for four-wave mixing);
+            the two weak fields are always of order 0.
+        """
         self.dc = bool(dc)
         self.nd = BosonNum(a_p.name) if dc else BosonNum(a_i.name)
         self.a = ((MultimodeCOP(a_s.name, a_i.name, annih1=0),
@@ -96,13 +105,17 @@ class WMProcessor:
                   if dc else (MultimodeCOP(a_p.name, a_s.name, 1, 0),
                               MultimodeCOP(a_p.name, a_s.name, 1)))
         self.mmn2 = MultimodeNum2(*self.a[0].args[:3])
+        self.base_orders = {**dict.fromkeys(self.a[0].names, S.Zero),
+                            self.nd.name: sympify(drive_order)}
         self._init_pe()
 
     def _init_pe(self):
+        """(Re)initializes the perturbation expander with the base mode orders of this process."""
         self.pe = PE({nlc: S.One})
         self.pe.register(MultimodeNum)
         self.pe.register(MultimodeNum2)
         self.pe.register(MultimodeCOP)
+        self.pe.update(self.base_orders)
 
     @cached_property
     def init_ops(self) -> dict:
@@ -250,9 +263,10 @@ class WMProcessor:
             if n == n1:
                 return _n1 + d * nm
             if n == n2:
+                # _n2 stands for mmn2: Σ(1 + N_1 + N_2) for dc, Σ(N_2 - N_1) for fc
                 if self.dc:
                     return _n2 - _n1 + (d - 1) * nm
-                return _n1 - _n2 + d * nm
+                return _n1 + _n2 + d * nm
             return MultimodeNum(n, d)
 
         def combine_n(expr):
@@ -290,6 +304,69 @@ class WMProcessor:
             for k, v in term_grouped.items():
                 grouped[k].append(Mul(Add(*v), *coeffs))
         return grouped
+
+    def p2s(self, expr, xs=(t_,), simp=None):
+        """
+        Product-to-sum of the hyperbolic (dc) / trigonometric (fc) functions of the time
+        variables xs, applied to each variable separately (functions of different variables
+        are not combined), with the terms grouped by their time-dependent parts; the
+        optional `simp` is applied to the coefficient of each time-dependent part.
+
+        The functions of a variable x have arguments k*x with constant k, so they are
+        grouped directly in x. The number operators of a PF tail commute with each other and
+        are replaced by commutative nonnegative dummies during the transformation: the time
+        functions are then factored out freely, and powers and exponential phases (e.g. the
+        FWM self-phase modulation) merge.
+        """
+        simp = simp or (lambda e: e)
+        if not isinstance(expr, Expr) or expr.is_number or not expr.has(*xs):
+            return simp(expr)
+        nums = {a: Dummy(nonnegative=True) for a in sorted(
+            expr.atoms(BosonNum, MultimodeNum, MultimodeNum2), key=default_sort_key)}
+        e = expr.xreplace(nums)
+        if not e.is_commutative:
+            return simp(expr)
+        funcs = (cosh, sinh) if self.dc else (cos, sin)
+        tr8 = TR8h_selective if self.dc else TR8_selective
+
+        groups = {S.One: e}  # {time-dependent part: coefficient}
+        for x in xs:
+            def is_time(f):
+                if f.is_Pow and f.exp.is_Integer and f.exp > 0:
+                    f = f.base
+                return f == x or (f.func in funcs and f.args[0].has(x))
+
+            p2s_cache = {}
+
+            def time_terms(tp):
+                """[(time part, constant)] of the product-to-sum of a product of time factors."""
+                if tp not in p2s_cache:
+                    out = []
+                    for t in Add.make_args(_mexpand(tr8(tp, x))):
+                        key, const = [], []
+                        for f in Mul.make_args(t):
+                            (key if is_time(f) else const).append(f)
+                        out.append((Mul(*key), Mul(*const)))
+                    p2s_cache[tp] = out
+                return p2s_cache[tp]
+
+            grouped = defaultdict(list)
+            for k0, coeff in groups.items():
+                for term in Add.make_args(coeff):
+                    # the factors free of x are kept unexpanded
+                    cs, x_part = [], []
+                    for f in Mul.make_args(term):
+                        (x_part if f.has(x) else cs).append(f)
+                    for t in Add.make_args(_mexpand(Mul(*x_part))):
+                        tf, rest = [], []
+                        for f in Mul.make_args(t):
+                            (tf if is_time(f) else rest).append(f)
+                        for key, const in time_terms(Mul(*tf)):
+                            grouped[k0 * key].append(Mul(const, *cs, *rest))
+            groups = {k: Add(*v) for k, v in grouped.items()}
+
+        back = {d: a for a, d in nums.items()}
+        return Add(*(k.xreplace(back) * simp(c.xreplace(back)) for k, c in groups.items()))
 
     def d_add(self, *ws):
         """
@@ -573,8 +650,6 @@ def _dr_prep(d: dict):
         if v:
             new_d[new_k].append(v)
     return {k: vs for k, v in new_d.items() if (vs := pf_add(*v))}
-
-wm_processors = (WMProcessor(False), WMProcessor())
 
 def _t_mul(t1, t2, mid=None):
     if not isinstance(mid, bool):

@@ -751,6 +751,46 @@
     cursor: pointer;
   }
 
+  /* Tab 3: expression input label row with the processing options on the right */
+  .wm-input-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.25rem;
+  }
+  .wm-input-options {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.25rem;
+  }
+  .wm-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #334155;
+  }
+  .form-group label.wm-option-label {
+    font-size: 0.875rem;
+    font-weight: 600;
+    margin-bottom: 0;
+  }
+  .wm-option-text {
+    white-space: nowrap;
+  }
+  .wm-input-options input[type="text"].wm-cascade-input {
+    width: 7.5ch;
+    padding: 0.2rem 0.4rem;
+    font-family: monospace;
+    font-size: 0.875rem;
+  }
+  .wm-input-options input[type="text"].wm-cascade-input.invalid {
+    border-color: #dc2626;
+  }
+
   /* Toast Notification */
   .toast {
     position: fixed;

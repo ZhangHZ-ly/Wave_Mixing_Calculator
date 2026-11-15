@@ -12,9 +12,11 @@ from calculator import (
     eval_wm_solve,
     eval_operator_combination,
     eval_combination_assertions,
+    eval_cascaded_combination,
     save_latest_pf_variable,
     save_latest_wm_variable,
     TWM_SOLVERS,
+    FWM_SOLVER,
     normalize_process,
     process_is_dc,
 )
@@ -88,6 +90,7 @@ class PatternFormRequest(BaseModel):
     operators: List[OperatorDef] = []
     named_expressions: List[NamedExprDef] = []
     use_rem: bool = False
+    expand: bool = False
 
 
 class SolveRequest(BaseModel):
@@ -117,6 +120,10 @@ class AssertionRequest(CombinationRequest):
     coherent_drive: bool = False
     vacuum_signal: bool = False
     vacuum_other_weak: bool = False
+
+
+class CascadeRequest(AssertionRequest):
+    cascade_symbol: str
 
 
 def _format_lead_ord(val: Union[int, float]) -> Union[int, float]:
@@ -164,7 +171,8 @@ def api_pattern_form(req: PatternFormRequest):
             [s.model_dump() for s in req.symbols],
             [op.model_dump() for op in req.operators],
             [ne.model_dump() for ne in req.named_expressions],
-            use_rem=use_rem
+            use_rem=use_rem,
+            expand=req.expand,
         )
         return {
             "latex": latex_str,
@@ -268,6 +276,46 @@ def api_combination_assert(req: AssertionRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/api/combination/cascade")
+def api_combination_cascade(req: CascadeRequest):
+    try:
+        proc = normalize_process(req.process, req.dc)
+        is_dc = process_is_dc(proc)
+        latex_curr, latex_t, latex_g, leading_order, sol_len = eval_cascaded_combination(
+            req.text,
+            dc=is_dc,
+            mismatch=req.mismatch,
+            order=req.order,
+            use_gain=req.use_gain,
+            single_mode=req.single_mode,
+            cascade_symbol=req.cascade_symbol,
+            coherent_drive=req.coherent_drive,
+            vacuum_signal=req.vacuum_signal,
+            vacuum_other_weak=req.vacuum_other_weak,
+            symbols=[s.model_dump() for s in req.symbols],
+            operators=[op.model_dump() for op in req.operators],
+            mm_operators=[mm.model_dump() for mm in req.mm_operators],
+            named_expressions=[ne.model_dump() for ne in req.named_expressions],
+            process=proc,
+        )
+        lead_ord = _format_lead_ord(leading_order)
+        return {
+            "latex": str(latex_curr),
+            "latex_t": str(latex_t),
+            "latex_g": str(latex_g),
+            "leading_order": lead_ord,
+            "order": int(req.order),
+            "sol_len": int(sol_len),
+            "process": proc,
+            "single_mode": bool(req.single_mode),
+            "cascade_symbol": req.cascade_symbol,
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/api/variable/save")
 def api_save_variable(req: SaveVarRequest):
     try:
@@ -283,8 +331,8 @@ def api_save_variable(req: SaveVarRequest):
 @app.post("/api/combination/reset")
 def api_reset_combination():
     try:
-        for s in (TWM_SOLVERS[0][0], TWM_SOLVERS[1][0]):
-            s.processor._init_pe()
+        for p in {s.processor for pair in TWM_SOLVERS for s in pair} | {FWM_SOLVER.processor}:
+            p._init_pe()
         return {"status": "success", "message": "WM processor PE reset to defaults"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -9,12 +9,18 @@ from sympy.physics.quantum.dagger import Dagger
 from ..pattern_perturb.pattern_form import PF, _vpk
 from ..dsolve_pm import dsd1, dsd2
 from .multimode import MultimodeNum2
-from .wm_processor import wm_processors, a_p, a_s, a_i, t_, nlc, _g
+from .wm_processor import WMProcessor, a_p, a_s, a_i, t_, nlc, _g
 from .wm_wrapper import WMWrapper
 
-__all__ = ['pm', 'WMSolver', 'TWMSolver', 'FWMSolver']
+__all__ = ['pm', 'twm_processors', 'fwm_processor', 'WMSolver', 'TWMSolver', 'FWMSolver']
 
 pm = Symbol('Δk', real=True)
+
+# Three- and four-wave mixing are maintained by separate processors, so that each keeps
+# its own perturbative mode orders (drive -1 for TWM, -1/2 for FWM; weak fields 0)
+# and no order setting has to be switched between calculations.
+twm_processors = (WMProcessor(False), WMProcessor(True))  # indexed by dc
+fwm_processor = WMProcessor(True, drive_order=-S.Half)
 
 
 class WMSolver(Sequence):
@@ -24,8 +30,8 @@ class WMSolver(Sequence):
     """
     __slots__ = ('processor', 'pm', '_sol')
 
-    def __init__(self, dc=True, mismatch=False):
-        self.processor = wm_processors[bool(dc)]
+    def __init__(self, processor: WMProcessor, mismatch=False):
+        self.processor = processor
         self.pm = pm if mismatch else S.Zero
         self._sol = []
 
@@ -73,7 +79,7 @@ class TWMSolver(WMSolver):
     """
 
     def __init__(self, dc=True, mismatch=False):
-        super().__init__(dc=dc, mismatch=mismatch)
+        super().__init__(twm_processors[bool(dc)], mismatch=mismatch)
         self.half_p_factor = exp(I * self.pm * t_ * S.Half)
         p = self.processor
         if dc:
@@ -122,7 +128,6 @@ class TWMSolver(WMSolver):
         last_sol = self.get_sol(order - 1)
         p = self.processor
         dc = self.dc
-        self.reset_pe()
         gc_m2 = self.gc**(-2)
         if i & 1:
             s3 = S.NegativeOne if dc else S.One
@@ -186,11 +191,6 @@ class TWMSolver(WMSolver):
             p = self.half_p_factor
         return p * sol.expr
 
-    def reset_pe(self):
-        p = self.processor
-        p.pe.update({name: S.Zero for name in p.a[0].names})
-        p.pe.update({p.nd.name: S.NegativeOne})
-
 
 class FWMSolver(WMSolver):
     """
@@ -198,7 +198,7 @@ class FWMSolver(WMSolver):
     """
 
     def __init__(self):
-        super().__init__(dc=True, mismatch=True)
+        super().__init__(fwm_processor, mismatch=True)
         self.hpm = -I * self.pm * S.Half + I * nlc * self.nd
         self.gc = S.Half * (self.pm * (-self.pm + 4 * nlc * self.nd))**S.Half
         self._solve()
@@ -231,7 +231,6 @@ class FWMSolver(WMSolver):
         xpm_t = sol_0[1] @ sol_0[1].adjoint() + sol_0[2].adjoint() @ sol_0[2]
         dd2 = sol_0[1] @ sol_0[0].adjoint() @ sol_0[2]
 
-        self.reset_pe()
         w_rhs = self._expand_g((dd2 + xpm_c + coeff @ xpm_t) @ (-2 * I * nlc / self.gc), 1)
         s0 = w_rhs.apply(lambda t: p.n_simp(dsd1(_g, p.p2s_group(t), subs=self.gc * t_)))
 
@@ -252,6 +251,3 @@ class FWMSolver(WMSolver):
     def _zq(self, obj):
         f = lambda x: x.subs({self.pm: 2 * nlc * self.nd})
         return obj.apply(f) if isinstance(obj, WMWrapper) else f(obj)
-
-    def reset_pe(self):
-        self.processor.pe.update({a_p.name: -S.Half, a_s.name: S.Zero, a_i.name: S.Zero})

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from functools import lru_cache
 from sympy.core.singleton import S
 from sympy.core.sympify import sympify
 from sympy.core.expr import Expr
@@ -497,13 +498,37 @@ def _ps(expr):
         return _ps(expr.base.base**(expr.exp*expr.base.exp))
     return expr
 
+_mps_cache = {}
+
+
 def _mps(expr, sd=None):
-    if sd is None:
-        sd = {}
+    """
+    Merges the powers of identical bases in a Mul, with the substitutions sd applied to
+    the factors (and reverted on the merged bases containing them). Only the
+    non-commutative part needs merging (commutative powers are merged by Mul itself);
+    it is memoized together with the substitutions occurring in it.
+    """
+    if not expr.is_Mul:
+        return None
+    c, nc = expr.args_cnc()
+    if not nc:
+        return expr
+    nc = tuple(nc)
+    sd = sd or {}
+    rel = tuple((k, v) for k, v in sd.items() if any(f.has(k) for f in nc))
+    key = (nc, rel)
+    if key not in _mps_cache:
+        if len(_mps_cache) > 65536:
+            _mps_cache.clear()
+        _mps_cache[key] = _mps_nc(nc, dict(rel))
+    return Mul(*c, _mps_cache[key])
+
+
+def _mps_nc(nc, sd):
     rsd = {v: k for k, v in sd.items()}
-    if expr.is_Mul:
-        exp_dict = dict()
-        for arg in Mul.make_args(expr.subs(sd)):
+    exp_dict = dict()
+    for f in nc:
+        for arg in Mul.make_args(f.subs(sd) if sd else f):
             if arg.is_Pow:
                 if arg.base in exp_dict:
                     exp_dict[arg.base] += arg.exp
@@ -513,15 +538,27 @@ def _mps(expr, sd=None):
                 exp_dict[arg] += S.One
             else:
                 exp_dict[arg] = S.One
-        n_part = []
-        other = []
-        for k, v in exp_dict.items():
-            if v != 0:
-                if k.has(*rsd):
-                    n_part.append(k ** v)
-                else:
-                    other.append(k ** v)
-        return Mul(*other, Mul(*n_part).subs(rsd))
+    n_part = []
+    other = []
+    for k, v in exp_dict.items():
+        if v != 0:
+            if k.has(*rsd):
+                n_part.append(k ** v)
+            else:
+                other.append(k ** v)
+    return Mul(*other, Mul(*n_part).subs(rsd))
+
+
+# {number operator: commutative dummy}, shared so that _mps hits across calls; the dummies are
+# named after their operators, so that their order (that of the merged factors) does not
+# depend on the calculation history
+_bn_dummies = {}
+
+
+def _bn_dummy(x):
+    if x not in _bn_dummies:
+        _bn_dummies[x] = Dummy(str(x))
+    return _bn_dummies[x]
 
 def bn_simp(expr, on_self=False):
     """
@@ -531,7 +568,12 @@ def bn_simp(expr, on_self=False):
     """
     if not isinstance(expr, Expr):
         return expr.apply(bn_simp, self_update=on_self) if hasattr(expr, 'apply') else expr
-    sub_dict = {a: Dummy() for a in sorted(
+    return _bn_simp_expr(expr)
+
+@lru_cache(maxsize=8192)
+def _bn_simp_expr(expr):
+    """Memoized bn_simp of an Expr (PF comparisons repeatedly simplify the same tails)."""
+    sub_dict = {a: _bn_dummy(a) for a in sorted(
         (x for x in expr.atoms(Expr) if getattr(x, 'bn_coeffs', False)),
         key=lambda x: x.sort_key(), reverse=True
     )}

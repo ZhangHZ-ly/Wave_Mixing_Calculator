@@ -1,154 +1,325 @@
-**This is a SymPy-based library to process symbolic expressions with canonical operators in quantum mechanics/optics. It includes two main preprocessing operations on the given quantum expression. The first operation is collection and reordering the oprators in the expression and combine the creation and annihilation operators into number operators as much as possible; the second operation is Talor expasion for functions in the expression up to the given order, where the order of each single symbol/operator can be self defined.** 
+# Quantum Operator Algebra Calculator
 
-## Representation of expressions — `op_patterns`
-The product of bosonic/fermionic operators in the same mode is rewritten into `BosonPat`/`FermionPat` class (see `boson_pattern.BosonPat` & `ferimon_pattern.FermionPat`). The `num_repr` method combines the creation and annihilation bonsonic operators into number operators (`boson_pattern.BosonNum`) as much as possible; while this is unnecessary for fermionic operators, because any multiplication of fermionic operators (denote $c$ for annihilation) in the same mode must equals one of $0$, $1$, $c$, $c^\dagger$, $c^\dagger c$ and $c c^\dagger$ — the `__new__` method of the class will automatically collapse the expression into one of these forms if all the exponents of the operator are known.
+A browser-based calculator for symbolic quantum-optical operator algebra, built on top of **`cas_qwm`** (*Computer Algebra System for Quantum Wave Mixing*), a SymPy-based library developed in this repository.
 
-An example of the relavant classes and methods:
+The calculator lets you:
 
-`>>> from op_patterns import BosonPat as BP`
+- reorder products of bosonic / fermionic operators of a single mode (pattern form, number-operator form, normal order);
+- process arbitrary multi-mode quantum expressions into a unique **pattern form** (canonical operators on the left, functions of number operators on the right), optionally keeping the commutator remainder between non-independent modes;
+- compute the **Heisenberg-picture evolution** of operator expressions in multimode parametric **wave-mixing** processes (three-wave down-conversion, three-wave frequency conversion / state transfer, four-wave mixing) as a perturbative series in the pump depletion, with or without phase mismatch, and evaluate them under input-state assertions (coherent pump, vacuum signal / idler).
 
-`>>> bp = BP('a', True, 2, 2)`
+All results are rendered with KaTeX and can be copied as LaTeX.
 
-`>>> bp`
+> **Python API:** the full programming interface of the `cas_qwm` library is documented separately in **[cas_qwm_documentation.md](cas_qwm_documentation.md)**.
 
-`BP(a; 2, 2)`
+---
 
-`>>> bp.num_repr()`
+## Contents
 
-`(1, (1 + N_(a))*(2 + N_(a)))`
+1. [Project structure](#project-structure)
+2. [Installation](#installation)
+3. [Running the calculator](#running-the-calculator)
+4. [Web interface guide](#web-interface-guide)
+   - [Expression syntax (shared by all tabs)](#expression-syntax-shared-by-all-tabs)
+   - [Tab 1 — Single Mode](#tab-1--single-mode)
+   - [Tab 2 — Quantum Expression](#tab-2--quantum-expression)
+   - [Tab 3 — WM Evolution](#tab-3--wm-evolution)
+   - [The variable tables](#the-variable-tables)
+5. [HTTP API (for scripting)](#http-api-for-scripting)
+6. [Troubleshooting](#troubleshooting)
 
-`>>> from sympy.physics.quantum.boson import BosonOp`
+---
 
-`>>> bp.rewrite(BosonOp)`
+## Project structure
 
-`a**2*Dagger(a)**2`
+```
+Calc/
+├── cas_qwm/                 # Core symbolic library (see cas_qwm_documentation.md)
+│   ├── op_pattern/          #   Layer 1: operator patterns (BosonPat, FermionPat, BosonNum, ...)
+│   ├── pattern_perturb/     #   Layer 2: pattern form (PF, pf) and perturbative expansion (PE)
+│   ├── parametric_multimode/#   Layer 3: multimode wave-mixing processors and solvers
+│   ├── dsolve_pm.py         #   ODE solvers for polynomial × (hyperbolic) trigonometric sources
+│   └── wm_variables.py      #   Shared symbols: a_0, a_1, a_2, t, χ
+├── calculator/              # Backend glue between the web UI and cas_qwm (parsing, presets, assertions)
+├── static/                  # Front-end assets (CSS, JavaScript; optional local KaTeX)
+├── index.html               # Single-page web interface
+├── main.py                  # FastAPI server
+├── setup_offline.py         # Downloads KaTeX (and optionally pip wheels) for offline use
+└── requirements.txt         # Pinned Python dependencies
+```
 
-`from op_patterns import BosonNum`
+---
 
-`>>> bp.rewrite(BosonNum)`
+## Installation
 
-`(1 + N_(a))*(2 + N_(a))`
+### Requirements
 
-`>>> from op_patterns import FermionPat as FP`
+- **Python ≥ 3.10** (developed and tested with Python 3.12)
+- A modern web browser (Chrome, Edge, Firefox, Safari)
 
-`>>> FP('c', True, 1, 1, 1)`
+The Python dependencies are SymPy (`sympy==1.14.0`, with `mpmath`) for the symbolic engine, and FastAPI + Uvicorn for the web server. Exact versions are pinned in [requirements.txt](requirements.txt).
 
-`c`
+### 1. Get the code
 
-Note that by inputing directly multiplications of operators, the output won't combine all the factors in the same mode to form a unified pattern item; the multiplication of operatorsfrom the same mode can be taken into account by applying the `redo_mul` function (see `tools.redo_mul`):
+```bash
+git clone https://github.com/ZhangHZ-ly/Wave_Mixing_Calculator.git
+cd Wave_Mixing_Calculator
+```
 
-`>>> import op_patterns`
+### 2. Create a virtual environment (recommended)
 
-`>>> from sympy.physics.quantum.boson import BosonOp`
+```bash
+python -m venv .venv
 
-`>>> from sympy.physics.quantum.dagger import Dagger`
+# Windows (PowerShell)
+.venv\Scripts\Activate.ps1
+# macOS / Linux
+source .venv/bin/activate
+```
 
-`>>> a = BosonOp('a')`
+### 3. Install the dependencies
 
-`>>> a**2 * Dagger(a)**2`
+```bash
+pip install -r requirements.txt
+```
 
-`BP(a; 2)*BP(D(a); 2)`
+If you only want to use the `cas_qwm` library from Python (without the web interface), `pip install sympy==1.14.0` is sufficient; then import it from the repository root (or add the repository root to `PYTHONPATH`).
 
-`>>> from op_patterns import redo_mul`
+### 4. (Optional) Offline setup
 
-`>>> redo_mul(a**2 * Dagger(a)**2)`
+By default the page loads KaTeX (the math renderer) from the jsDelivr CDN. To run the calculator on a machine without internet access, download KaTeX into `static/katex/` once while you are online:
 
-`BP(a; 2, 2)`
+```bash
+python setup_offline.py
+```
 
-## Reordering and expanding the quantum expression — `perturb_eval`
-The function `pf` (see `pattern_form.pattern_form`) reorders the quantum expression into the so-called "pattern form", which is unique for equal expressions. This hence allows to establish commutative equations in the noncommutative algebra of quantum operators.
+To also prepare the Python packages for an air-gapped machine, download the wheels on a connected machine:
 
-In the reordering process, the expression is saved in a `dict` structure to seperate the pure `BosonPat`/`FermionPat` factors and the `BosonNum` (in keys) and commutative factors (in values). The "res" parameter provides an option to calculate the generated commutators along the reordering procedure if the quantum modes are not independent with each other.
+```bash
+python setup_offline.py --wheels
+```
 
-`>>> from perturb_eval import pf`
+then copy the whole folder (including `wheels/`) to the target machine and install from it:
 
-`>>> from sympy import symbols, cos, sin`
+```bash
+pip install --no-index --find-links=./wheels -r requirements.txt
+```
 
-`>>> from sympy.physics.quantum.boson import BosonOp`
+The server automatically uses the local `static/katex/` copy when it exists and falls back to the CDN otherwise.
 
-`>>> from sympy.physics.quantum.dagger import Dagger`
+---
 
-`>>> a, b = symbols('a b', cls=BosonOp)`
+## Running the calculator
 
-`>>> pf(a**2*(cos(Dagger(a)*a) + Dagger(b)*sin(b*Dagger(b)))*Dagger(a)*b**2)`
+From the repository root:
 
-`a*b*(1 + N_(a))*(1 + N_(b))*sin(-1 + N_(b)) + a*BP(b; 2)*(1 + N_(a))*cos(1 + N_(a))`
+```bash
+python main.py
+```
 
-`>>> pf(Dagger(b)*sin(b*Dagger(b))*Dagger(a), res=True)`
+and open **<http://127.0.0.1:8000>** in your browser.
 
-`(Dagger(a)*Dagger(b)*sin(1 + N_(b)), -Dagger(b)*[Dagger(a),sin(1 + N_(b))] - [Dagger(a),Dagger(b)]*sin(1 + N_(b)))`
+`python main.py` starts Uvicorn with auto-reload (convenient while editing the code). For a non-reloading server, or to choose another host / port:
 
-The class `PF` (see `sortcontext.PFTableProcessor`) includes methods for basic algebraic operations such as addition, multiplication and integer power. It is usually more efficient to use this class instead of `sympy.Expr` if the calculation mainly treats pattern-formed expressions. To create `PF` objects, use `as_dict=None` option in `pf` function, or input directly the `dict` to the class. But the direct creation of `PF` object also accepts illegal inputs.
+```bash
+uvicorn main:app --host 127.0.0.1 --port 8000
+```
 
-`>>> from perturb_eval import pf, PF`
+> The first calculation of a given wave-mixing preset (and each higher retained order) solves the perturbative equations symbolically and may take from several seconds to minutes. Solutions are cached in the server process, so subsequent calculations with the same preset are fast. Restarting the server clears this cache.
 
-`>>> from op_patterns import BonsonNum`
+---
 
-`>>> from sympy import symbols, cos, sin`
+## Web interface guide
 
-`>>> from sympy.physics.quantum.boson import BosonOp`
+The page has three tabs, from the most elementary to the most specialised:
 
-`>>> from sympy.physics.quantum.dagger import Dagger`
+| Tab | Purpose |
+|---|---|
+| **Single Mode** | Reorder a product of operators of one boson / fermion mode. |
+| **Quantum Expression** | Bring any multi-mode expression to pattern form; build up named expressions. |
+| **WM Evolution** | Heisenberg evolution of expressions in wave-mixing processes; input-state assertions. |
 
-`>>> a, b = symbols('a b', cls=BosonOp)`
+Every result area offers **Copy LaTeX**. Hovering over a result or table row shows additional details.
 
-`>>> pf(a**2*(cos(Dagger(a)*a) + Dagger(b)*sin(b*Dagger(b)))*Dagger(a)*b**2, as_dict=None)`
+### Expression syntax (shared by all tabs)
 
-`PatternForm({((a, b), ()): (-1 + N_(b))*(1 + N_(a))*sin(-1 + N_(b)), ((a, BP(b; 2)), ()): (1 + N_(a))*cos(1 + N_(a))}, 0)`
+Expressions are typed as plain text and parsed by SymPy with implicit multiplication enabled.
 
-`>>> pf1 = PF({((a**2,), ()): cos(BosonNum('a'))})`
+| Input | Meaning |
+|---|---|
+| `a b`, `2x`, `x a` | Implicit multiplication (a space or juxtaposition multiplies). |
+| `*`, `/`, `+`, `-` | Usual arithmetic. |
+| `**` or `^` | Power, e.g. `a**2` or `a^2`. |
+| `dag(a)` (also `Dagger(a)`, `dagger(a)`) | Hermitian adjoint $a^\dagger$. Works on whole expressions, e.g. `dag(x a + a^2)`. |
+| `N_(a)` (also `BosonNum(a)`) | Number operator $\hat N_a = a^\dagger a$ of a boson mode. |
+| `Pat(a, e1, e2, ...)` (also `pattern`) | Operator pattern $a^{e_1}(a^\dagger)^{e_2}a^{e_3}\cdots$. If the first argument is `dag(a)`, the pattern starts with $a^\dagger$. Exponents may be symbols. |
+| `BP(a, is_annihilation, e1, ...)`, `FP(c, is_annihilation, e1, ...)` | Explicit boson / fermion pattern (`BosonPat` / `FermionPat`), e.g. `BP(a, True, 2, 2)` $=a^2(a^\dagger)^2$. |
+| `exp`, `sin`, `cos`, `sinh`, `cosh`, `tanh`, `sqrt` | Elementary functions; they may take operator arguments, e.g. `cos(N_(a))`. |
+| `diff(expr, x)` | Derivative with respect to a commutative symbol. |
+| `i` or `I`, `pi`, `e` | Imaginary unit, $\pi$, Euler's number. |
 
-`>>> pf2 = PF({((Dagger(a),), ()): sin(BosonNum('a'))})`
+Identifiers you define must be valid Python names (letters, digits, underscores; not starting with a digit) and must not clash with the reserved names above (`i`, `e`, `pi`, `exp`, `dag`, `N_`, `Pat`, `BP`, `FP`, `MMN`, …). Names containing digits or underscores, such as `a1` or `b_1`, are never split into several symbols.
 
-`>>> pf1.mul_ind(pf2)`
+### Tab 1 — Single Mode
 
-`PatternForm({((a,), ()): (1 + N_(a))*cos(1 + N_(a))*sin(N_(a))}, 0)`
+Reorders a single-mode operator product $\;c_1^{e_1}\, c_2^{e_2}\, c_3^{e_3}\cdots$ where the operators alternate between annihilation and creation.
 
-The second entrance of `PF` indicates the part that cannot be represented into pattern form.
+1. **Particle Type** — *Boson* or *Fermion*.
+2. **Operator Name** — e.g. `a`, `c`, `b_1`.
+3. **First Operator** — whether the left-most factor is an *Annihilation* or a *Creation* operator; the following factors alternate.
+4. **Exponent Sequence** — e.g. `1, 2, 1` means $a\,(a^\dagger)^2 a$. Exponents may be symbolic (e.g. `1, n_1, 2`); any character other than letters, digits and underscores acts as a separator.
+5. Choose an action:
+   - **Original Expression** — show the product as entered;
+   - **Rewrite to PatForm** — the pattern form: a power of $a$ or $a^\dagger$ on the left times a function of $\hat N$ (for bosons), or the collapsed form among $0, 1, c, c^\dagger, c^\dagger c, c c^\dagger$ (for fermions);
+   - **Normal Order** — all creation operators to the left.
 
-`>>> from perturb_eval import pf`
+   The result panel also states whether the result is Hermitian.
+6. **Import to Tab 2 as PF** saves the result as a named variable in the Tab 2 table, so it can be reused in further expressions.
 
-`>>> from sympy.physics.quantum.boson import BosonOp`
+*Example:* boson `a`, first operator *Annihilation*, exponents `1, 2, 1` → PatForm $(1+\hat N)\hat N$, normal order $2a^\dagger a + (a^\dagger)^2 a^2$.
 
-`>>> from sympy.functions.elementary.triganometric import sin`
+### Tab 2 — Quantum Expression
 
-`>>> pf(sin(BosonOp('a')), as_dict=None)`
+Brings an arbitrary expression of commutative symbols and boson / fermion operators to **pattern form**: a sum of terms, each being a product of canonical-operator powers (one per mode, on the left) and a function of number operators (on the right). The pattern form is unique, so two expressions are equal if and only if their pattern forms coincide.
 
-`PatternForm({}, sin(a))`
+1. Make sure every symbol and operator you use is defined in the **Defined Expressions** table below the input (by default: boson `a`, fermion `c`, real symbol `x`). Add new ones with **Add / Create ▼** → *New Commutative Symbol*, *New Boson Operator / Mode*, *New Fermion Operator / Mode*.
+2. Type the expression in **Expression Input**, e.g. `(x*a + dag(a))**2`, `Pat(a, 1, 2) + Pat(c, 1, 1)`, or an expression using previously saved variables such as `H`.
+3. Click
+   - **Calculate** — assumes that different modes are mutually independent (all commute);
+   - **Calculate with Remainder** — keeps track of the commutators generated between different modes while reordering, and shows them in a separate **remainder** panel (e.g. terms like $[a, b^\dagger]$). Use this when your modes are not independent. The remainder itself cannot be saved as a variable.
+   
+   Tick **Expand output** (next to the input label) to multiply out products and integer powers in the number-operator coefficients of the result and of the remainder. Terms that cancel then vanish, e.g. $1-(1+\hat N)+\hat N \to 0$ and $(1+\hat N)(2+\hat N) \to 2+3\hat N+\hat N^2$. Function arguments such as $\cos(1+\hat N)$ are left as they are. The option is remembered by the browser.
+4. **Save to Table as PF** stores the result (in expanded form if *Expand output* was ticked) under a name (e.g. `H`), which can then be used in later inputs: `dag(H) H - H dag(H)`, `H^3`, ….
 
-`PE` class (see `pertrub_expander.PerturbExpander`) can expand the expression up to the desired order, which can turn a difference equation into differential equation, so as to solve the analytical solution for the quantum process.
+*Example:* with real `x`, `(x*a + dag(a))**2` → $x^2 a^2 + x(1+\hat N) + x\hat N + (a^\dagger)^2$.
 
-`>>> from perturb_eval import PE`
+### Tab 3 — WM Evolution
 
-`>>> from sympy import symbols, sin`
+Computes the time evolution $O(t)$ of operator expressions in a multimode parametric wave-mixing process, expressed in terms of the input ($t=0$) operators, as a perturbative series in the depletion of the strong driving field.
 
-`>>> x, y = symbols('x y')`
+#### Physical model and notation
 
-`>>> pe = PE({x: 1})`
+Three field groups take part: mode 0 (pump, high frequency) and modes 1, 2 (signal and idler). Each weak field is in general **multimode**: the evolution couples every signal mode to its partner idler mode, and multimode sums are shown as $\sum_\text{modes}(\cdots)$. The symbol $n_m$ denotes the number of mode pairs.
 
-`>>> tuple(pe.expand_expr(sin(x + y), 2))`
+| Preset | Strong (driving) field | Hamiltonian structure |
+|---|---|---|
+| **Down-conversion** (TWM) | pump $a_0$ | $a_0 \to a_1 + a_2$ |
+| **Frequency Conversion / State Transfer** (TWM) | idler $a_2$ | $a_0 \leftrightarrow a_1$, driven by $a_2$ |
+| **Four-Wave Mixing** | pump $a_0$ (degenerate) | $2a_0 \to a_1 + a_2$, including self- and cross-phase modulation |
 
-`((sin(y), 0), (x*cos(y), 1), (-x**2*sin(y)/2, 2))`
+In the three-wave-mixing case the Heisenberg equations are
+$\dot a_0 = -i\chi\, a_1 a_2\, e^{-i\Delta k t}$,
+$\dot a_1 = -i\chi\, a_0 a_2^\dagger\, e^{i\Delta k t}$,
+$\dot a_2 = -i\chi\, a_1^\dagger a_0\, e^{i\Delta k t}$.
 
-## Application of the framework — quantum wave mixing (TWM and FWM in `parametric`)
-The module `parametric.py` illustrates the usage of the relevant classes and functions in concrete quantum optical situations. It defines multimode operators (`MultimodeCOP` for coupled canonical operators, `MultimodeNum` for mode-summed number operators, and `MultimodeNum2` for summed number operators in each signal-idler pair) for presenting the time evolution of multimode wave mixing, assuming equal nonlinear coefficients and phase mismatch among all the frequency modes.
+#### Step 1 — Process presets
 
-The architecture is divided into expression processing and physical evolution solving:
-- `WM_Processor`: Base class providing dictionary-based operator algebra (`d_add`, `d_mul`, `e_mul`, `d_adjoint`), canonical commutation and operator swapping (`bdswap`), mode reduction (`to_single_mode`), and expectation evaluations under vacuum or coherent states (`eval_vacuum`, `eval_coherent`).
-- `TWMSolver`: Subclass of `WM_Processor` calculating the Heisenberg evolution of three-wave mixing (TWM) driven by a single strong field. The recursive perturbative iteration (`get_sol`) solves weak fields and drive depletion order by order. The solution is saved in the `sol` attribute and evaluated via `sol_expr(mode, order)`:
+Configure these **before** evaluating an expression:
 
-`>>> from parametric import TWMSolver`
+- **Mixing Process Type** — *Down-conversion*, *Frequency Conversion / State Transfer*, or *Four-Wave Mixing*.
+- **Phase-Matching Condition** — *Phase Matched* ($\Delta k = 0$; for FWM: *SPM Compensated*, $\Delta k = 2\chi \hat N_0$) or *Arbitrary Phase Mismatch* (keeps $\Delta k$ as a symbol).
+- **Retained Order** — the perturbative order kept in the result. The strong field counts as order $-1$ (TWM) or $-1/2$ (FWM), the weak fields as order 0, and $\chi$ as order 1. Order 0 is the undepleted-pump (parametric) approximation; order 1 includes the first pump-depletion correction. Four-wave mixing currently supports orders up to 1.
 
-`>>> TWMSolver().sol_expr(0, 1)`
+#### Step 2 — Enter the expression
 
-`a_0*(1 + Σ(1 + N_(a_1) + N_(a_2))*N_(a_0)**(-1)/4 - Σ(1 + N_(a_1) + N_(a_2))*N_(a_0)**(-1)*cosh(2*_t*χ*sqrt(N_(a_0)))/4) + Σ(D(a_1)*D(a_2))*BP(a_0; 2)*(-_t*I*χ*N_(a_0)**(-1)/2 + I*N_(a_0)**(-3/2)*sinh(2*_t*χ*sqrt(N_(a_0)))/4) + Σ(a_1*a_2)*(-_t*I*χ/2 - I*N_(a_0)**(-1/2)*sinh(2*_t*χ*sqrt(N_(a_0)))/4)`
+In addition to the general syntax, the following objects are predefined in this tab:
 
-- `FWMSolver`: Subclass of `WM_Processor` calculating four-wave mixing (FWM) driven by a monochromatic strong pump. Because the perturbation is currently solved up to the first correction of pump depletion (order 1, including self-phase modulation and cross-phase modulation depletion), the solutions are directly solved and stored upon initialization in `sol` (from order -1 up to order 1) without recursive iteration:
+| Name | Meaning |
+|---|---|
+| `a_p`, `a_s`, `a_i` | **Evolved** pump, signal, idler operators at time $t$ (displayed as $a_0, a_1, a_2$). |
+| `a_0`, `a_1`, `a_2` | **Input** operators at $t = 0$. |
+| `A` | Multimode canonical operator at $t=0$: $\sum_\text{modes} a_1 a_2$ (down-conversion) or $\sum_\text{modes} a_1 a_2^\dagger$ (state transfer). |
+| `N_t` | Multimode number operator at $t=0$: $\sum_\text{modes}(1 + \hat N_1 + \hat N_2)$ (down-conversion) or its state-transfer counterpart. |
+| `MMN(a_s)` | Multimode number operator $\sum_\text{modes} \hat N_1$; `MMN(a_s, d)` adds a shift $d$ per mode. |
+| `MMN2(d)` | `N_t` shifted by $d\,n_m$. |
+| `nlc`, `pm` | Nonlinear coupling $\chi$ and phase mismatch $\Delta k$. |
+| `t`, `g` | Time and parametric gain. |
+| `n_m` | Number of mode pairs. |
 
-`>>> from parametric import FWMSolver`
+**Multiplication rule.** Implicit multiplication (a space, e.g. `dag(a_s) a_s`) is the **multimode product**: paired weak-field operators are summed over all modes, giving e.g. $\sum_\text{modes}\hat N_1(t)$. An explicit `*` (e.g. `dag(a_s)*a_s`) is the **single-mode product**, i.e. the observable of one signal mode. Ticking **Single-mode processing** replaces all multimode operators with single-mode ones ($n_m = 1$).
 
-`>>> fwm = FWMSolver()`
+Examples:
 
-`>>> fwm.sol_expr(1, 0)`
+- `dag(a_p) a_p - N_(a_p)` — pump depletion $\hat N_0(t) - \hat N_0(0)$ (`N_(·)` of an evolved operator is the number operator of the corresponding input mode);
+- `dag(a_s) a_s` — total signal photon number at time $t$;
+- `dag(a_s)*a_s` — photon number of a single signal mode;
+- `a_s a_i` — two-mode correlation $\sum_\text{modes} a_1(t)a_2(t)$.
 
-`-2*I*χ*BP(a_0; 2)*(Δk*(Δk + 4*χ*N_(a_0)))**(-1/2)*sinh(_t*sqrt(Δk*(Δk + 4*χ*N_(a_0)))/2)*Dagger(a_2) + (I*(-Δk + 2*χ*N_(a_0))*(Δk*(Δk + 4*χ*N_(a_0)))**(-1/2)*sinh(_t*sqrt(Δk*(Δk + 4*χ*N_(a_0)))/2) + cosh(_t*sqrt(Δk*(Δk + 4*χ*N_(a_0)))/2))*a_1`
+**Cascaded system.** Tick *Cascaded system: evolve for* to let the calculated expression evolve through a second, identical wave-mixing stage for a further time. The time box defaults to `t` (the same duration as the first stage); you can replace it with the name of a new or existing custom commutative symbol, e.g. `t_c`. The box can be edited at any time, but it only takes effect while the checkbox is ticked. An empty box means `t`.
+
+#### Step 3 — Calculate and read the result
+
+Click **Calculate Evolution**. The result is shown as a function of time $t$; **Display in terms of gain** rewrites it in terms of the parametric gain operator $\hat g$ (e.g. $\hat g = \chi t\sqrt{\hat N_0}$ for phase-matched down-conversion), which usually gives a much more compact form. Click again to switch back to time.
+
+**Save to Table** stores the result (in its time or gain form) as a named variable that can be reused in later Tab 3 expressions — for example, save `dag(a_s) a_s` as `Ns` and then compute `Ns^2 - Ns`.
+
+Before calculating, the page checks your expression against the presets and warns you when
+
+- a referenced variable was computed with a **lower retained order** than the current preset (*Force Continue* proceeds anyway, at the risk of missing expansion terms), or
+- a referenced variable was computed under a **different mixing process** or **single-mode setting** (results would be mathematically inconsistent).
+
+#### Step 4 — Input State Assertions
+
+Switch to the **Input State Assertions** sub-tab to evaluate the expression for specific input states at $t=0$. Tick any combination of
+
+- *Pump input is in coherent state* $|\alpha_0\rangle$ (state transfer: *Idler*, $|\alpha_2\rangle$),
+- *Signal input is in vacuum state* $|0\rangle_1$,
+- *Idler input is in vacuum state* $|0\rangle_2$ (state transfer: *Pump*, $|0\rangle_0$),
+
+and click **Calculate under Assertions**. With all three ticked, the result is the expectation value; with only some ticked, it is a partial expectation value that remains an operator in the other modes. The gain display uses the scalar gain $g$ (e.g. $g = \chi t|\alpha_0|$).
+
+*Example:* down-conversion, phase matched, order 0, input `dag(a_s) a_s`, all three assertions → $n_m \sinh^2(\chi t|\alpha_0|) = n_m\sinh^2 g$.
+
+Results evaluated under assertions are expectation values and cannot be saved or used in further operator algebra.
+
+### The variable tables
+
+Tabs 2 and 3 each have a **Defined Expressions** table holding the symbols, operators and saved expressions available to the input:
+
+- **Click** a row to edit it (identifier, LaTeX display text, notes, mathematical assumptions such as *Real*, *Integer*, *Non-negative*, *Positive*). In Tab 3, the detail view also shows each item's **leading order** and the **accuracy (order)** it was computed with; the leading order of custom symbols and boson modes is editable.
+- **Right-click** a row for *Edit*, *Insert into Input* (inserts the identifier at the cursor) and *Delete*.
+- **Add / Create ▼** adds new symbols, modes, or saves the current answer.
+- **Reset Defaults** restores the default table of the tab (removing your own entries); in Tab 3, **Restore Base Solutions** only re-adds or un-renames the evolved operators `a_p`, `a_s`, `a_i`, and asks you to rename or delete any variable that currently occupies one of these names.
+
+The **Display Text (LaTeX)** of an item only changes how it is rendered (e.g. identifier `omega`, display `\omega_0`).
+
+Table contents are stored in your browser's local storage, so they survive page reloads and server restarts. Clearing the browser's site data resets them.
+
+---
+
+## HTTP API (for scripting)
+
+The web page talks to the FastAPI backend through JSON endpoints, which can also be called directly. Interactive documentation of all request / response schemas is generated automatically at **<http://127.0.0.1:8000/docs>** while the server is running.
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/single_mode` | Tab 1 calculation. |
+| `POST /api/pattern_form` | Tab 2 calculation (`use_rem` for the remainder mode). |
+| `POST /api/solve` | Raw perturbative solution of one field (`var_index` 0/1/2) at a given order. |
+| `POST /api/combination` | Tab 3 evolution of an expression. |
+| `POST /api/combination/assert` | Tab 3 evaluation under input-state assertions. |
+| `POST /api/combination/cascade` | Tab 3 cascaded-system evolution. |
+| `POST /api/variable/save` | Save the latest result as a named variable. |
+| `POST /api/combination/reset` | Reset the custom perturbative orders of the wave-mixing processors. |
+
+Example:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/combination \
+     -H "Content-Type: application/json" \
+     -d '{"text": "dag(a_s) a_s", "process": "twm_dc", "mismatch": false, "order": 0, "use_gain": true}'
+```
+
+For anything beyond the web workflow, use the `cas_qwm` library directly — see **[cas_qwm_documentation.md](cas_qwm_documentation.md)**.
+
+---
+
+## Troubleshooting
+
+| Symptom | Remedy |
+|---|---|
+| Formulas are shown as raw LaTeX | KaTeX could not be loaded. Check the internet connection, or run `python setup_offline.py` once. |
+| A calculation seems to hang | Higher retained orders (≥ 2) and phase-mismatched presets take considerably longer the first time; wait for the solver, or lower the order. |
+| *"… is not defined"* / parsing error | Every symbol and operator must be defined in the tab's table. Check for typos and for reserved names. |
+| Order or condition warning dialog | A referenced saved variable was computed with a lower order or under a different preset. Recompute it under the current preset, or choose *Force Continue*. |
+| Port 8000 is in use | Start the server on another port: `uvicorn main:app --port 8001`. |

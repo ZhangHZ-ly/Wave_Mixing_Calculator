@@ -22,6 +22,7 @@ from .pf_expr import (
 )
 from .wm_transforms import (
     t_to_g,
+    apply_assertions,
 )
 from .conditions import (
     PROCESS_LABELS,
@@ -48,6 +49,9 @@ from .wave_mixing import (
     eval_operator_combination,
     eval_combination_assertions,
 )
+from .wm_cascaded import (
+    eval_cascaded_combination,
+)
 
 __all__ = [
     'TRANSFORMS',
@@ -65,6 +69,7 @@ __all__ = [
     'clear_pf_variables',
     'eval_pf_form',
     't_to_g',
+    'apply_assertions',
     'PROCESS_LABELS',
     'normalize_process',
     'process_is_dc',
@@ -86,4 +91,5 @@ __all__ = [
     'analyze_expression_terms',
     'eval_operator_combination',
     'eval_combination_assertions',
+    'eval_cascaded_combination',
 ]

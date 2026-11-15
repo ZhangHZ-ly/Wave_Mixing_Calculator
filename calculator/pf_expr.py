@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from cas_qwm.op_pattern import BosonNum, BosonPat, FermionPat
 from cas_qwm.pattern_perturb import PF, pf
-from sympy.core.function import diff
+from sympy.core.function import _mexpand, diff
 from sympy.core.numbers import I, pi
 from sympy.core.singleton import S
 from sympy.core.symbol import Symbol
@@ -76,10 +76,13 @@ def eval_pf_form(
     symbols: List[Dict[str, Any]],
     operators: List[Dict[str, Any]],
     named_expressions: List[Dict[str, Any]],
-    use_rem: bool = False
+    use_rem: bool = False,
+    expand: bool = False,
 ) -> Tuple[str, str, Optional[str], Optional[str]]:
     """
     Evaluates quantum expressions using PF add/mul/power arithmetic.
+    If expand is True, the coefficients (functions of number operators), the non-PF part
+    and the remainder are expanded with _mexpand (multiplication and power expansion only).
     Returns: (latex_result, expr_str, remainder_latex, remainder_str)
     """
     text = (text or '').strip()
@@ -94,18 +97,26 @@ def eval_pf_form(
         """Value bound to a named expression in the parser namespace."""
         return (p.expr() + getattr(p, 'rem', S.Zero)) if use_rem else p
 
-    def _make_boson_num(item):
-        if isinstance(item, PF):
-            name = str(item.expr())
-        else:
-            name = str(getattr(item, 'name', item))
-        return _out(BosonNum(name))
-
     mode_kind_map = {op.get('name', '').strip(): op.get('kind', 'boson') for op in operators if op.get('name')}
-    op_mode_map = {
-        op.get('name', '').strip(): (op.get('display_name') or op.get('displayName') or '').strip()
-        for op in operators if op.get('name')
-    }
+
+    def _base_op(item):
+        """The single canonical operator (or its adjoint) represented by item."""
+        if isinstance(item, PF):
+            if item.table:
+                bs, fs = next(iter(item.table.keys()))
+                if bs or fs:
+                    return bs[0] if bs else fs[0]
+            return item.expr()
+        return item
+
+    def _mode_name(op) -> str:
+        """Identifier (mode name) of an operator; display names are applied only at output."""
+        inner = op.args[0] if isinstance(op, Dagger) else op
+        return str(getattr(inner, 'name', inner))
+
+    def _is_fermion(op, name: str) -> bool:
+        inner = op.args[0] if isinstance(op, Dagger) else op
+        return isinstance(inner, (FermionOp, FermionPat)) or mode_kind_map.get(name) == 'fermion'
 
     def _wrap_fn(fn):
         def _inner(item):
@@ -126,27 +137,16 @@ def eval_pf_form(
             raw_args.extend(map(_raw_arg, a) if isinstance(a, (tuple, list)) else (_raw_arg(a),))
         return raw_args
 
+    def _make_boson_num(item):
+        return _out(BosonNum(_mode_name(_base_op(item))))
+
     def _make_op_pat(pat_cls, item, *args):
-        name = item.name if hasattr(item, 'name') else str(item)
-        if name in op_mode_map:
-            name = str(op_mode_map[name])
-        return _out(pat_cls(name, *_unwrap_args(args)))
+        return _out(pat_cls(_mode_name(_base_op(item)), *_unwrap_args(args)))
 
     def _make_pat(item, *args):
-        if isinstance(item, PF) and item.table:
-            bs, fs = next(iter(item.table.keys()))
-            op = bs[0] if bs else fs[0]
-        else:
-            op = item
-
-        if isinstance(op, Dagger):
-            inner, is_ann = op.args[0], False
-        else:
-            inner, is_ann = op, op.is_annihilation
-
-        name = inner.name
-        if name in op_mode_map:
-            name = str(op_mode_map[name])
+        op = _base_op(item)
+        is_ann = False if isinstance(op, Dagger) else bool(getattr(op, 'is_annihilation', True))
+        name = _mode_name(op)
 
         exps = _unwrap_args(args)
         if exps and isinstance(exps[0], bool):
@@ -154,8 +154,7 @@ def eval_pf_form(
         if not exps:
             exps = [1]
 
-        is_fermion = (mode_kind_map.get(name) == 'fermion') if mode_kind_map else isinstance(inner, (FermionOp, FermionPat))
-        if is_fermion:
+        if _is_fermion(op, name):
             return _out(FermionPat(name, is_ann, *exps))
 
         bp = BosonPat(name, is_ann, *exps)
@@ -240,12 +239,17 @@ def eval_pf_form(
     except Exception as e:
         raise ValueError(f"Calculation failed: {e}")
 
+    remainder_expr = pf_result.rem if use_rem else S.Zero
+    if expand:
+        pf_result = pf_result.apply(_mexpand, on_npf=True)
+        remainder_expr = _mexpand(remainder_expr)
+        pf_result.rem = remainder_expr
+
     # Apply display name substitutions to LaTeX output
     expr_disp = safe_subs(pf_result.expr(), disp_subs)
     latex_str = latex(expr_disp)
     expr_str = str(expr_disp)
 
-    remainder_expr = pf_result.rem if use_rem else S.Zero
     rem_latex = rem_str = None
     if use_rem:
         rem_disp = safe_subs(remainder_expr, disp_subs)

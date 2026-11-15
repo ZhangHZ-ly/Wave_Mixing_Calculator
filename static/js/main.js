@@ -54,6 +54,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   renderWmTable();
   onModeTypeChange();
+  onWmCascadeToggle(false);
   onWmProcessChange();
   updateAssertLabels();
   renderStaticMath();
@@ -76,6 +77,10 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
+
+  // Restore the Tab 2 "Expand output" option
+  const pfExpandEl = document.getElementById('pf-expand');
+  if (pfExpandEl) pfExpandEl.checked = localStorage.getItem('qc_tab2_expand') === '1';
 
   // Live-update the edited item's leading order (and its details table) from the modal order inputs
   const orderInputs = [

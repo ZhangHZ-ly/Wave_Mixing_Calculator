@@ -1011,22 +1011,29 @@ class PE:
                 for p in params))
 
         xs = tuple(Dummy() for _ in range(n_args))
-        # order of xs[j] is represented by ws[j]; z stands for zeroth-order nodes
+        # order of xs[j] is represented by ws[j]; each distinct opaque (zeroth-order)
+        # node is represented by its own dummy, so that different nodes cannot cancel
         ws = tuple(Dummy() for _ in range(n_args))
-        z = Dummy()
         expr = sympify(handle(*xs) if callable(handle) else handle)
 
         pe = self.copy()
-        pe.update({**dict(zip(xs, ws)), z: S.Zero})
+        pe.update(dict(zip(xs, ws)))
         zero_w = dict.fromkeys(ws, S.Zero)
+        zs = {}
 
         def opaque(e):
             return isinstance(e, Function) or (e.is_Pow and not e.exp.is_number)
 
+        def z_of(node):
+            if node not in zs:
+                zs[node] = Dummy()
+                pe.update({zs[node]: S.Zero})
+            return zs[node]
+
         def lin_orders(e):
             # yields (term, (B, A)) for each additive term of e, whose
             # leading order reads B + sum_j A[j]*ws[j]; (term, None) if unidentified
-            for term in Add.make_args(e.replace(opaque, lambda _: z).expand()):
+            for term in Add.make_args(e.replace(opaque, z_of).expand()):
                 try:
                     with warnings.catch_warnings():
                         warnings.simplefilter('ignore', FutureWarning)

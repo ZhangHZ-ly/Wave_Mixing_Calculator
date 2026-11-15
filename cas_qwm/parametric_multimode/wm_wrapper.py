@@ -15,7 +15,7 @@ from ..op_pattern import BosonNum, BosonPat, FermionPat
 from ..op_pattern.boson_pattern import fac
 from ..pattern_perturb.pattern_form import pf_add, _vpk, bn_simp
 from .multimode import MultimodeNum, MultimodeNum2, MultimodeCOP
-from .wm_processor import (WMProcessor, wm_processors, vac_pf, _dr_prep,
+from .wm_processor import (WMProcessor, vac_pf, _dr_prep,
                            _t_mul, _tdz, t_, _g, nlc, nm)
 
 __all__ = ['WMWrapper']
@@ -49,6 +49,13 @@ def _ladder(k: tuple, down: bool, start: int, sg: int):
 
 _pw = lambda b, e: PF({((b**e,), ()): S.One}) if e else PF1  # PF of b**e
 
+def _as_processor(dc) -> WMProcessor:
+    """Returns dc itself if it is a WMProcessor, else the TWM processor for the given dc flag."""
+    if isinstance(dc, WMProcessor):
+        return dc
+    from .wm_solver import twm_processors  # deferred: wm_solver imports this module
+    return twm_processors[bool(dc)]
+
 def _mmn_only(expr, weak_names) -> bool:
     """True if expr contains no unpaired weak-field single-mode operator or multimode COP."""
     if isinstance(expr, BosonPat):
@@ -75,7 +82,7 @@ class WMWrapper:
     """
 
     def __init__(self, dc, dict_repr=None, b_left=None):
-        self.processor = dc if isinstance(dc, WMProcessor) else wm_processors[bool(dc)]
+        self.processor = _as_processor(dc)
         if isinstance(dict_repr, PF):
             dict_repr = {(None,): dict_repr} if dict_repr else dict()
         elif dict_repr is None:
@@ -109,7 +116,7 @@ class WMWrapper:
         """
         Converts an Expr, PF, dict, WMWrapper, or string/number into a WMWrapper.
         """
-        proc = dc if isinstance(dc, WMProcessor) else wm_processors[bool(dc)]
+        proc = _as_processor(dc)
         if isinstance(val, cls):
             return val if val.dc == proc.dc else cls(proc, val.dict_repr, val.b_left)
         if isinstance(val, (PF, dict)):
@@ -235,9 +242,30 @@ class WMWrapper:
             return self
         return WMWrapper(self.processor, res, self.b_left if res else None)
 
-    def expand(self, order) -> 'WMWrapper':
-        """Expands this WMWrapper to the given perturbative order."""
-        return self.apply(lambda p: self.processor.pe.expand_pf(p, order), on_npf=True)
+    def expand(self, order, with_order=False):
+        """
+        Expands this WMWrapper to the given perturbative order.
+        If with_order=True, returns a generator of (WMWrapper, order) pairs, one per
+        perturbative term (orders may repeat). As in the plain expansion, the order is
+        counted on the PF parts; the weak-field and multimode keys are of order 0.
+        """
+        pe = self.processor.pe
+        if with_order:
+            return self._expand_terms(order)
+        return self.apply(lambda p: pe.expand_pf(p, order), on_npf=True)
+
+    def _expand_terms(self, order):
+        """Yields (WMWrapper, order) pairs of the perturbative terms up to the given order."""
+        p = self.processor
+        if self.b_left is None:
+            for k, v in self.dict_repr.items():
+                for pt, o in p.pe.expand_pf(v, order, True):
+                    yield WMWrapper(p, {k: pt}, None), o
+            return
+        for b, d in self.dict_repr.items():
+            for k, v in d.items():
+                for pt, o in p.pe.expand_pf(v, order, True):
+                    yield WMWrapper(p, {b: {k: pt}}, self.b_left), o
 
     def eval_vacuum(self, vac_modes) -> 'WMWrapper':
         """

@@ -45,9 +45,97 @@ function onWmPresetChange() {
     const mismatchText = wmMismatchLabel(curProcess, getWmMismatch());
     const gainText = wmUseGain ? 'gain (g)' : 'time (t)';
     const modeText = getWmSingleMode() ? 'single-mode' : 'multimode';
-    tag.textContent = `${procText} | ${mismatchText} | order=${getWmOrderValue()} | ${gainText} | ${modeText}`;
+    const cascadeSym = getWmCascadeSymbol();
+    const cascadeText = cascadeSym !== null ? ` | cascaded (+${cascadeSym || '?'})` : '';
+    tag.textContent = `${procText} | ${mismatchText} | order=${getWmOrderValue()} | ${gainText} | ${modeText}${cascadeText}`;
   }
   updateAssertLabels();
+}
+
+// ----------------------------------------------------
+// Cascaded system: evolve the result for a further time
+// ----------------------------------------------------
+// Preset objects of the Tab 3 expression input (besides RESERVED_NAMES); only the time 't'
+// may be reused as the further evolution time
+const WM_PRESET_NAMES = new Set([
+  't', 'g', 'nlc', 'pm', 'n_m', 'diff', 'Derivative',
+  'a_0', 'a_1', 'a_2', 'a_p', 'a_s', 'a_i', 'A', 'N_t'
+]);
+
+// Trimmed cascade time if the cascaded system is enabled, else null
+function getWmCascadeSymbol() {
+  const chk = document.getElementById('wm-cascade');
+  if (!chk || !chk.checked) return null;
+  // An empty box falls back to the default 't' (shown as placeholder)
+  return (document.getElementById('wm-cascade-symbol')?.value || '').trim() || 't';
+}
+
+// The cascade time box is always editable; it only takes effect while the checkbox is ticked
+function onWmCascadeToggle(focus = true) {
+  const input = document.getElementById('wm-cascade-symbol');
+  if (input) {
+    input.classList.remove('invalid');
+    if (focus && isChecked('wm-cascade')) input.focus();
+  }
+  onWmPresetChange();
+}
+
+function onWmCascadeSymbolInput() {
+  document.getElementById('wm-cascade-symbol')?.classList.remove('invalid');
+  onWmPresetChange();
+}
+
+// Validates the cascade time: 't', a custom commutative symbol, or a new identifier.
+// Returns { error, isNew }.
+function validateCascadeSymbol(name) {
+  if (!name) return { error: 'Please enter the further evolution time of the cascaded system (e.g. t_c).' };
+  if (name === 't') return { error: '', isNew: false };
+  const check = validateVariableName(name);
+  if (!check.valid) return { error: `Cascaded system: ${check.error}` };
+  const item = wmTableItems.find(x => x.name === name);
+  if (item) {
+    if (item.type === 'symbol' && !isBuiltinSymbol(item)) return { error: '', isNew: false };
+    const kind = isBuiltinSymbol(item) ? 'built-in parameter' : (ITEM_TYPE_LABELS[item.type] || item.type);
+    return { error: `Cascaded system: '${name}' conflicts with the ${kind} '${name}'. Use 't', a custom commutative symbol, or a new name.` };
+  }
+  if (WM_PRESET_NAMES.has(name)) {
+    return { error: `Cascaded system: '${name}' conflicts with a preset object. Use 't', a custom commutative symbol, or a new name.` };
+  }
+  return { error: '', isNew: true };
+}
+
+// Reads and validates the cascade time; returns undefined if the cascaded system is disabled,
+// null (with an error shown) if invalid, or { name, isNew }
+function readWmCascade(output) {
+  const name = getWmCascadeSymbol();
+  if (name === null) return undefined;
+  const { error, isNew } = validateCascadeSymbol(name);
+  if (error) {
+    document.getElementById('wm-cascade-symbol')?.classList.add('invalid');
+    showOutputError(output, error);
+    return null;
+  }
+  return { name, isNew };
+}
+
+// Creates a nonnegative commutative symbol for a new cascade time (name = display text)
+function ensureCascadeSymbol(cascade) {
+  if (!cascade || !cascade.isNew || wmTableItems.some(x => x.name === cascade.name)) return;
+  wmTableItems.push({
+    id: String(Date.now()),
+    type: 'symbol',
+    name: cascade.name,
+    displayName: cascade.name,
+    isReal: false,
+    isInteger: false,
+    isNonnegative: true,
+    isPositive: false,
+    order: 0,
+    notes: 'Further evolution time of the cascaded system'
+  });
+  saveWmTableItemsToStorage();
+  renderWmTable();
+  showToast(`Created nonnegative commutative symbol '${cascade.name}' for the cascaded system.`);
 }
 
 
@@ -669,13 +757,18 @@ async function runWm() {
 
   onWmPresetChange();
   ctx.isSingleMode = getWmSingleMode();
+  const cascade = readWmCascade(output);
+  if (cascade === null) return;
 
   if (!(await confirmWmWarnings(input, ctx, output))) return;
+  ensureCascadeSymbol(cascade);
 
   output.innerHTML = '<span style="color: var(--text-secondary);">Calculating operator combination...</span>';
 
   try {
-    const data = await postJson('/api/combination', buildWmRequest(input, ctx, useGain), 'Combination calculation failed');
+    const data = cascade
+      ? await postJson('/api/combination/cascade', buildWmRequest(input, ctx, useGain, { cascade_symbol: cascade.name }), 'Cascaded calculation failed')
+      : await postJson('/api/combination', buildWmRequest(input, ctx, useGain), 'Combination calculation failed');
 
     cachedWmResult = data;
     cachedWmResult.sourceInput = input;
@@ -812,17 +905,23 @@ async function runWmAssertions() {
   const ctx = readWmPresets(output);
   if (!ctx) return;
   ctx.isSingleMode = getWmSingleMode();
+  const cascade = readWmCascade(output);
+  if (cascade === null) return;
 
   if (!(await confirmWmWarnings(input, ctx, output))) return;
+  ensureCascadeSymbol(cascade);
 
   output.innerHTML = '<span style="color: var(--text-secondary);">Calculating expression under assertions...</span>';
 
   try {
-    const data = await postJson('/api/combination/assert', buildWmRequest(input, ctx, assertUseGain, {
+    const assertions = {
       coherent_drive: coherentDrive,
       vacuum_signal: vacSignal,
       vacuum_other_weak: vacOther
-    }), 'Assertion calculation failed');
+    };
+    const data = cascade
+      ? await postJson('/api/combination/cascade', buildWmRequest(input, ctx, assertUseGain, { ...assertions, cascade_symbol: cascade.name }), 'Cascaded assertion calculation failed')
+      : await postJson('/api/combination/assert', buildWmRequest(input, ctx, assertUseGain, assertions), 'Assertion calculation failed');
 
     cachedAssertResult = data;
     currentAssertLatex = (assertUseGain ? data.latex_g : data.latex_t) || data.latex || '';
