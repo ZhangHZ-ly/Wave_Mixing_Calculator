@@ -47,6 +47,8 @@ from .wave_mixing import (
     eval_wm_solve,
     compute_val_leading_order,
     analyze_expression_terms,
+    as_order,
+    order_text,
     eval_operator_combination,
     eval_combination_assertions,
 )
@@ -91,6 +93,8 @@ __all__ = [
     'eval_wm_solve',
     'compute_val_leading_order',
     'analyze_expression_terms',
+    'as_order',
+    'order_text',
     'eval_operator_combination',
     'eval_combination_assertions',
     'eval_cascaded_combination',

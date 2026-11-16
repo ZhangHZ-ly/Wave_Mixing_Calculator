@@ -330,6 +330,9 @@ In down-conversion (`dc=True`) the strong driving field is $a_0$; in frequency c
 | `pm` | phase mismatch $\Delta k$ (real) |
 | `nm` | number of mode pairs $n_m$ |
 | `_g` | dummy parametric gain $g$ |
+| `alpha_0`, `alpha_2` | coherent amplitudes of the strong driving field (down-conversion and four-wave mixing: $a_0$; state transfer: $a_2$) |
+| `beta_0`, `beta_1`, `beta_2`, `betas` | coherent amplitudes of a seeded weak mode, `betas[j]` = `beta_j` |
+| `gain`, `g_hat` | scalar parametric gain $g$ (real) and the gain operator $\hat g$ (non-commutative) used by the gain display |
 
 ### Multimode operators
 
@@ -367,7 +370,7 @@ FWMSolver()
 Perturbative solvers of the Heisenberg equations. A solver is a read-only sequence: `solver.get_sol(order)` returns the 3-tuple of `WMWrapper` objects `(a_0(t), a_1(t), a_2(t))` accurate up to `order`, each labeled with its actual accuracy order (`solver.sol_orders(order)`: in TWM the weak fields are corrected at even orders and the driving field at odd orders only, so a solution is accurate up to the order before its next correction), and `solver.sol_expr(mode, order)` returns the corresponding SymPy expression (including the phase factors of a mismatched process).
 
 - **`TWMSolver`** — three-wave mixing driven by one strong field (pump for `dc=True`, idler for `dc=False`). The strong field is of order $-1$, the weak fields of order 0, and $\chi$ of order 1. Orders $\ge -1$ are solved recursively on demand and cached, so the first call of a high order can be slow. `mismatch=True` keeps a symbolic $\Delta k$.
-- **`FWMSolver`** — four-wave mixing with a degenerate monochromatic pump of order $-1/2$, including self- and cross-phase modulation. The solutions of orders $-1$, $0$ and $1$ (first pump-depletion correction) are computed at construction. Each stored solution carries the highest order it applies to: the pump, of leading order $-1/2$ with its first depletion correction at $1/2$, applies up to order 0 (solutions $-1$, $0$) and 1 (solution 1); the weak fields, whose first correction (order 1) is not computed, up to order $1/2$ ($-1/2$ for the vanishing solution $-1$). Products of them, and hence Tab 3 results, may thus be accurate to a lower order than the preset (e.g. $1/2$ for $\hat N_0$ at preset order 1).
+- **`FWMSolver`** — four-wave mixing with a degenerate monochromatic pump, including self- and cross-phase modulation. The pump is of order $-1$, the weak fields of order 0, and $\chi$ of order 2, so the parametric gain $\chi a_0^2$ and the phase modulation $\chi \hat N_0$ are of order 0 and all orders are integers. Three solutions are computed at construction: the undepleted pump alone, with the weak fields, and with the first pump-depletion correction. In each one, every mode carries the highest order it applies to. The pump's first depletion correction is at order 1, so it applies up to order 0 in the first two solutions and up to order 2 in the third. The weak fields' first correction (order 2) is not computed, so they apply up to order 1 ($-1$ in the first solution, where they vanish). The order of a solution is the lowest of its modes, so the three solutions have orders $-1$, $0$ and $1$ (`FWMSolver.orders`). `get_sol(order)` returns the highest solution whose order does not exceed `order`, so any order above 1 gives the order-1 solution; orders below $-1$ raise `ValueError`. Products of them, and hence Tab 3 results, may thus be accurate to a lower order than the preset (e.g. 1 for $\hat N_0$ at preset order 2).
 
 Common attributes: `processor` (the underlying `WMProcessor`), `dc`, `nd` (number operator of the driving field), `pe` (the `PE` used), `gc` (gain coefficient, $g = g_c\,t$).
 
@@ -384,7 +387,7 @@ a_0*(1 + Σ(1 + N_(a_1) + N_(a_2))*N_(a_0)**(-1)/4 - Σ(1 + N_(a_1) + N_(a_2))*N
 -2*I*χ*BP(a_0; 2)*(Δk*(-Δk + 4*χ*N_(a_0)))**(-1/2)*sinh(_t*sqrt(Δk*(-Δk + 4*χ*N_(a_0)))/2)*Dagger(a_2) + (I*(-Δk + 2*χ*N_(a_0))*(Δk*(-Δk + 4*χ*N_(a_0)))**(-1/2)*sinh(_t*sqrt(Δk*(-Δk + 4*χ*N_(a_0)))/2) + cosh(_t*sqrt(Δk*(-Δk + 4*χ*N_(a_0)))/2))*a_1
 ```
 
-Module-level instances: `twm_processors` (`(WMProcessor(False), WMProcessor(True))`, indexed by `dc`) and `fwm_processor`.
+Module-level instances: `twm_processors` (`(WMProcessor(False), WMProcessor(True))`, indexed by `dc`) and `fwm_processor` (`WMProcessor(True, nlc_order=2)`).
 
 ### `WMWrapper`
 
@@ -411,6 +414,7 @@ A finite `order` given to the constructor truncates the content at that order (`
 | `expand(order, with_order=False)` | Truncate / expand to a perturbative order; with `with_order=True`, yields `(term, order)` pairs. |
 | `eval_vacuum(vac_modes)` | (Partial) expectation value with the given weak modes (`'a_1'`, `'a_2'`, …) in vacuum. |
 | `eval_coherent(order=0)` | Expectation value with the driving field in a coherent state $|\alpha\rangle$ (`alpha_0` or `alpha_2`). |
+| `seeded_separate(mode=1, vac_c=True, observed=False)` | (Partial) expectation value with one separate weak mode $b$ seeded in the coherent state $|\beta_j\rangle$ (the global `beta_j`, $j$ the mode index), coupled with its partner in vacuum (`vac_c`) or in its own coherent state. `mode`: down-conversion `1` seeds the signal (coupled with the idler) and `0` a degenerate mode (signal = idler, coupled with itself; `vac_c` has no effect); state transfer: the index of the seeded mode (`1` signal, `0` pump); four-wave mixing: no effect (signal). The seeded modes are of order 0, so the average is exact. Every multimode operator is split into its $b$ part and the rest $\Sigma'$, which keeps the symbols and $n_m$ of the full sum. COP powers are expanded binomially, $(B + \Sigma')^e = \sum_j \binom{e}{j} B^j \Sigma'^{\,e-j}$, and the tails become polynomials in $\hat N_b$. A degenerate $b$ part follows the degenerate map of `to_single_mode`. The $b$ operators of each term are then normal-ordered ($b^n b^{\dagger e} = \sum_k \binom{n}{k}\binom{e}{k} k!\, b^{\dagger e-k} b^{n-k}$) and averaged, giving polynomials in $\beta$ and $\bar\beta$. With `observed=True`, the single-mode weak-field operators (key and single-mode patterns) are the seeded modes and are averaged too; a degenerate seed can only be observed through the key. After `to_single_mode()` there is no sum left, so the weak modes themselves are seeded. |
 | `to_single_mode(degenerate=False)` | Replace multimode operators by single-mode ones ($n_m = 1$). With `degenerate=True` (dc only), map onto degenerate down-conversion (signal = idler = $a_1$, $H = \chi(a_0^\dagger a_1^2 + a_0 a_1^{\dagger 2})/2$) via $\sum a_1 a_2 \to a_1^2/2$, $\sum(1 + \hat N_1 + \hat N_2) \to \hat N_1 + 1/2$, $\sum(\hat N_j + d) \to (\hat N_1 + d)/2$, $n_m \to 1/2$, $a_2 \to a_1$. This map preserves all commutators the multimode solutions use, so it is exact for the solver outputs and for `@` products (a multimode sum $\sum \hat N_j$ becomes $\hat N_1/2$). Take single-mode products (`*`) of weak-field operators after the conversion. |
 | `diff(*symbols, gc=None)` | Derivative (w.r.t. time or gain). |
 | `apply(f, on_npf=False)` | Apply `f` to every number-operator coefficient. |
@@ -434,10 +438,10 @@ The last result is the pump depletion $\langle \hat N_0(t)\rangle = |\alpha_0|^2
 ### `WMProcessor`
 
 ```python
-WMProcessor(dc=True, drive_order=-1)
+WMProcessor(dc=True, nlc_order=1)
 ```
 
-Base processor shared by the solvers and wrappers of one process: it stores the mode structure, the perturbative expander (`pe`), and the low-level dict algebra. `drive_order` is the order of the strong driving field ($-1$ for three-wave mixing, $-1/2$ for four-wave mixing).
+Base processor shared by the solvers and wrappers of one process: it stores the mode structure, the perturbative expander (`pe`), and the low-level dict algebra. The strong driving field is of order $-1$ and the weak fields of order 0; `nlc_order` is the order of $\chi$ (1 for three-wave mixing, 2 for four-wave mixing, so that the parametric gain is of order 0).
 
 | Member | Description |
 |---|---|

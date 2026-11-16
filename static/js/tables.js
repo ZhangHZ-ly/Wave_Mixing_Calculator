@@ -102,7 +102,7 @@ function renderWorkspaceTable(ws) {
             typeBadge += ` <span class="badge badge-danger" title="Created under ${lbl(itemDeg)} Single Mode, incompatible with the current ${lbl(isDegenerate)} Single Mode preset!">degeneracy conflict</span>`;
             attrOrDef = `[WARNING: Single-Mode Degeneracy Inconsistency]\nCreated under ${lbl(itemDeg)} Single Mode, but current preset is ${lbl(isDegenerate)} Single Mode.\n\n` + attrOrDef;
           }
-        } else if (typeof item.order === 'number' && !isNaN(orderVal) && item.order < orderVal) {
+        } else if (isOrder(item.order) && !isNaN(orderVal) && orderValue(item.order) < orderVal) {
           tr.classList.add('row-warning');
         }
       } else {
@@ -184,7 +184,7 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
   const AUTO_NOTE = ' <span class="details-note">(auto-update)</span>';
   const editableOrderBadge = (leadOrd) =>
     `<span class="badge badge-gray badge-editable" title="Click text or badge to edit leading order" onclick="startLeadingOrderInlineEdit(event, '${item.id}', '${ws}')">${leadOrd} <span class="details-note" style="margin-left: 4px; font-size: 0.75rem;">✏️</span></span>`;
-  const itemOrder = (typeof item.order === 'number') ? item.order : 0;
+  const itemOrder = orderText(item.order);
 
   const rows = [];
   function addRow(label, htmlVal) {
@@ -215,7 +215,7 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
     addRow('Accuracy (Order)', EXACT_BADGE);
     if (isBuiltinSymbol(item)) {
       const isNlc = item.builtinKey === 'nlc' || item.name === 'nlc';
-      addRow('Leading Order', `<span class="badge badge-gray">${isNlc ? 1 : 0}</span> <span class="details-note">(Built-in)</span>`);
+      addRow('Leading Order', `<span class="badge badge-gray">${isNlc ? wmNlcOrder(curProcess) : 0}</span> <span class="details-note">(Built-in)</span>`);
     } else {
       addRow('Leading Order', editableOrderBadge(itemOrder));
     }
@@ -228,10 +228,11 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
     let isStrong, leadOrd;
     if (curProcess === 'fwm') {
       isStrong = (item.modeIndex === 0);
-      leadOrd = isStrong ? -0.5 : 0;
-      const evolvedAccuracy = 1;
+      leadOrd = isStrong ? -1 : 0;
+      // the FWM solution of order 1 is the highest available: pump up to order 2, weak fields up to 1
+      const evolvedAccuracy = isStrong ? FWM_EVOLVED_CAPS.strong : FWM_EVOLVED_CAPS.weak;
       const accCls = evolvedAccuracy < curOrder ? 'badge-warning' : 'badge-success';
-      addRow('Accuracy (Order)', `<span class="badge ${accCls}">${evolvedAccuracy}</span> <span class="details-note">(auto-update (maximum 1))</span>`);
+      addRow('Accuracy (Order)', `<span class="badge ${accCls}">${evolvedAccuracy}</span> <span class="details-note">(auto-update (maximum ${evolvedAccuracy}))</span>`);
     } else {
       isStrong = (curDc && item.modeIndex === 0) || (!curDc && item.modeIndex === 2);
       leadOrd = isStrong ? -1 : 0;
@@ -245,14 +246,14 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
     addRow('Accuracy (Order)', EXACT_BADGE);
     addRow('Leading Order', '<span class="badge badge-gray">0</span>');
   } else if (item.type === 'named_expr') {
-    if (typeof item.order === 'number') {
-      addRow('Accuracy (Order)', item.order < curOrder
+    if (isOrder(item.order)) {
+      addRow('Accuracy (Order)', orderValue(item.order) < curOrder
         ? `<span class="badge badge-warning">${item.order}</span> <span class="details-note">(preset ${curOrder})</span>`
         : `<span class="badge badge-success">${item.order}</span>`);
     } else {
       addRow('Accuracy (Order)', '<span class="badge badge-gray">N/A</span>');
     }
-    const leadOrd = (typeof item.leadingOrder === 'number') ? item.leadingOrder : 0;
+    const leadOrd = orderText(item.leadingOrder);
     addRow('Leading Order', `<span class="badge badge-gray">${leadOrd}</span>`);
   }
 
@@ -310,9 +311,11 @@ function startLeadingOrderInlineEdit(event, itemId, ws) {
   editContainer.style.cssText = 'display: inline-flex; align-items: center; gap: 6px;';
 
   const input = document.createElement('input');
-  input.type = 'number';
-  input.step = 'any';
-  input.value = (typeof item.order === 'number') ? item.order : 0;
+  // text input: fractions such as 1/2 are kept exact
+  input.type = 'text';
+  input.inputMode = 'decimal';
+  input.placeholder = 'e.g. 1/2';
+  input.value = orderText(item.order);
   input.style.cssText = 'width: 70px; padding: 2px 8px; font-size: 0.85rem; font-weight: 600; '
     + 'border: 1px solid var(--primary-color); border-radius: 4px; outline: none; '
     + 'box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2); background: #fff;';
@@ -326,12 +329,18 @@ function startLeadingOrderInlineEdit(event, itemId, ws) {
 
   let committed = false;
 
-  function finish(save) {
+  // an invalid order keeps the input open on Enter and is discarded on blur
+  function finish(save, onBlur = false) {
     if (committed) return;
+    const parsed = save ? parseOrderInput(input.value) : null;
+    if (save && parsed === null) {
+      showToast('Invalid order: enter an integer, a decimal or a fraction such as 1/2.');
+      if (!onBlur) return;
+      save = false;
+    }
     committed = true;
     if (save) {
-      const parsed = parseFloat(input.value);
-      item.order = isNaN(parsed) ? 0 : parsed;
+      item.order = parsed;
 
       // Keep the open modal's order input in sync
       if (activeEditItem && activeEditItem.id === item.id) {
@@ -352,7 +361,7 @@ function startLeadingOrderInlineEdit(event, itemId, ws) {
       finish(e.key === 'Enter');
     }
   });
-  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('blur', () => finish(true, true));
 
   badgeEl.replaceWith(editContainer);
   input.focus();
@@ -404,7 +413,7 @@ function openSymbolModal(itemId, ws) {
   document.getElementById('sym-notes').value = (item && item.notes) || '';
 
   const showOrder = isWm && !(item && isBuiltinSymbol(item));
-  toggleOrderGroup('sym-order-group', 'sym-order', showOrder, (item && typeof item.order === 'number') ? item.order : 0);
+  toggleOrderGroup('sym-order-group', 'sym-order', showOrder, orderText(item && item.order));
   toggleDetailsGroup('sym-details-group', 'sym-details-body', !!item && isWm);
   document.getElementById('symbolModal').classList.add('active');
 }
@@ -436,8 +445,15 @@ function saveSymbol() {
   }
   const notes = document.getElementById('sym-notes').value.trim();
   const isWm = (activeWorkspace === 'tab3');
+  // leading order: from the modal's order input if present, otherwise the item's current order
+  // (edited in place in the details table)
   const symOrderEl = document.getElementById('sym-order');
-  const symOrder = (symOrderEl && isWm) ? (parseFloat(symOrderEl.value) || 0) : 0;
+  const symOrder = (symOrderEl && isWm) ? parseOrderInput(symOrderEl.value)
+    : orderText(activeEditItem && activeEditItem.order);
+  if (symOrder === null) {
+    alert('Invalid order: enter an integer, a decimal or a fraction such as 1/2.');
+    return;
+  }
 
   const check = validateVariableName(name);
   if (!check.valid) {
@@ -457,7 +473,7 @@ function saveSymbol() {
       displayName: disp,
       ...flags,
       notes: notes,
-      order: isBuiltinSymbol(base) ? (arr[dupIndex].order || 0) : symOrder
+      order: isBuiltinSymbol(base) ? orderText(arr[dupIndex].order) : symOrder
     });
     saveWorkspaceToStorage(activeWorkspace);
     closeModal('symbolModal');
@@ -499,7 +515,7 @@ function openOperatorModal(defaultKind, itemId, ws) {
   document.getElementById('op-kind-group').style.display = isEvolved ? 'none' : 'flex';
   if (!isEvolved) document.getElementById('op-kind').value = kind;
   toggleOrderGroup('op-order-group', 'op-order', !isEvolved && isWm && kind === 'boson',
-    (item && typeof item.order === 'number') ? item.order : 0);
+    orderText(item && item.order));
 
   document.getElementById('op-var-name').value = item ? item.name : (kind === 'boson' ? 'a' : 'c');
   document.getElementById('op-disp').value = item ? (item.displayName || item.name) : '';
@@ -516,8 +532,15 @@ function saveOperator() {
   const notes = document.getElementById('op-notes').value.trim();
   const isWm = (activeWorkspace === 'tab3');
   const hasOrder = isWm && kind === 'boson';
+  // leading order: from the modal's order input if present, otherwise the item's current order
+  // (edited in place in the details table)
   const opOrderEl = document.getElementById('op-order');
-  const opOrder = (opOrderEl && hasOrder) ? (parseFloat(opOrderEl.value) || 0) : 0;
+  const opOrder = (opOrderEl && hasOrder) ? parseOrderInput(opOrderEl.value)
+    : orderText(hasOrder && activeEditItem ? activeEditItem.order : null);
+  if (opOrder === null) {
+    alert('Invalid order: enter an integer, a decimal or a fraction such as 1/2.');
+    return;
+  }
 
   const check = validateVariableName(name);
   if (!check.valid) {
@@ -648,7 +671,7 @@ function openSaveAnswerModal(ws) {
     if (orderInfo) orderInfo.style.display = 'none';
   } else if (orderInfo && orderInput) {
     orderInfo.style.display = 'block';
-    const leadingOrd = (cachedWmResult && typeof cachedWmResult.leading_order === 'number') ? cachedWmResult.leading_order : 0;
+    const leadingOrd = orderText(cachedWmResult && cachedWmResult.leading_order);
     const curProc = cachedWmResult?.process || getWmProcess();
     const procLabel = PROCESS_LABELS[curProc] || curProc;
     const isSingleMode = (cachedWmResult && typeof cachedWmResult.single_mode === 'boolean')
@@ -661,8 +684,8 @@ function openSaveAnswerModal(ws) {
     // accuracy order of the result (from the product rule; may fall below the preset when
     // referenced variables of insufficient order were used)
     const presetOrd = parseInt(orderInput.value);
-    const resOrd = (cachedWmResult && typeof cachedWmResult.order === 'number') ? cachedWmResult.order : presetOrd;
-    const lowered = !isNaN(presetOrd) && resOrd < presetOrd ? ` (below preset ${presetOrd})` : '';
+    const resOrd = orderText(cachedWmResult && cachedWmResult.order, String(presetOrd));
+    const lowered = !isNaN(presetOrd) && orderValue(resOrd) < presetOrd ? ` (below preset ${presetOrd})` : '';
     document.getElementById('wm-save-order-val').textContent = `${resOrd}${lowered} (Leading Order: ${leadingOrd}) | ${procLabel} | ${modeLabel}`;
   }
 
@@ -766,8 +789,8 @@ async function saveAnswerExpression() {
       exprStr_g: exprStrG,
       latex_t: latexT,
       latex_g: latexG,
-      order: (cachedWmResult && typeof cachedWmResult.order === 'number') ? cachedWmResult.order : currentWmOrder,
-      leadingOrder: (cachedWmResult && typeof cachedWmResult.leading_order === 'number') ? cachedWmResult.leading_order : 0,
+      order: orderText(cachedWmResult && cachedWmResult.order, isNaN(currentWmOrder) ? null : String(currentWmOrder)),
+      leadingOrder: orderText(cachedWmResult && cachedWmResult.leading_order),
       dc: curProcess !== 'twm_fc',
       process: curProcess,
       single_mode: (cachedWmResult && typeof cachedWmResult.single_mode === 'boolean')

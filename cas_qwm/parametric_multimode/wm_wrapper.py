@@ -1,6 +1,8 @@
 import copy
 from collections import defaultdict
+from functools import lru_cache
 from itertools import product
+from math import comb, factorial
 from sympy.core.singleton import S
 from sympy.core.sympify import sympify
 from sympy.core.expr import Expr
@@ -9,6 +11,10 @@ from sympy.core.add import Add
 from sympy.core.mul import Mul
 from sympy.core.power import Pow
 from sympy.core.function import diff, _mexpand
+from sympy.core.numbers import Integer
+from sympy.functions.elementary.complexes import Abs, conjugate
+from sympy.polys.polyerrors import PolynomialError
+from sympy.polys.polytools import Poly
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.dagger import Dagger
 from ..pattern_perturb import PF, PF0, PF1, pf
@@ -16,7 +22,8 @@ from ..op_pattern import BosonNum, BosonPat, FermionPat
 from ..op_pattern.boson_pattern import fac
 from ..pattern_perturb.pattern_form import pf_add, _vpk, bn_simp
 from .multimode import MultimodeNum, MultimodeNum2, MultimodeCOP
-from .wm_processor import (WMProcessor, vac_pf,
+from ..wm_variables import alpha_0, alpha_2, betas
+from .wm_processor import (WMProcessor, vac_pf, _merge_dicts,
                            _t_mul, _tdz, t_, _g, nlc, nm)
 
 __all__ = ['WMWrapper']
@@ -56,6 +63,69 @@ def _as_processor(dc) -> WMProcessor:
         return dc
     from .wm_solver import twm_processors  # deferred: wm_solver imports this module
     return twm_processors[bool(dc)]
+
+# ---- coherent seeding of one mode pair (see WMWrapper.eval_seeded) ----
+# A single-mode operator word is a tuple of (kind, e): kind 0 = b^e, 1 = b†^e, 2 = N_b^e.
+
+def _pat_word(b) -> list:
+    """Word of a single-mode boson pattern (BosonOp, BosonNum or BosonPat), left to right."""
+    if isinstance(b, BosonNum):
+        return [(1, 1), (0, 1)]
+    if isinstance(b, BosonOp):
+        return [(0 if b.is_annihilation else 1, 1)]
+    ann, word = bool(b.args[1]), []
+    for e in b.exps:
+        word.append((0 if ann else 1, int(e)))
+        ann = not ann
+    return word
+
+def _compact(word) -> tuple:
+    """Merges adjacent factors of the same kind and drops the trivial ones."""
+    out = []
+    for kind, e in word:
+        if not e:
+            continue
+        if out and out[-1][0] == kind:
+            out[-1] = (kind, out[-1][1] + e)
+        else:
+            out.append((kind, e))
+    return tuple(out)
+
+def _beta_mono(beta, m: int, n: int):
+    """Coherent average β̄^m β^n, with the pairs written as |β|^2."""
+    k = min(m, n)
+    rest = beta ** (n - k) if n > m else conjugate(beta) ** (m - k)
+    return Abs(beta) ** (2 * k) * rest
+
+@lru_cache(maxsize=4096)
+def _seed_avg(word: tuple, beta):
+    """
+    Coherent-state average <β| w |β> of a single-mode word, computed exactly by normal
+    ordering (b^n b†^e = Σ_k C(n,k) C(e,k) k! b†^(e-k) b^(n-k)); β = 0 gives the vacuum.
+    """
+    no = {(0, 0): 1}  # normal-ordered form {(m, n): c} of Σ c b†^m b^n
+
+    def times_a(d, e):
+        return {(m, n + e): c for (m, n), c in d.items()}
+
+    def times_c(d, e):
+        out = defaultdict(int)
+        for (m, n), c in d.items():
+            for k in range(min(n, e) + 1):
+                out[(m + e - k, n - k)] += c * comb(n, k) * comb(e, k) * factorial(k)
+        return out
+
+    for kind, e in word:
+        if kind == 0:
+            no = times_a(no, e)
+        elif kind == 1:
+            no = times_c(no, e)
+        else:
+            for _ in range(e):
+                no = times_a(times_c(no, 1), 1)
+    if beta == 0:
+        return Integer(no.get((0, 0), 0))
+    return Add(*(c * _beta_mono(beta, m, n) for (m, n), c in no.items() if c))
 
 def _mmn_only(expr, weak_names) -> bool:
     """True if expr contains no unpaired weak-field single-mode operator or multimode COP."""
@@ -485,7 +555,7 @@ class WMWrapper:
         """
         p = self.processor
         if alpha is None:
-            alpha = Symbol('alpha_0') if p.dc else Symbol('alpha_2')
+            alpha = alpha_0 if p.dc else alpha_2
         sub_dict = {p.nd.name: alpha}
 
         def _cohr_dict(d: dict) -> dict:
@@ -499,6 +569,196 @@ class WMWrapper:
             return WMWrapper(p, _cohr_dict(self.dict_repr), None, acc, False)
         res = {b: cd for b, d in self.dict_repr.items() if (cd := _cohr_dict(d))}
         return WMWrapper(p, res, self.b_left if res else None, acc, False)
+
+    def seeded_separate(self, mode: int = 1, vac_c: bool = True, observed: bool = False) -> 'WMWrapper':
+        """
+        Evaluates this WMWrapper with one separate mode b of the weak fields seeded in the
+        coherent state |β_j> (the global symbols beta_j, j the index of the mode), coupled with
+        its partner mode in another coherent state or in vacuum:
+
+        - mode: the seeded mode. Three-wave down-conversion: 1 seeds the signal b_1 (|β_1>),
+          coupled with the idler b_2; 0 seeds a degenerate mode (signal = idler = b, |β_1>),
+          coupled with itself. State transfer: the index (1: signal, 0: pump) of the seeded
+          mode, coupled with the other weak mode. Four-wave mixing: no effect (signal b_1,
+          coupled with the idler b_2).
+        - vac_c: the coupled mode is in vacuum (True) or in its coherent state |β_k> (False);
+          no effect for a degenerate seed.
+        - observed: the single-mode weak-field operators of the expression (the key and the
+          patterns of single-mode products) are the seeded modes themselves and are averaged
+          as well; otherwise they stand for another, unseeded mode and are kept. For a
+          degenerate seed, only the key can be observed (single-mode products of signal and
+          idler were taken with [a_1, a_2†] = 0, which a degenerate mode breaks).
+
+        The seeded modes are of order 0 like the other weak modes, so the average is taken
+        exactly instead of perturbatively. Every multimode operator is split into the b part
+        and the rest, Σ X = X_b + Σ' X, where the rest keeps the symbols (and the mode count
+        n_m) of the full sum; powers of the multimode COPs are expanded binomially,
+        (B + Σ')^e = Σ_j C(e, j) B^j Σ'^(e-j), since B commutes with the rest. A degenerate b
+        part follows the degenerate map of to_single_mode: Σ(a_1 a_2) -> b²/2,
+        Σ(1 + N_1 + N_2) -> N_b + 1/2, Σ(N_j + d) -> (N_b + d)/2. The b operators of each
+        term (key, COP parts, patterns, then the tail, polynomial in N_b) are normal-ordered
+        and averaged over the coherent states, giving polynomials in β and conj(β).
+
+        After to_single_mode there is no multimode sum left: with `observed`, the weak modes
+        themselves are then in these states.
+        """
+        p = self.processor
+        from .wm_solver import fwm_processor  # deferred: wm_solver imports this module
+        mode = 1 if p is fwm_processor else int(mode)
+        if mode not in (0, 1):
+            raise ValueError(f'The seeded mode must be 0 or 1, not {mode}')
+        index = lambda n: int(str(n).rsplit('_', 1)[-1])
+        names = p.a[0].names
+        if p.dc and mode == 0:  # degenerate seed of amplitude beta_1
+            return self._eval_seeded({names[0]: betas[1]}, observed, degenerate=True)
+        # down-conversion / four-wave mixing: the signal (index 1); state transfer: index `mode`
+        seeded = next(n for n in names if index(n) == mode)
+        coupled = next(n for n in names if n != seeded)
+        amps = {seeded: betas[index(seeded)], coupled: S.Zero if vac_c else betas[index(coupled)]}
+        return self._eval_seeded(amps, observed)
+
+    def _eval_seeded(self, amps: dict, observed: bool = False, degenerate: bool = False) -> 'WMWrapper':
+        """
+        Coherent average over the seeded mode pair b of the two weak fields (see
+        seeded_separate): `amps` maps the weak-mode names to their amplitudes (0: vacuum);
+        with `degenerate`, both weak fields share the single seeded mode, of the amplitude
+        of the first name.
+        """
+        p = self.processor
+        names = p.a[0].names
+        to_name = lambda m: sympify(getattr(m, 'name', m))
+        amps = {to_name(m): sympify(v) for m, v in amps.items()}
+        # word slots of the seeded modes: one per weak field, or a single degenerate one
+        slot = dict.fromkeys(names, 0) if degenerate else {n: j for j, n in enumerate(names)}
+        n_slots = 1 if degenerate else 2
+        beta = ((next(iter(amps.values()), S.Zero),) if degenerate
+                else tuple(amps.get(n, S.Zero) for n in names))
+        nbs = tuple(Dummy('N_b') for _ in range(n_slots))
+        # annihilation flags of the two modes in each COP a[0], a[1]
+        cop_flags = [(cop.annih1, cop.annih2) for cop in p.a]
+        half = S.Half
+
+        def _split(m):
+            """Replacement of a multimode number by the rest + its b part (as N_b dummies)."""
+            if isinstance(m, MultimodeNum):
+                if m.name not in slot:
+                    return m
+                if degenerate:  # Σ(N_j + d) -> (N_b + d)/2
+                    return m + half * (nbs[0] + m.displacement)
+                return m + nbs[slot[m.name]] + m.displacement
+            n1, n2 = m.names
+            if degenerate:  # Σ(1 + N_1 + N_2) -> N_b + 1/2
+                return m + nbs[0] + half
+            if m.parity:  # Σ(N_2 - N_1)
+                return m + nbs[slot[n2]] - nbs[slot[n1]]
+            return m + 1 + nbs[slot[n1]] + nbs[slot[n2]]  # Σ(1 + N_1 + N_2)
+
+        def _tail_terms(t):
+            """{(k_1, ...): coefficient} of a tail as a polynomial in the N_b dummies."""
+            subs = {m: _split(m) for m in t.atoms(MultimodeNum, MultimodeNum2)}
+            if observed:
+                for bn in t.atoms(BosonNum):
+                    if bn.name in slot:
+                        if degenerate:
+                            raise ValueError('A degenerate seed can only be observed through '
+                                             'single weak-field operators, not their products')
+                        subs[bn] = nbs[slot[bn.name]]
+            t = t.xreplace(subs)
+            if not t.has(*nbs):
+                return {(0,) * n_slots: t}
+            # the number operators of the tail commute: commuting dummies for Poly
+            cm = {o: Dummy() for o in t.atoms(MultimodeNum, MultimodeNum2, BosonNum)}
+            back = {d: o for o, d in cm.items()}
+            try:
+                terms = Poly(t.xreplace(cm), *nbs).terms()
+            except PolynomialError:
+                raise ValueError('The seeded mode enters the expression non-polynomially')
+            return {mon: c.xreplace(back) for mon, c in terms}
+
+        def _cop_splits(k):
+            """(coefficient, rest key, words of the b parts per slot) of a COP key."""
+            if k == (None,):
+                yield S.One, k, tuple([] for _ in range(n_slots))
+                return
+            i, *exps = k
+            blocks = []
+            for e in exps:
+                blocks.append((int(i), int(e)))
+                i = not i
+            for js in product(*(range(e + 1) for _, e in blocks)):
+                c = S.One
+                words = tuple([] for _ in range(n_slots))
+                for (ci, e), j in zip(blocks, js):
+                    c *= comb(e, j)
+                    if degenerate:  # Σ(a_1 a_2) -> b²/2
+                        c *= half ** j
+                    for m in (0, 1):
+                        words[slot[names[m]]].append((0 if cop_flags[ci][m] else 1, j))
+                yield c, _tdz(k[0], [e - j for (_, e), j in zip(blocks, js)]), words
+
+        def _seed_dict(d: dict, key_words) -> dict:
+            """
+            Seeded average of a {COP key: PF} dict; key_words = (left, right) words per slot
+            of the averaged single-mode key.
+            """
+            kl, kr = key_words
+            tables, npfs = defaultdict(lambda: defaultdict(list)), defaultdict(list)
+            for k, v in d.items():
+                splits = list(_cop_splits(k))
+                # (patterns, fermion patterns, tail, whether it is the non-pattern part)
+                entries = [(bs, fs, t, False) for (bs, fs), t in v.table.items()]
+                if v.npf != 0:
+                    entries.append(((), (), v.npf, True))
+                for bs, fs, t, is_npf in entries:
+                    pat_words, rest_bs = tuple([] for _ in range(n_slots)), []
+                    for b in bs:
+                        if observed and getattr(b, 'name', None) in slot:
+                            if degenerate:
+                                raise ValueError('A degenerate seed can only be observed through '
+                                                 'single weak-field operators, not their products')
+                            pat_words[slot[b.name]].extend(_pat_word(b))
+                        else:
+                            rest_bs.append(b)
+                    if is_npf and observed and any(getattr(b, 'name', None) in slot
+                                                   for b in t.atoms(BosonOp, BosonPat)):
+                        raise ValueError('Seeded single-mode operators in a non-pattern part')
+                    poly = _tail_terms(t)
+                    for c, rest_k, cop_words in splits:
+                        for mon, coeff in poly.items():
+                            avg = c
+                            for m in range(n_slots):
+                                word = _compact(kl[m] + cop_words[m] + pat_words[m]
+                                                + [(2, mon[m])] + kr[m])
+                                avg = avg * _seed_avg(word, beta[m])
+                                if avg == 0:
+                                    break
+                            if avg == 0:
+                                continue
+                            if is_npf:
+                                npfs[rest_k].append(avg * coeff)
+                            else:
+                                tables[rest_k][(tuple(rest_bs), fs)].append(avg * coeff)
+            out = {}
+            for rk in set(tables) | set(npfs):
+                pv = PF({key: s for key, ts in tables[rk].items() if (s := Add(*ts)) != 0},
+                        Add(*npfs[rk]))
+                if pv:
+                    out[rk] = pv
+            return out
+
+        empty = tuple([] for _ in range(n_slots))
+        if self.b_left is None:
+            return WMWrapper(p, _seed_dict(self.dict_repr, (empty, empty)), None, self.order, False)
+        if not observed:
+            res = {b: sd for b, d in self.dict_repr.items() if (sd := _seed_dict(d, (empty, empty)))}
+            return WMWrapper(p, res, self.b_left if res else None, self.order, False)
+        # the observed single-mode key is a seeded mode: it is averaged with the rest
+        parts = []
+        for b, d in self.dict_repr.items():
+            kw = tuple([] for _ in range(n_slots))
+            kw[slot[b.name]].append((0 if b.is_annihilation else 1, 1))
+            parts.append(_seed_dict(d, (kw, empty) if self.b_left else (empty, kw)))
+        return WMWrapper(p, _merge_dicts(parts), None, self.order, False)
 
     @property
     def expr(self) -> Expr:

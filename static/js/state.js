@@ -193,7 +193,7 @@ function extractWorkspaceDefinitions(ws) {
     is_integer: !!s.isInteger,
     is_nonnegative: !!s.isNonnegative,
     is_positive: !!s.isPositive,
-    order: typeof s.order === 'number' ? s.order : 0,
+    order: orderText(s.order),
     builtin_key: s.builtinKey || null
   }));
 
@@ -204,7 +204,7 @@ function extractWorkspaceDefinitions(ws) {
         kind: op.kind || 'boson',
         name: op.name,
         display_name: op.displayName || op.name,
-        order: typeof op.order === 'number' ? op.order : 0
+        order: orderText(op.order)
       };
     } else {
       return {
@@ -234,8 +234,8 @@ function extractWorkspaceDefinitions(ws) {
       latex: ne.latex || null,
       latex_t: ne.latex_t || null,
       latex_g: ne.latex_g || null,
-      order: ne.order,
-      leading_order: typeof ne.leadingOrder === 'number' ? ne.leadingOrder : (ne.leading_order ?? 0),
+      order: orderText(ne.order, null),
+      leading_order: orderText(isOrder(ne.leadingOrder) ? ne.leadingOrder : ne.leading_order),
       dc: neDc,
       process: neProc,
       single_mode: typeof ne.single_mode === 'boolean' ? ne.single_mode : null,
@@ -246,11 +246,64 @@ function extractWorkspaceDefinitions(ws) {
   return { symbols, operators, mmOperators, namedExprs };
 }
 
+// Perturbative orders are stored and exchanged with the backend as exact text ('-2', '1/2'),
+// which the backend parses as SymPy numbers (Rationals), so that fractions stay exact.
+// Numbers (entries stored by older versions) are accepted wherever an order is read.
+
+// Normalized order text of an input (integer, decimal or fraction), or null if invalid
+function parseOrderInput(text) {
+  const s = String(text ?? '').replace(/\s+/g, '');
+  if (s === '') return '0';
+  const frac = s.match(/^([+-]?\d+)\/(\d+)$/);
+  if (frac) {
+    const p = parseInt(frac[1], 10), q = parseInt(frac[2], 10);
+    if (q === 0) return null;
+    return p % q === 0 ? String(p / q) : s;
+  }
+  if (/^[+-]?(\d+\.?\d*|\.\d+)$/.test(s)) {
+    const v = parseFloat(s);
+    return Number.isInteger(v) ? String(v) : s;
+  }
+  return null;
+}
+
+// Whether a stored value is an order (text or number)
+function isOrder(order) {
+  return typeof order === 'number' || (typeof order === 'string' && order !== '');
+}
+
+// Numeric value of a stored order (text or number), for the client-side checks and comparisons
+function orderValue(order) {
+  if (typeof order === 'number') return order;
+  if (typeof order === 'string') {
+    const frac = order.match(/^([+-]?\d+)\/(\d+)$/);
+    if (frac) return parseInt(frac[1], 10) / parseInt(frac[2], 10);
+    const v = parseFloat(order);
+    return isNaN(v) ? 0 : v;
+  }
+  return 0;
+}
+
+// Text of a stored order (as sent to the backend / shown in the tables); `fallback` if absent
+function orderText(order, fallback = '0') {
+  return isOrder(order) ? String(order) : fallback;
+}
+
 // Raw value of the retained-order input (string), or 1 if the input is absent
 function getWmOrderValue() {
   const el = document.getElementById('wm-order');
   return el ? el.value : 1;
 }
+
+// Perturbative order of the nonlinear coupling χ: 1 for TWM, 2 for FWM (so that the parametric
+// gain χ a_0^n is of order 0 with the driving field of order -1 in both)
+function wmNlcOrder(proc) {
+  return proc === 'fwm' ? 2 : 1;
+}
+
+// Highest orders reached by the FWM evolved operators (solution of order 1: the pump is
+// accurate up to order 2, the weak fields up to order 1)
+const FWM_EVOLVED_CAPS = { strong: 2, weak: 1 };
 
 function getWmProcess() {
   const el = document.getElementById('wm-process');
@@ -368,7 +421,7 @@ function formatConflictItemDetails(item) {
   if (item.order !== undefined && item.order !== null && item.order !== '') {
     lines.push(`<div><strong>Accuracy Order:</strong> ${item.order}</div>`);
   }
-  const leadOrd = (typeof item.leadingOrder === 'number') ? item.leadingOrder : (typeof item.leading_order === 'number' ? item.leading_order : (typeof item.order === 'number' ? item.order : null));
+  const leadOrd = [item.leadingOrder, item.leading_order, item.order].find(isOrder) ?? null;
   if (leadOrd !== null) {
     lines.push(`<div><strong>Leading Order:</strong> ${leadOrd}</div>`);
   }

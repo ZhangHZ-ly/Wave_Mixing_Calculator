@@ -3,6 +3,7 @@ import keyword
 from typing import Any, Dict, Tuple
 
 import re
+from cas_qwm.wm_variables import g_hat  # parametric gain operator \hat{g}
 from sympy.core.symbol import Symbol
 from sympy.functions.elementary.exponential import exp
 from sympy.functions.elementary.hyperbolic import cosh, sinh, tanh
@@ -81,9 +82,6 @@ ELEMENTARY_FUNCS = {
     'sqrt': sqrt,
 }
 DAGGER_ALIASES = ('dag', 'Dagger', 'dagger')
-
-# Parametric gain operator symbol \hat{g} (non-commutative to preserve operator ordering)
-g_hat = Symbol(r'\hat{g}', commutative=False)
 
 RESERVED_NAMES = {
     # Constants

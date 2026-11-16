@@ -434,6 +434,23 @@ window.addEventListener('error', function(e) {
           </label>
         </div>
 
+        <!-- Coherent seeding of a separate weak mode, split from the multimode sums -->
+        <div id="assert-seed-row" class="assert-seed-row">
+          <label class="checkbox-label" for="assert-seed">
+            <input type="checkbox" id="assert-seed" onchange="updateAssertLabels()">
+            <span>Coherent seeding in separate</span>
+          </label>
+          <select id="assert-seed-mode" class="assert-seed-select" aria-label="Seeded mode" onchange="updateAssertLabels()"></select>
+          <span>, coupled with</span>
+          <select id="assert-seed-coupled" class="assert-seed-select" aria-label="Coupled mode" onchange="updateAssertLabels()"></select>
+          <label id="assert-seed-observed-group" class="checkbox-label" for="assert-seed-observed" hidden
+                 title="Whether the single-mode weak-field operators of the expression (e.g. a_s alone, or in a single-mode product with *) are the seeded mode itself or another, unseeded mode">
+            <input type="checkbox" id="assert-seed-observed" onchange="updateAssertModeTag()">
+            <span>Single-mode operators in the expression are the seeded mode</span>
+          </label>
+          <span id="assert-seed-note" class="form-tip"></span>
+        </div>
+
         <div class="btn-group">
           <button class="btn btn-primary" onclick="runWmAssertions()">
             Calculate under Assertions

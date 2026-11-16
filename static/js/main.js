@@ -92,8 +92,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!inputEl) continue;
     inputEl.addEventListener('input', () => {
       if (!activeEditItem || !isEditable(activeEditItem)) return;
-      const val = parseFloat(inputEl.value);
-      activeEditItem.order = isNaN(val) ? 0 : val;
+      const val = parseOrderInput(inputEl.value);
+      if (val === null) return;
+      activeEditItem.order = val;
       const detailsBody = document.getElementById(detailsId);
       if (detailsBody) renderItemDetailsTable(activeEditItem, detailsBody, activeWorkspace);
     });

@@ -88,12 +88,12 @@ class WMProcessor:
     objects (Expr, PF, BosonOp, tuple) or external parameters (order, func, vac_modes).
     
     :param dc: down-conversion (True) or frequency-conversion (False) mode structure.
-    :param drive_order: perturbative order of the strong driving-field operator
-    (e.g. -1 for three-wave mixing, -1/2 for four-wave mixing);
-    the two weak fields are always of order 0.
+    :param nlc_order: perturbative order of the nonlinear coupling χ (1 for three-wave mixing,
+    2 for four-wave mixing, so that the parametric gain χ a_0^n is of order 0 in both).
+    The strong driving field is always of order -1, the two weak fields of order 0.
     """
 
-    def __init__(self, dc=True, drive_order=S.NegativeOne):
+    def __init__(self, dc=True, nlc_order=1):
         self.dc = bool(dc)
         self.nd = BosonNum(a_p.name) if dc else BosonNum(a_i.name)
         self.a = ((MultimodeCOP(a_s.name, a_i.name, annih1=0),
@@ -102,7 +102,7 @@ class WMProcessor:
                               MultimodeCOP(a_p.name, a_s.name, 1)))
         self.mmn2 = MultimodeNum2(*self.a[0].args[:3])
         self.base_orders = {**dict.fromkeys(self.a[0].names, S.Zero),
-                            self.nd.name: sympify(drive_order), nlc: S.One}
+                            self.nd.name: S.NegativeOne, nlc: nlc_order}
         self.pe = PE()
         self.pe.register(MultimodeNum)
         self.pe.register(MultimodeNum2)

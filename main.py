@@ -20,6 +20,7 @@ from calculator import (
     normalize_process,
     process_is_dc,
     is_degenerate,
+    order_text,
 )
 
 
@@ -46,7 +47,8 @@ class SymbolDef(BaseModel):
     is_nonnegative: bool = False
     is_positive: bool = False
     builtin_key: Optional[str] = None
-    order: Optional[Union[int, float]] = 0
+    # exact text such as '1/2' (parsed as a Rational by the backend) or a number
+    order: Optional[Union[int, float, str]] = 0
 
 
 class OperatorDef(BaseModel):
@@ -55,7 +57,8 @@ class OperatorDef(BaseModel):
     name: str
     display_name: Optional[str] = None
     mode_index: Optional[int] = 0
-    order: Optional[Union[int, float]] = 0
+    # exact text such as '1/2' (parsed as a Rational by the backend) or a number
+    order: Optional[Union[int, float, str]] = 0
 
 
 class MMOperatorDef(BaseModel):
@@ -72,8 +75,9 @@ class NamedExprDef(BaseModel):
     latex: Optional[str] = None
     latex_t: Optional[str] = None
     latex_g: Optional[str] = None
-    order: Optional[int] = None
-    leading_order: Optional[Union[int, float]] = None
+    # orders as exact text (e.g. '1/2'; numbers from older stored entries are accepted too)
+    order: Optional[Union[int, float, str]] = None
+    leading_order: Optional[Union[int, float, str]] = None
     dc: Optional[bool] = None
     process: Optional[str] = None
     single_mode: Optional[bool] = None
@@ -124,17 +128,19 @@ class AssertionRequest(CombinationRequest):
     coherent_drive: bool = False
     vacuum_signal: bool = False
     vacuum_other_weak: bool = False
+    # coherent seeding of a separate weak mode (None: no seeding); see WMWrapper.seeded_separate:
+    # down-conversion 1 (signal) / 0 (degenerate), state transfer 1 (signal) / 0 (pump)
+    seed_mode: Optional[int] = None
+    # whether the coupled mode is in vacuum (else in its coherent state)
+    seed_vac_c: bool = True
+    # whether the single-mode weak-field operators are the seeded modes (multimode processing)
+    seed_observed: bool = False
 
 
 class CascadeRequest(AssertionRequest):
     cascade_symbol: str
     # phases (phi_0, phi_1, phi_2) of the input operators: real numbers or symbols, '' for 0
     cascade_phases: List[str] = ['', '', '']
-
-
-def _format_lead_ord(val: Union[int, float]) -> Union[int, float]:
-    f = float(val)
-    return int(f) if f.is_integer() else f
 
 
 @app.get("/")
@@ -228,14 +234,14 @@ def api_combination(req: CombinationRequest):
             named_expressions=[ne.model_dump() for ne in req.named_expressions],
             process=proc,
         )
-        lead_ord = _format_lead_ord(leading_order)
+        lead_ord = order_text(leading_order)
         return {
             "latex": str(latex_curr),
             "latex_t": str(latex_t),
             "latex_g": str(latex_g),
             "leading_order": lead_ord,
             # accuracy order of the result (the product rule may lower it below the preset)
-            "order": _format_lead_ord(res_order),
+            "order": order_text(res_order),
             "sol_len": int(sol_len),
             "process": proc,
             "single_mode": bool(req.single_mode),
@@ -263,20 +269,23 @@ def api_combination_assert(req: AssertionRequest):
             coherent_drive=req.coherent_drive,
             vacuum_signal=req.vacuum_signal,
             vacuum_other_weak=req.vacuum_other_weak,
+            seed_mode=req.seed_mode,
+            seed_vac_c=req.seed_vac_c,
+            seed_observed=req.seed_observed,
             symbols=[s.model_dump() for s in req.symbols],
             operators=[op.model_dump() for op in req.operators],
             mm_operators=[mm.model_dump() for mm in req.mm_operators],
             named_expressions=[ne.model_dump() for ne in req.named_expressions],
             process=proc,
         )
-        lead_ord = _format_lead_ord(leading_order)
+        lead_ord = order_text(leading_order)
         return {
             "latex": str(latex_curr),
             "latex_t": str(latex_t),
             "latex_g": str(latex_g),
             "leading_order": lead_ord,
             # accuracy order of the result (the product rule may lower it below the preset)
-            "order": _format_lead_ord(res_order),
+            "order": order_text(res_order),
             "sol_len": int(sol_len),
             "process": proc,
             "single_mode": bool(req.single_mode),
@@ -306,20 +315,23 @@ def api_combination_cascade(req: CascadeRequest):
             coherent_drive=req.coherent_drive,
             vacuum_signal=req.vacuum_signal,
             vacuum_other_weak=req.vacuum_other_weak,
+            seed_mode=req.seed_mode,
+            seed_vac_c=req.seed_vac_c,
+            seed_observed=req.seed_observed,
             symbols=[s.model_dump() for s in req.symbols],
             operators=[op.model_dump() for op in req.operators],
             mm_operators=[mm.model_dump() for mm in req.mm_operators],
             named_expressions=[ne.model_dump() for ne in req.named_expressions],
             process=proc,
         )
-        lead_ord = _format_lead_ord(leading_order)
+        lead_ord = order_text(leading_order)
         return {
             "latex": str(latex_curr),
             "latex_t": str(latex_t),
             "latex_g": str(latex_g),
             "leading_order": lead_ord,
             # accuracy order of the result (the product rule may lower it below the preset)
-            "order": _format_lead_ord(res_order),
+            "order": order_text(res_order),
             "sol_len": int(sol_len),
             "process": proc,
             "single_mode": bool(req.single_mode),

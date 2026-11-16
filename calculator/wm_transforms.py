@@ -5,19 +5,16 @@ from cas_qwm.op_pattern import BosonNum
 from cas_qwm.pattern_perturb import PF
 from cas_qwm.pattern_perturb.pattern_form import _ps, bn_simp
 from cas_qwm.parametric_multimode.wm_processor import t_, _g, nlc, a_p, a_i
+from cas_qwm.wm_variables import alpha_0, alpha_2, gain, g_hat
 from cas_qwm.parametric_multimode.wm_solver import pm
 from sympy.core.singleton import S
-from sympy.core.symbol import Symbol
 from sympy.core.traversal import bottom_up
 from sympy.functions.elementary.complexes import Abs
 
-from .common import g_hat
 from .conditions import normalize_process
 
 __all__ = ['t_to_g', 'apply_assertions']
 
-alphas = (Symbol('alpha_2'), Symbol('alpha_0'))
-gain = Symbol('g', real=True)
 
 
 def t_to_g(
@@ -45,7 +42,7 @@ def t_to_g(
         gc = nlc * nd ** S.Half
 
     if coherent:
-        nd_drive = Abs(alphas[is_dc] if alpha is None else alpha) ** 2
+        nd_drive = Abs((alpha_0 if is_dc else alpha_2) if alpha is None else alpha) ** 2
         gc = gc.subs({nd: nd_drive})
         if proc != 'fwm' and not mismatch:
             gc = _ps(gc)
@@ -73,6 +70,9 @@ def apply_assertions(
     times: Tuple = (),
     alpha=None,
     degenerate: bool = False,
+    seed_mode: Optional[int] = None,
+    seed_vac_c: bool = True,
+    seed_observed: bool = False,
 ) -> Tuple:
     """
     Evaluates a parsed Tab 3 WMWrapper under the input-state assertions and returns
@@ -87,6 +87,16 @@ def apply_assertions(
     With `degenerate` (single-mode down-conversion, signal = idler = a_1), the value is
     converted to the degenerate single mode first, and either vacuum assertion puts
     the degenerate mode a_1 in vacuum.
+    - seed_mode (None: no seeding), seed_vac_c, seed_observed: coherent seeding of a separate
+      weak mode |beta_j>, coupled with its partner in vacuum (seed_vac_c) or in |beta_k>; see
+      WMWrapper.seeded_separate for the modes (down-conversion: 1 signal, 0 degenerate;
+      state transfer: the index of the seeded mode; four-wave mixing: signal). In multimode
+      processing, the seeded modes are split from the multimode sums (whose rest keeps n_m)
+      and averaged exactly; `seed_observed` makes the single-mode weak-field operators the
+      seeded modes themselves, and the vacuum assertions then apply to the remaining modes.
+      In single-mode processing, the weak modes themselves are in these states (the vacuum
+      assertions of the weak fields are void); a degenerate seed then requires degenerate
+      single-mode processing.
     """
     proc = normalize_process(process, s.dc)
     mismatch = bool(mismatch)
@@ -95,7 +105,22 @@ def apply_assertions(
     if degenerate:
         val = val.to_single_mode(degenerate=True)
 
+    seeding = seed_mode is not None
+    if seeding:
+        if not single_mode:
+            val = val.seeded_separate(seed_mode, seed_vac_c, observed=seed_observed)
+        elif degenerate:  # the degenerate single mode a_1 itself is in |beta_1>
+            val = val.seeded_separate(1, True, observed=True)
+        else:
+            if proc == 'twm_dc' and int(seed_mode) == 0:
+                raise ValueError('A degenerate seed requires multimode or degenerate '
+                                 'single-mode processing')
+            val = val.to_single_mode().seeded_separate(seed_mode, seed_vac_c, observed=True)
+
+    # with seeding in single-mode processing, the weak modes are in the seeded states
     vac_modes = []
+    if seeding and single_mode:
+        vacuum_signal = vacuum_other_weak = False
     if degenerate:
         if vacuum_signal or vacuum_other_weak:
             vac_modes.append('a_1')
@@ -111,7 +136,7 @@ def apply_assertions(
         if single_mode:
             val = val.to_single_mode(degenerate=degenerate)
         if alpha is None:
-            alpha = alphas[s.dc]
+            alpha = alpha_0 if s.dc else alpha_2
         val_t = val.eval_coherent(order, alpha)
         if proc == 'fwm' and not mismatch:
             pm_cohr = 2 * nlc * (Abs(alpha) ** 2)

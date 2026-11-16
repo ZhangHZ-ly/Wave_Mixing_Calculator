@@ -817,6 +817,50 @@
     cursor: pointer;
   }
 
+  /* Coherent seeding of a separate weak mode (Tab 3 assertions) */
+  .assert-seed-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.6rem;
+    margin: -0.5rem 0 1.25rem;
+    padding: 0.75rem 1.1rem;
+    background: #f8fafc;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    font-size: 0.92rem;
+  }
+  .assert-seed-row .checkbox-label {
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .assert-seed-row .checkbox-label[hidden] {
+    display: none;
+  }
+  .assert-seed-row select.assert-seed-select {
+    width: auto;
+    padding: 0.2rem 0.4rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    background: #fff;
+    cursor: pointer;
+  }
+  /* a seeded mode fixed by the process (down-conversion, four-wave mixing) */
+  .assert-seed-row select.assert-seed-select:disabled {
+    background: #e2e8f0;
+    color: #475569;
+    cursor: not-allowed;
+  }
+  .checkbox-label.is-disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  #assert-seed-note {
+    flex-basis: 100%;
+    margin: 0;
+  }
+
   /* Toast Notification */
   .toast {
     position: fixed;

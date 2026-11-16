@@ -16,7 +16,6 @@ Evolved multimode objects and n_drive are computed by multimode products (@) and
 in evo_cache, per solver, solution order, relative accuracy and phases.
 """
 from __future__ import annotations
-import math
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -24,7 +23,7 @@ from cas_qwm.op_pattern import BosonNum, BosonPat
 from cas_qwm.pattern_perturb import PF, PF1
 from cas_qwm.pattern_perturb.pattern_form import _vpk
 from cas_qwm.parametric_multimode import (
-    FWMSolver, MultimodeCOP, MultimodeNum, MultimodeNum2, WMSolver, WMWrapper,
+    MultimodeCOP, MultimodeNum, MultimodeNum2, WMSolver, WMWrapper,
 )
 from cas_qwm.parametric_multimode.wm_processor import t_, nm, a_p, a_s, a_i
 from sympy.core.add import Add
@@ -37,6 +36,7 @@ from sympy.core.sorting import default_sort_key
 from sympy.core.symbol import Dummy, Symbol
 from sympy.core.sympify import sympify
 from sympy.functions.elementary.exponential import exp
+from sympy.functions.elementary.integers import ceiling
 from sympy.parsing.sympy_parser import parse_expr
 from sympy.physics.quantum.boson import BosonOp
 from sympy.polys.polyerrors import PolynomialError
@@ -383,7 +383,7 @@ class _Evolver:
         return self.p.d_add(*parts)
 
 
-def _required_sol_order(s: WMSolver, pieces: dict, order) -> int:
+def _required_sol_order(s: WMSolver, pieces: dict, order):
     """
     Solution order of the evolved operators needed for an absolute accuracy `order`:
     an evolved operator Y of leading order lo_Y inside a term of order o is needed up to
@@ -392,6 +392,7 @@ def _required_sol_order(s: WMSolver, pieces: dict, order) -> int:
     p = s.processor
     weak_names = set(p.a[0].names)
     drive_lo = p.base_orders[p.nd.name]
+    # FWM: get_sol takes the highest solution not above the order
     req = -1
     for o, ws in pieces.items():
         has_weak = any(
@@ -401,9 +402,7 @@ def _required_sol_order(s: WMSolver, pieces: dict, order) -> int:
             for w in ws
         )
         need = order - o + (S.Zero if has_weak else drive_lo)
-        req = max(req, int(math.ceil(float(need) - 1e-12)))
-    if isinstance(s, FWMSolver):
-        req = min(1, req)
+        req = max(req, ceiling(need))
     return req
 
 
@@ -507,7 +506,10 @@ def eval_cascaded_combination(
     vacuum_other_weak: bool = False,
     process: Optional[str] = None,
     degenerate: bool = False,
-) -> Tuple[str, str, str, Union[int, float], int, Union[int, float]]:
+    seed_mode: Optional[int] = None,
+    seed_vac_c: bool = True,
+    seed_observed: bool = False,
+) -> Tuple[str, str, str, Any, int, Any]:
     """
     Evaluates an operator combination evolved for a further time `cascade_symbol`
     (cascaded system), with the input-operator phases `cascade_phases` (phi_0, phi_1, phi_2;
@@ -524,6 +526,7 @@ def eval_cascaded_combination(
     val_t, val_g = apply_assertions(
         val, ctx.solver, order, process=ctx.proc, mismatch=ctx.mismatch, single_mode=single_mode,
         degenerate=ctx.degenerate, coherent_drive=coherent_drive, vacuum_signal=vacuum_signal, vacuum_other_weak=vacuum_other_weak,
-        times=(t_sym,), alpha=coherent_alpha(ctx),
+        times=(t_sym,), alpha=coherent_alpha(ctx), seed_mode=seed_mode, seed_vac_c=seed_vac_c,
+        seed_observed=seed_observed,
     )
     return finalize_wm_result(ctx, val_t, val_g, order, use_gain)

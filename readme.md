@@ -218,7 +218,7 @@ Configure these **before** evaluating an expression:
 
 - **Mixing Process Type** — *Down-conversion*, *Frequency Conversion / State Transfer*, or *Four-Wave Mixing*.
 - **Phase-Matching Condition** — *Phase Matched* ($\Delta k = 0$; for FWM: *SPM Compensated*, $\Delta k = 2\chi \hat N_0$) or *Arbitrary Phase Mismatch* (keeps $\Delta k$ as a symbol).
-- **Retained Order** — the perturbative order kept in the result. The strong field counts as order $-1$ (TWM) or $-1/2$ (FWM), the weak fields as order 0, and $\chi$ as order 1. Order 0 is the undepleted-pump (parametric) approximation; order 1 includes the first pump-depletion correction. Every product is truncated at the order it is accurate to: the sum of the leading orders of its factors plus the smallest of their relative accuracies (accuracy order minus leading order), so that no unnecessary higher-order terms are carried along. The result may therefore be accurate to a lower order than the preset; its actual order is reported and saved. Four-wave mixing currently supports orders up to 1: its solutions apply up to order 1 for the pump and $1/2$ for the weak fields, so e.g. $\hat N_0(t)$ or $\sum_\text{modes}\hat N_1(t)$ at preset order 1 is accurate to order $1/2$.
+- **Retained Order** — the perturbative order kept in the result. The strong field counts as order $-1$, the weak fields as order 0, and $\chi$ as order 1 (TWM) or 2 (FWM), so the parametric gain is of order 0 in both. Order 0 is the undepleted-pump (parametric) approximation; order 1 includes the first pump-depletion correction. Every product is truncated at the order it is accurate to: the sum of the leading orders of its factors plus the smallest of their relative accuracies (accuracy order minus leading order), so that no unnecessary higher-order terms are carried along. The result may therefore be accurate to a lower order than the preset; its actual order is reported and saved. Four-wave mixing solutions reach order 2 for the pump and 1 for the weak fields, so e.g. $\hat N_0(t)$ or $\sum_\text{modes}\hat N_1(t)$ at preset order 2 is accurate to order 1.
 
 #### Step 2 — Enter the expression
 
@@ -270,13 +270,20 @@ and click **Calculate under Assertions**. With all three ticked, the result is t
 
 *Example:* down-conversion, phase matched, order 0, input `dag(a_s) a_s`, all three assertions → $n_m \sinh^2(\chi t|\alpha_0|) = n_m\sinh^2 g$.
 
+**Coherent seeding.** Tick *Coherent seeding in separate* [mode], *coupled with* [mode] to put one separate weak mode in a coherent state $|\beta_j\rangle$, whose amplitude carries the index of its mode. In down-conversion and four-wave mixing, the seeded mode is always the signal, $|\beta_1\rangle$. It can be coupled with another coherent state $|\beta_2\rangle$ of the idler, with the vacuum $|0\rangle_2$, or (down-conversion only) with *itself (degenerate)*: a degenerate mode where signal and idler coincide. In state transfer, the seeded mode is either the signal $|\beta_1\rangle$ or the pump $|\beta_0\rangle$, coupled with the other one in a coherent state or in vacuum. The seeded modes are of order 0 like the other weak modes, so they are averaged exactly rather than perturbatively:
+
+- *Multimode processing*: the seeded modes are split from every multimode sum, $\sum_\text{modes} X = X_b + \sum'_\text{modes} X$, where the rest keeps the mode count $n_m$ (rather than $n_m - 1$). A degenerate mode enters the sums through the degenerate map: $\sum a_1 a_2 \to b^2/2$, $\sum(1 + \hat N_1 + \hat N_2) \to \hat N_b + 1/2$, $\sum(\hat N_j + d) \to (\hat N_b + d)/2$. The $b$ operators of each term are normal-ordered and averaged. The vacuum assertions then apply to the other modes. Once seeding is ticked, a further checkbox chooses whether the single-mode weak-field operators of the expression (e.g. `a_s` alone, or in a `*` product) are the seeded mode itself or another, unseeded mode. A degenerate seed can only be observed through single operators such as `a_s`, not through single-mode products of signal and idler.
+- *Single-mode processing*: the weak modes themselves are in the seeded states, and their vacuum assertions are not used. With degenerate single-mode processing, the degenerate mode is in $|\beta_1\rangle$; a degenerate seed requires multimode or degenerate single-mode processing.
+
+*Example:* down-conversion, phase matched, order 0, input `dag(a_s) a_s`, coherent pump, vacuum signal and idler, signal seeded with $|\beta_1\rangle$ → $n_m\sinh^2 g + \sinh^2 g + |\beta_1|^2\cosh^2 g$. The middle term is the vacuum noise of the seeded pair: the rest of the sum keeps $n_m$, so the sum now covers $n_m + 1$ modes.
+
 Results evaluated under assertions are expectation values and cannot be saved or used in further operator algebra.
 
 ### The variable tables
 
 Tabs 2 and 3 each have a **Defined Expressions** table holding the symbols, operators and saved expressions available to the input:
 
-- **Click** a row to edit it (identifier, LaTeX display text, notes, mathematical assumptions such as *Real*, *Integer*, *Non-negative*, *Positive*). In Tab 3, the detail view also shows each item's **leading order** and the **accuracy (order)** it was computed with; the leading order of custom symbols and boson modes is editable.
+- **Click** a row to edit it (identifier, LaTeX display text, notes, mathematical assumptions such as *Real*, *Integer*, *Non-negative*, *Positive*). In Tab 3, the detail view also shows each item's **leading order** and the **accuracy (order)** it was computed with; the leading order of custom symbols and boson modes is editable, as an integer, a decimal or a fraction such as `1/2` (kept exact).
 - **Right-click** a row for *Edit*, *Insert into Input* (inserts the identifier at the cursor) and *Delete*.
 - **Add / Create ▼** adds new symbols, modes, or saves the current answer.
 - **Reset Defaults** restores the default table of the tab (removing your own entries); in Tab 3, **Restore Base Solutions** only re-adds or un-renames the evolved operators `a_p`, `a_s`, `a_i`, and asks you to rename or delete any variable that currently occupies one of these names.
@@ -297,7 +304,7 @@ The web page talks to the FastAPI backend through JSON endpoints, which can also
 | `POST /api/pattern_form` | Tab 2 calculation (`use_rem` for the remainder mode). |
 | `POST /api/solve` | Raw perturbative solution of one field (`var_index` 0/1/2) at a given order. |
 | `POST /api/combination` | Tab 3 evolution of an expression. Besides `text`, `process`, `mismatch`, `order` and `use_gain`, it accepts `single_mode` and `degenerate` (effective only together with `single_mode` in down-conversion). The response `order` is the accuracy order the result actually reaches. |
-| `POST /api/combination/assert` | Tab 3 evaluation under input-state assertions. |
+| `POST /api/combination/assert` | Tab 3 evaluation under input-state assertions: `coherent_drive`, `vacuum_signal`, `vacuum_other_weak`, and the coherent seeding `seed_mode` (omitted: no seeding; down-conversion `1` signal / `0` degenerate, state transfer `1` signal / `0` pump, ignored for four-wave mixing), `seed_vac_c` (coupled mode in vacuum, else coherent) and `seed_observed`. |
 | `POST /api/combination/cascade` | Tab 3 cascaded-system evolution. |
 | `POST /api/variable/save` | Save the latest result as a named variable. |
 | `POST /api/combination/reset` | Restore the base mode orders of the wave-mixing processors; with `{"clear": true}`, also drop all custom orders (used by *Reset Defaults*). |

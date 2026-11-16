@@ -20,7 +20,7 @@ pm = Symbol('Δk', real=True)
 # its own perturbative mode orders (drive -1 for TWM, -1/2 for FWM; weak fields 0)
 # and no order setting has to be switched between calculations.
 twm_processors = (WMProcessor(False), WMProcessor(True))  # indexed by dc
-fwm_processor = WMProcessor(True, drive_order=-S.Half)
+fwm_processor = WMProcessor(True, nlc_order=2)
 
 
 class WMSolver(Sequence):
@@ -33,8 +33,8 @@ class WMSolver(Sequence):
     def __init__(self, processor: WMProcessor, mismatch=False):
         self.processor = processor
         self.pm = pm if mismatch else S.Zero
-        # exact (unlabeled) solutions used by the recursion; get_sol returns copies labeled
-        # with their accuracy order (cached in _labeled)
+        # TWM: exact (unlabeled) solutions used by the recursion, get_sol returns copies labeled
+        # with their accuracy order (cached in _labeled); FWM: the labeled solutions themselves
         self._sol = []
         self._labeled = {}
 
@@ -262,35 +262,52 @@ class FWMSolver(WMSolver):
         xpm_t = sol_0[1] @ sol_0[1].adjoint() + sol_0[2].adjoint() @ sol_0[2]
         dd2 = sol_0[1] @ sol_0[0].adjoint() @ sol_0[2]
 
-        w_rhs = self._expand_g((dd2 + xpm_c + coeff @ xpm_t) @ (-2 * I * nlc / self.gc), 1)
+        w_rhs = self._expand_g((dd2 + xpm_c + coeff @ xpm_t) @ (-2 * I * nlc / self.gc), 2)
         s0 = w_rhs.apply(lambda t: p.n_simp(dsd1(_g, p.p2s_group(t), subs=self.gc * t_)))
 
         sol_1 = (sol_0[0] + s0, sol_0[1], sol_0[2])
-        # Each stored solution carries the highest order it applies to (orders of FWM come in
-        # steps of 1/2: the pump has its leading order -1/2 and its first depletion correction
-        # s0 at 1/2, the next one, not computed, at 3/2; the weak fields have their leading
-        # order 0 and their first correction, not computed, at 1)
+        # Each stored solution carries the highest order it applies to (with χ of order 2: the
+        # pump has its leading order -1 and its first depletion correction s0 at 1, the next
+        # one, not computed, at 3; the weak fields have their leading order 0 and their first
+        # correction, not computed, at 2)
         self._sol = [tuple(w.with_order(o) for w, o in zip(sols, orders))
                      for sols, orders in zip((sol_m1, sol_0, sol_1), self._SOL_ORDERS)]
 
-    # highest applicable orders of the solutions (a_0, a_1, a_2) of orders -1, 0, 1
-    _SOL_ORDERS = ((S.Zero, -S.Half, -S.Half),
-                   (S.Zero, S.Half, S.Half),
-                   (S.One, S.Half, S.Half))
+    # highest applicable orders of (a_0, a_1, a_2) in the stored solutions (undepleted pump
+    # without and with the weak fields, first pump-depletion correction); the solution orders
+    # (lowest of each row) are -1, 0, 1
+    _SOL_ORDERS = ((S.Zero, S.NegativeOne, S.NegativeOne),
+                   (S.Zero, S.One, S.One),
+                   (S(2), S.One, S.One))
 
-    def get_sol(self, order: int):
-        """The stored solutions, already labeled with their highest applicable orders."""
-        return self._get_sol(order)
+    @property
+    def orders(self) -> tuple:
+        """
+        Orders of the stored solutions, (-1, 0, 1): the order of a solution is the lowest
+        accuracy among its modes.
+        """
+        return tuple(min(w.order for w in sol) for sol in self._sol)
 
-    def sol_orders(self, order: int) -> tuple:
-        return tuple(w.order for w in self._get_sol(order))
+    def get_sol(self, order):
+        """
+        The stored solution of the highest order not exceeding `order` (see `orders`), labeled
+        with the highest applicable orders of its modes. Above order 1, the solution of order 1
+        (pump accurate up to order 2, weak fields up to order 1) is returned.
+        """
+        for sol, o in zip(reversed(self._sol), reversed(self.orders)):
+            if o <= order:
+                return sol
+        raise ValueError(f"Order {order} out of range for FWMSolver (the lowest solution order is "
+                         f"{self.orders[0]})")
 
-    def _get_sol(self, order: int):
-        if order < -1 or order > 1:
-            raise ValueError(f"Order {order} out of range for FWMSolver (supports orders -1, 0, 1)")
-        return self._sol[order + 1]
+    def sol_orders(self, order) -> tuple:
+        return tuple(w.order for w in self.get_sol(order))
 
-    def sol_expr(self, mode: int, order: int):
+    def sol_expr(self, mode: int, order):
+        """
+        Get the expression of the solution for the given mode and order; from order 0 on, the
+        pump carries the self-phase modulation factor exp(-i χ N_0 t).
+        """
         expr = self.get_sol(order)[mode].expr
         if mode == 0 and order >= 0:
             return expr * exp(-I * nlc * self.nd * t_)

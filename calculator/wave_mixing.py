@@ -1,7 +1,6 @@
 from __future__ import annotations
 import ast
 import io
-import math
 import re
 import tokenize
 from dataclasses import dataclass, field
@@ -19,8 +18,9 @@ from sympy.core.function import diff
 from sympy.core.numbers import I, pi
 from sympy.core.singleton import S
 from sympy.core.symbol import Dummy, Symbol
-from sympy.core.sympify import sympify
+from sympy.core.sympify import SympifyError, sympify
 from sympy.functions.elementary.exponential import exp
+from sympy.functions.elementary.integers import ceiling
 from sympy.parsing.sympy_parser import parse_expr
 from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.dagger import Dagger
@@ -77,7 +77,7 @@ def eval_wm_solve(
     s = get_wm_solver(proc, mismatch=bool(mismatch))
 
     if proc == 'fwm':
-        expr_t = s.sol_expr(var_index, min(1, max(-1, order)))
+        expr_t = s.sol_expr(var_index, max(-1, order))
         if not mismatch:
             expr_t = s._zq(expr_t)
     else:
@@ -106,7 +106,7 @@ def save_wm_variable(
     order = kwargs.pop('order', None)
     # accuracy order: the recorded one, or the wrapper's own if lower
     if order is not None and not w.is_exact:
-        order = min(sympify(order), w.order)
+        order = min(as_order(order), w.order)
     elif order is None:
         order = w.order
     w = WMWrapper(w.processor, dict(w.dict_repr), w.b_left, order)
@@ -158,19 +158,14 @@ def clear_wm_variables() -> None:
     LAST_EVAL_WM.clear()
 
 
-def _format_order_num(val) -> Union[int, float]:
-    f = float(val)
-    return int(f) if f.is_integer() else f
-
-
 def compute_val_leading_order(
     val: Any,
     s: WMSolver,
     dc: Optional[bool] = None,
     process: Optional[str] = None,
-) -> Union[int, float]:
+):
     """
-    Computes the leading perturbation order of a calculated WMWrapper result `val`.
+    Computes the (exact) leading perturbation order of a calculated WMWrapper result `val`.
     """
     proc = normalize_process(process if process is not None else _solver_process(s), dc)
     pe = s.pe
@@ -198,11 +193,11 @@ def compute_val_leading_order(
                 pass
 
     if not orders:
-        return 0
+        return S.Zero
     try:
-        return _format_order_num(min(orders))
+        return min(orders)
     except Exception:
-        return 0
+        return S.Zero
 
 
 _NLC_NAMES = ('nlc', 'chi', r'\chi', 'χ')
@@ -212,15 +207,35 @@ def _ref_attr(ref: Any, key: str, default: Any = None) -> Any:
     return ref.get(key, default) if isinstance(ref, dict) else getattr(ref, key, default)
 
 
+def as_order(x):
+    """
+    A perturbative order parsed as an exact SymPy number: fractions and decimals both become
+    Rationals ('1/2', '0.5' and 0.5 all give 1/2), so that no float enters the order algebra.
+    """
+    v = sympify(str(x), rational=True)
+    if not v.is_Number:
+        raise ValueError(f"Invalid perturbative order: {x!r}")
+    return v
+
+
+def order_text(x) -> str:
+    """
+    Text of an exact perturbative order, as exchanged with the frontend (e.g. '-2', '1/2'):
+    orders are stored as text there, so that fractions stay exact.
+    """
+    return str(as_order(x))
+
+
+
 def analyze_expression_terms(
     expr_str: str,
-    target_order: int,
+    target_order,
     dc: bool = True,
     symbols: Optional[List[Dict[str, Any]]] = None,
     operators: Optional[List[Dict[str, Any]]] = None,
     named_expressions: Optional[List[Dict[str, Any]]] = None,
     process: Optional[str] = None,
-) -> Tuple[int, List[Dict[str, Any]]]:
+) -> Tuple[Any, List[Dict[str, Any]]]:
     """
     Analyzes an expression across each additive term to determine required
     evolved operator order and identify any saved named expressions with
@@ -228,8 +243,11 @@ def analyze_expression_terms(
     """
     proc = normalize_process(process, dc)
     is_dc = process_is_dc(proc)
-    strong_lo: float = -0.5 if proc == 'fwm' else -1.0
-    strong_nd_lo: float = 2.0 * strong_lo
+    # base orders of the process (FWM: χ of order 2, TWM: 1; the drive of order -1 in both)
+    wm_p = get_wm_solver(proc).processor
+    strong_lo = wm_p.base_orders[wm_p.nd.name]
+    strong_nd_lo = 2 * strong_lo
+    nlc_lo = wm_p.base_orders[nlc]
 
     strong_mode_idx = 0 if is_dc else 2
     strong_names = {'a_p', 'a_0'} if is_dc else {'a_i', 'a_2'}
@@ -250,22 +268,23 @@ def analyze_expression_terms(
         if (ne.get('name') or '').strip()
     }
 
-    sym_orders: Dict[str, float] = {}
+    # orders are kept exact (SymPy numbers) throughout the analysis
+    sym_orders: Dict[str, Any] = {}
     if symbols:
         for s_def in symbols:
             name = (s_def.get('name') or '').strip()
             if name:
                 if name in _NLC_NAMES or s_def.get('builtin_key') == 'nlc':
-                    sym_orders[name] = 1.0
+                    sym_orders[name] = nlc_lo
                 else:
                     try:
-                        sym_orders[name] = float(s_def.get('order', 0))
-                    except (ValueError, TypeError):
-                        sym_orders[name] = 0.0
+                        sym_orders[name] = as_order(s_def.get('order') or 0)
+                    except (ValueError, TypeError, SympifyError):
+                        sym_orders[name] = S.Zero
 
-    def _terms_lo(expr_node, mult: float) -> Tuple[bool, float, str, Any]:
+    def _terms_lo(expr_node, mult) -> Tuple[bool, Any, str, Any]:
         inner_terms = expand_additive_products(expr_node)
-        min_lo = 0.0
+        min_lo = S.Zero
         has_evolved = False
         evolved_ref = None
         for t in inner_terms:
@@ -279,27 +298,27 @@ def analyze_expression_terms(
         lo = min_lo * mult
         return (False, lo, 'evolved', evolved_ref) if has_evolved else (True, lo, 'exact', None)
 
-    def get_factor_info(node) -> Tuple[bool, float, str, Any]:
+    def get_factor_info(node) -> Tuple[bool, Any, str, Any]:
         if isinstance(node, ast.Constant):
-            return True, 0.0, 'exact', None
+            return True, S.Zero, 'exact', None
         if isinstance(node, ast.Name):
             name = node.id
             if name in named_map:
                 ne = named_map[name]
                 raw_lo = ne.get('leading_order', ne.get('leadingOrder', 0))
-                return False, float(raw_lo or 0), 'named', ne
+                return False, as_order(raw_lo or 0), 'named', ne
             if name in WM_VARIABLES:
                 cvar = WM_VARIABLES[name]
-                lo = float(getattr(cvar, 'leading_order', None) or 0)
+                lo = as_order(getattr(cvar, 'leading_order', None) or 0)
                 return False, lo, 'named', cvar
             if name in evolved_names:
-                lo = strong_lo if name in strong_names else 0.0
+                lo = strong_lo if name in strong_names else S.Zero
                 return False, lo, 'evolved', name
             if name in sym_orders:
                 return True, sym_orders[name], 'exact', name
             if name in _NLC_NAMES:
-                return True, 1.0, 'exact', name
-            lo = strong_lo if name in strong_names else 0.0
+                return True, nlc_lo, 'exact', name
+            lo = strong_lo if name in strong_names else S.Zero
             return True, lo, 'exact', name
         if isinstance(node, ast.UnaryOp):
             return get_factor_info(node.operand)
@@ -310,26 +329,27 @@ def analyze_expression_terms(
             if func_name in ('N_', 'BosonNum') and node.args:
                 arg = node.args[0]
                 arg_name = arg.value if isinstance(arg, ast.Constant) and isinstance(arg.value, str) else (arg.id if isinstance(arg, ast.Name) else '')
-                lo = strong_nd_lo if arg_name in strong_names else 0.0
+                lo = strong_nd_lo if arg_name in strong_names else S.Zero
                 return True, lo, 'exact', None
             if func_name == 'sqrt' and node.args:
-                return _terms_lo(node.args[0], 0.5)
-            return True, 0.0, 'exact', None
+                return _terms_lo(node.args[0], S.Half)
+            return True, S.Zero, 'exact', None
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
-            exp_val = 1.0
-            if isinstance(node.right, ast.Constant) and isinstance(node.right.value, (int, float)):
-                exp_val = float(node.right.value)
-            elif isinstance(node.right, ast.UnaryOp) and isinstance(node.right.op, ast.USub) and isinstance(node.right.operand, ast.Constant):
-                exp_val = -float(node.right.operand.value)
+            exp_val = S.One
+            num = lambda c: isinstance(c, ast.Constant) and isinstance(c.value, (int, float))
+            if num(node.right):
+                exp_val = as_order(node.right.value)
+            elif isinstance(node.right, ast.UnaryOp) and isinstance(node.right.op, ast.USub) and num(node.right.operand):
+                exp_val = -as_order(node.right.operand.value)
             elif isinstance(node.right, ast.BinOp) and isinstance(node.right.op, ast.Div):
-                if isinstance(node.right.left, ast.Constant) and isinstance(node.right.right, ast.Constant):
-                    exp_val = float(node.right.left.value) / float(node.right.right.value)
+                if num(node.right.left) and num(node.right.right) and node.right.right.value != 0:
+                    exp_val = as_order(node.right.left.value) / as_order(node.right.right.value)
 
             if isinstance(node.left, ast.BinOp) and isinstance(node.left.op, (ast.Mult, ast.MatMult)):
                 return _terms_lo(node.left, exp_val)
             base_exact, base_lo, cat, ref = get_factor_info(node.left)
             return base_exact, base_lo * exp_val, cat, ref
-        return True, 0.0, 'exact', None
+        return True, S.Zero, 'exact', None
 
     def expand_additive_products(node) -> List[List[Tuple[Any, int]]]:
         if isinstance(node, ast.Expression):
@@ -384,13 +404,19 @@ def analyze_expression_terms(
     except Exception:
         return -1, []
 
-    max_evolved_needed: int = -1
+    is_fwm = proc == 'fwm'
+    # FWM: the highest orders the evolved operators reach (in the solution of order 1: pump 2,
+    # weak fields 1)
+    if is_fwm:
+        fwm_top = FWM_SOLVER.get_sol(FWM_SOLVER.orders[-1])
+        fwm_caps = (fwm_top[0].order, fwm_top[1].order)
+    max_evolved_needed = -1
     insufficient_items: List[Dict[str, Any]] = []
     seen_warnings = set()
 
     for raw_factors in expanded_terms:
         parsed_factors = []
-        total_lo_sum = 0.0
+        total_lo_sum = S.Zero
         has_estimated = False
 
         for f_node, sign_mult in raw_factors:
@@ -408,36 +434,38 @@ def analyze_expression_terms(
             if is_exact:
                 continue
             other_lo_sum = total_lo_sum - eff_lo
-            req_order_raw = float(target_order) - other_lo_sum
-            req_order_int = int(math.ceil(req_order_raw - 1e-12))
+            req_order_raw = as_order(target_order) - other_lo_sum
+            req_order = ceiling(req_order_raw)
 
             warning = None
             if cat == 'evolved':
-                if proc == 'fwm':
-                    # FWM evolved operators are capped at order 1
-                    needed_for_op = max(-1, min(1, req_order_int))
-                    if req_order_int > 1:
-                        warning = (str(ref), 'evolved_op', 1)
+                if is_fwm:
+                    # the FWM solution of the required order (get_sol takes the highest solution
+                    # not above it); the evolved operators are capped at the orders of the last one
+                    needed_for_op = req_order
+                    cap = fwm_caps[0 if ref in strong_names else 1]
+                    if req_order > cap:
+                        warning = (str(ref), 'evolved_op', cap)
                 elif ref in strong_names:
-                    needed_for_op = -1 if req_order_int <= 0 else (req_order_int if req_order_int % 2 == 1 else req_order_int - 1)
+                    needed_for_op = -1 if req_order <= 0 else (req_order if req_order % 2 == 1 else req_order - 1)
                 else:
-                    needed_for_op = -1 if req_order_int < 0 else (req_order_int if req_order_int % 2 == 0 else req_order_int - 1)
+                    needed_for_op = -1 if req_order < 0 else (req_order if req_order % 2 == 0 else req_order - 1)
                 max_evolved_needed = max(max_evolved_needed, needed_for_op)
             elif cat == 'named':
                 rec_order = _ref_attr(ref, 'order')
-                if rec_order is not None and float(rec_order) < req_order_raw - 1e-12:
+                if rec_order is not None and as_order(rec_order) < req_order_raw:
                     warning = (_ref_attr(ref, 'name', ''), 'named_expr', rec_order)
 
             if warning is not None:
                 name, kind, rec_order = warning
-                key = (kind, name, rec_order, req_order_int)
+                key = (kind, name, rec_order, req_order)
                 if key not in seen_warnings:
                     seen_warnings.add(key)
                     insufficient_items.append({
                         'name': name,
                         'kind': kind,
                         'order': rec_order,
-                        'required_order': req_order_int,
+                        'required_order': req_order,
                     })
 
     return max_evolved_needed, insufficient_items
@@ -532,9 +560,8 @@ def _prepare_wm_evaluation(
         named_expressions=named_expressions,
         process=proc,
     )
+    # FWM: get_sol takes the highest solution not above the order
     evolved_order = max(-1, order, needed_evolved_order)
-    if proc == 'fwm':
-        evolved_order = min(1, evolved_order)
     p._evolved_order = evolved_order
     sol = tuple(_sm(w) for w in get_evolved_sol(s, evolved_order))
 
@@ -556,7 +583,7 @@ def _prepare_wm_evaluation(
         name = (item_def.get('name') or '').strip()
         if name and item_def.get('order') is not None:
             try:
-                ord_v = sympify(item_def['order'])
+                ord_v = as_order(item_def['order'])
                 custom_orders[name] = ord_v
                 custom_orders[Symbol(name)] = ord_v
             except Exception:
@@ -801,7 +828,7 @@ def _prepare_wm_evaluation(
     def _bind_named(ne_name: str, ne: Dict[str, Any], w_ne: WMWrapper, save: bool) -> None:
         # a value without an accuracy of its own takes the recorded order of the table entry
         if w_ne.is_exact and ne.get('order') is not None:
-            w_ne = w_ne.with_order(ne['order'])
+            w_ne = w_ne.with_order(as_order(ne['order']))
         if single_mode:
             w_ne = w_ne.to_single_mode(degenerate=degenerate)
         local_dict[ne_name] = w_ne
@@ -885,7 +912,7 @@ def finalize_wm_result(
     val_g: WMWrapper,
     order: int,
     use_gain: bool,
-) -> Tuple[str, str, str, Union[int, float], int, Union[int, float]]:
+) -> Tuple[str, str, str, Any, int, Any]:
     """
     Renders the time / gain results, computes the leading order and records the
     result as the latest Tab 3 evaluation (for saving to the table).
@@ -902,7 +929,7 @@ def finalize_wm_result(
     try:
         leading_order = compute_val_leading_order(val_t, s, dc=ctx.is_dc, process=proc)
     except Exception:
-        leading_order = 0
+        leading_order = S.Zero
 
     LAST_EVAL_WM.clear()
     LAST_EVAL_WM.update({
@@ -939,12 +966,17 @@ def eval_combination_assertions(
     vacuum_other_weak: bool = False,
     process: Optional[str] = None,
     degenerate: bool = False,
-) -> Tuple[str, str, str, Union[int, float], int, Union[int, float]]:
+    seed_mode: Optional[int] = None,
+    seed_vac_c: bool = True,
+    seed_observed: bool = False,
+) -> Tuple[str, str, str, Any, int, Any]:
     """
     Evaluates operator combination (optionally under input-state assertions):
     - coherent_drive: strong driving field input is in coherent state |alpha>
     - vacuum_signal: signal field (a_1) input is in vacuum |0>
     - vacuum_other_weak: remaining weak field (a_2 if is_dc else a_0) input is in vacuum |0>
+    - seed_mode / seed_vac_c / seed_observed: coherent seeding of a separate weak mode
+      (see apply_assertions)
     """
     ctx = _prepare_wm_evaluation(
         text, dc, order, symbols, operators, mm_operators, named_expressions, mismatch, single_mode,
@@ -953,7 +985,8 @@ def eval_combination_assertions(
     val_t, val_g = apply_assertions(
         ctx.val, ctx.solver, order, process=ctx.proc, mismatch=ctx.mismatch, single_mode=single_mode,
         degenerate=ctx.degenerate, coherent_drive=coherent_drive, vacuum_signal=vacuum_signal, vacuum_other_weak=vacuum_other_weak,
-        alpha=coherent_alpha(ctx),
+        alpha=coherent_alpha(ctx), seed_mode=seed_mode, seed_vac_c=seed_vac_c,
+        seed_observed=seed_observed,
     )
     return finalize_wm_result(ctx, val_t, val_g, order, use_gain)
 
@@ -971,7 +1004,7 @@ def eval_operator_combination(
     single_mode: bool = False,
     process: Optional[str] = None,
     degenerate: bool = False,
-) -> Tuple[str, str, str, Union[int, float], int, Union[int, float]]:
+) -> Tuple[str, str, str, Any, int, Any]:
     """Evaluates an operator combination without any input-state assertions."""
     return eval_combination_assertions(
         text, dc, order, use_gain, symbols, operators, mm_operators, named_expressions,

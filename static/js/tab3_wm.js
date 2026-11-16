@@ -530,8 +530,9 @@ function evalNumericConstJs(node) {
 function getFactorInfoJs(node, curProcess) {
   const EXACT_ZERO = { isExact: true, lo: 0, cat: 'exact', ref: null };
   const isDc = (curProcess !== 'twm_fc');
-  const strongLo = (curProcess === 'fwm') ? -0.5 : -1;
-  const strongNdLo = 2 * strongLo; // -1 for FWM, -2 for TWM
+  const strongLo = -1; // driving field (TWM and FWM)
+  const strongNdLo = 2 * strongLo;
+  const nlcLo = wmNlcOrder(curProcess);
   const strongModeIdx = isDc ? 0 : 2;
 
   const strongNames = new Set(isDc ? ['a_p', 'a_0'] : ['a_i', 'a_2']);
@@ -550,20 +551,20 @@ function getFactorInfoJs(node, curProcess) {
   if (node.kind === 'id') {
     const name = node.name;
     const tableItem = wmTableItems.find(x => x.name === name);
-    const orderOf = item => (typeof item.order === 'number' ? item.order : 0);
+    const orderOf = item => orderValue(item.order);
     if (tableItem) {
       switch (tableItem.type) {
         case 'named_expr': {
-          const lo = (typeof tableItem.leadingOrder === 'number')
-            ? tableItem.leadingOrder
-            : (typeof tableItem.leading_order === 'number' ? tableItem.leading_order : 0);
+          const lo = orderValue([tableItem.leadingOrder, tableItem.leading_order].find(isOrder));
           return { isExact: false, lo, cat: 'named_expr', ref: tableItem };
         }
-        case 'evolved_op':
-          return { isExact: false, lo: (tableItem.modeIndex === strongModeIdx) ? strongLo : 0, cat: 'evolved_op', ref: tableItem.name };
+        case 'evolved_op': {
+          const strong = tableItem.modeIndex === strongModeIdx;
+          return { isExact: false, lo: strong ? strongLo : 0, cat: 'evolved_op', ref: tableItem.name, strong };
+        }
         case 'symbol': {
           const isNlc = (tableItem.builtinKey === 'nlc' || tableItem.name === 'nlc');
-          return { isExact: true, lo: isNlc ? 1 : orderOf(tableItem), cat: 'exact', ref: tableItem.name };
+          return { isExact: true, lo: isNlc ? nlcLo : orderOf(tableItem), cat: 'exact', ref: tableItem.name };
         }
         case 'operator':
           return { isExact: true, lo: orderOf(tableItem), cat: 'exact', ref: tableItem.name };
@@ -573,10 +574,11 @@ function getFactorInfoJs(node, curProcess) {
     }
 
     if (name === 'a_p' || name === 'a_s' || name === 'a_i') {
-      return { isExact: false, lo: strongNames.has(name) ? strongLo : 0, cat: 'evolved_op', ref: name };
+      const strong = strongNames.has(name);
+      return { isExact: false, lo: strong ? strongLo : 0, cat: 'evolved_op', ref: name, strong };
     }
     if (name === 'nlc' || name === 'chi' || name === 'χ') {
-      return { isExact: true, lo: 1, cat: 'exact', ref: name };
+      return { isExact: true, lo: nlcLo, cat: 'exact', ref: name };
     }
     return { isExact: true, lo: strongNames.has(name) ? strongLo : 0, cat: 'exact', ref: name };
   }
@@ -678,11 +680,12 @@ function checkInsufficientOrderItems(exprText, targetOrder, curProcess) {
       if (pf.isExact) continue;
       const reqRaw = targetOrder - (totalLoSum - pf.effLo);
       const requiredOrder = Math.ceil(reqRaw - 1e-12);
+      const fwmCap = pf.strong ? FWM_EVOLVED_CAPS.strong : FWM_EVOLVED_CAPS.weak;
 
       let entry = null;
-      if (pf.cat === 'evolved_op' && curProcess === 'fwm' && requiredOrder > 1) {
-        entry = { key: `evolved:${pf.ref}`, name: pf.ref, kind: 'evolved_op', recordedOrder: 1 };
-      } else if (pf.cat === 'named_expr' && pf.ref && typeof pf.ref.order === 'number' && pf.ref.order < reqRaw - 1e-12) {
+      if (pf.cat === 'evolved_op' && curProcess === 'fwm' && requiredOrder > fwmCap) {
+        entry = { key: `evolved:${pf.ref}`, name: pf.ref, kind: 'evolved_op', recordedOrder: fwmCap };
+      } else if (pf.cat === 'named_expr' && pf.ref && isOrder(pf.ref.order) && orderValue(pf.ref.order) < reqRaw - 1e-12) {
         entry = { key: `named:${pf.ref.name}`, name: pf.ref.name, kind: 'named_expr', recordedOrder: pf.ref.order };
       }
       if (!entry) continue;
@@ -810,7 +813,7 @@ function buildWmRequest(input, ctx, useGain, extra = {}) {
 // The result order follows the product rule (sum of the leading orders + the smallest relative
 // accuracy of the factors), so referenced variables of insufficient order lower it below the preset
 function notifyLoweredOrder(ctx, resOrder) {
-  if (typeof resOrder === 'number' && resOrder < ctx.orderVal) {
+  if (isOrder(resOrder) && orderValue(resOrder) < ctx.orderVal) {
     showToast(`Result accurate up to order ${resOrder} (below the preset order ${ctx.orderVal}).`);
   }
 }
@@ -874,7 +877,61 @@ let assertUseGain = false;
 let currentAssertLatex = '';
 let cachedAssertResult = null;
 
-const ASSERT_CHECKBOX_IDS = ['assert-coherent-drive', 'assert-vac-signal', 'assert-vac-other'];
+const ASSERT_CHECKBOX_IDS = ['assert-coherent-drive', 'assert-vac-signal', 'assert-vac-other', 'assert-seed', 'assert-seed-observed'];
+
+const SUB_DIGITS = '₀₁₂';
+
+// Choices of the coherent seeding row ("Coherent seeding in separate [1], coupled with [2]") for a
+// process: [1] the seeded mode (value: the seed_mode of the request), locked to the signal in
+// down-conversion and four-wave mixing; [2] the coupled mode for the seeded mode `mode`
+function wmSeedChoices(proc, mode) {
+  const locked = proc !== 'twm_fc';
+  const seeded = locked
+    ? [{ value: '1', text: 'signal |β₁⟩' }]
+    : [{ value: '1', text: 'signal |β₁⟩' }, { value: '0', text: 'pump |β₀⟩' }];
+  const k = locked ? 2 : 1 - Number(mode);  // index of the coupled mode
+  const coupled = [
+    { value: 'coherent', text: `another coherent state |β${SUB_DIGITS[k]}⟩` },
+    { value: 'vacuum', text: `vacuum |0⟩${SUB_DIGITS[k]}` }
+  ];
+  if (proc === 'twm_dc') coupled.push({ value: 'itself', text: 'itself (degenerate)' });
+  return { locked, seeded, coupled };
+}
+
+// Fills a select with the given options, keeping the current value when it is still offered
+function fillSelect(el, options, fallback) {
+  if (!el) return;
+  const prev = el.value;
+  el.innerHTML = options.map(o => `<option value="${o.value}">${escapeHtml(o.text)}</option>`).join('');
+  el.value = options.some(o => o.value === prev) ? prev : fallback;
+}
+
+// Seeding assertion of the request ({seed_mode, seed_vac_c, seed_observed}), or null when off
+function readWmSeed() {
+  if (!isChecked('assert-seed')) return null;
+  const proc = getWmProcess();
+  const coupled = document.getElementById('assert-seed-coupled')?.value || 'vacuum';
+  let mode = 1;
+  if (proc === 'twm_fc') mode = Number(document.getElementById('assert-seed-mode')?.value || 1);
+  else if (proc === 'twm_dc' && coupled === 'itself') mode = 0;
+  return {
+    seed_mode: mode,
+    seed_vac_c: coupled !== 'coherent',
+    seed_observed: !getWmSingleMode() && isChecked('assert-seed-observed')
+  };
+}
+
+// Short text of the seeded states for the mode tag, e.g. 'seed |β₁⟩ + |0⟩₂'
+function wmSeedText(seedReq) {
+  if (!seedReq) return '';
+  const proc = getWmProcess();
+  const obs = seedReq.seed_observed ? ' (observed)' : '';
+  if (proc === 'twm_dc' && seedReq.seed_mode === 0) return `seed |β₁⟩ (degenerate)${obs}`;
+  const j = proc === 'twm_fc' ? seedReq.seed_mode : 1;
+  const k = proc === 'twm_fc' ? 1 - j : 2;
+  const other = seedReq.seed_vac_c ? `|0⟩${SUB_DIGITS[k]}` : `|β${SUB_DIGITS[k]}⟩`;
+  return `seed |β${SUB_DIGITS[j]}⟩ + ${other}${obs}`;
+}
 
 function switchWmSubTab(subTabId) {
   document.querySelectorAll('.subtab-btn').forEach(btn => btn.classList.remove('active'));
@@ -905,7 +962,54 @@ function updateAssertLabels() {
       otherLabelEl.innerHTML = `${isDc ? 'Idler' : 'Pump'} input is in vacuum state ${katex.renderToString(`|0\\rangle_${isDc ? '2' : '0'}`)}`;
     }
   }
+  updateSeedControls();
   updateAssertModeTag();
+}
+
+// Options and visibility of the seeding controls for the current process / processing mode. The
+// selects stay editable whether or not seeding is ticked; only a seeded mode fixed by the process
+// locks [1]
+function updateSeedControls() {
+  const row = document.getElementById('assert-seed-row');
+  if (!row) return;
+  const proc = getWmProcess();
+  const on = isChecked('assert-seed');
+  const singleMode = getWmSingleMode();
+  const degenerateSm = singleMode && getWmDegenerate() && proc === 'twm_dc';
+
+  const modeSel = document.getElementById('assert-seed-mode');
+  const coupledSel = document.getElementById('assert-seed-coupled');
+  let choices = wmSeedChoices(proc, modeSel?.value || '1');
+  fillSelect(modeSel, choices.seeded, '1');
+  choices = wmSeedChoices(proc, modeSel?.value || '1');  // coupled options follow the seeded mode
+  fillSelect(coupledSel, choices.coupled, 'vacuum');
+  if (modeSel) modeSel.disabled = choices.locked;
+
+  const observedGroup = document.getElementById('assert-seed-observed-group');
+  if (observedGroup) observedGroup.hidden = !on || singleMode;
+
+  // in single-mode processing the weak modes themselves are seeded: their vacuum assertions are void
+  for (const id of ['assert-vac-signal', 'assert-vac-other']) {
+    const el = document.getElementById(id);
+    if (el) {
+      el.disabled = on && singleMode;
+      el.closest('label')?.classList.toggle('is-disabled', on && singleMode);
+    }
+  }
+  const note = document.getElementById('assert-seed-note');
+  if (note) {
+    let text = '';
+    if (on && degenerateSm) {
+      text = 'Degenerate single-mode processing: the degenerate mode itself is in |β₁⟩ (the coupled mode and the vacuum assertions are not used).';
+    } else if (on && singleMode && coupledSel?.value === 'itself') {
+      text = 'A degenerate seed requires multimode or degenerate single-mode processing.';
+    } else if (on && singleMode) {
+      text = 'Single-mode processing: the weak modes themselves are in the seeded states (the vacuum assertions are not used).';
+    } else if (on) {
+      text = 'The seeded mode is split from the multimode sums (the rest keeps n_m); the vacuum assertions apply to the other modes.';
+    }
+    note.textContent = text;
+  }
 }
 
 function updateAssertModeTag() {
@@ -916,11 +1020,14 @@ function updateAssertModeTag() {
   const isMismatch = getWmMismatch();
   const orderVal = getWmOrderValue();
   const [chkDrive, chkSignal, chkOther] = ASSERT_CHECKBOX_IDS.map(isChecked);
+  const seedReq = readWmSeed();
+  const weakVac = !(seedReq && getWmSingleMode());
 
   const conds = [];
   if (chkDrive) conds.push(isDc ? '|α₀⟩' : '|α₂⟩');
-  if (chkSignal) conds.push('|0⟩₁');
-  if (chkOther) conds.push(isDc ? '|0⟩₂' : '|0⟩₀');
+  if (chkSignal && weakVac) conds.push('|0⟩₁');
+  if (chkOther && weakVac) conds.push(isDc ? '|0⟩₂' : '|0⟩₀');
+  if (seedReq) conds.push(wmSeedText(seedReq));
 
   if (conds.length === 0) {
     tag.className = 'badge badge-gray';
@@ -971,6 +1078,7 @@ function clearWmAssertions() {
     output.classList.remove('error');
     output.innerHTML = '<span style="color: var(--text-secondary); font-size: 0.95rem;">Select assertions above and click Calculate under Assertions...</span>';
   }
+  updateSeedControls();
   updateAssertModeTag();
 }
 
@@ -980,8 +1088,9 @@ async function runWmAssertions() {
   if (!input) return;
 
   const [coherentDrive, vacSignal, vacOther] = ASSERT_CHECKBOX_IDS.map(isChecked);
-  if (!coherentDrive && !vacSignal && !vacOther) {
-    showOutputError(output, 'Please select at least one assertion condition (e.g. coherent drive, vacuum signal, or vacuum idler/pump)!');
+  const seedReq = readWmSeed();
+  if (!coherentDrive && !vacSignal && !vacOther && !seedReq) {
+    showOutputError(output, 'Please select at least one assertion condition (e.g. coherent drive, vacuum signal, vacuum idler/pump, or a seeded mode pair)!');
     return;
   }
 
@@ -1001,7 +1110,8 @@ async function runWmAssertions() {
     const assertions = {
       coherent_drive: coherentDrive,
       vacuum_signal: vacSignal,
-      vacuum_other_weak: vacOther
+      vacuum_other_weak: vacOther,
+      ...(seedReq || {})
     };
     const data = cascade
       ? await postJson('/api/combination/cascade', buildWmRequest(input, ctx, assertUseGain, { ...assertions, cascade_symbol: cascade.name, cascade_phases: cascade.phases.map(ph => ph.text) }), 'Cascaded assertion calculation failed')
