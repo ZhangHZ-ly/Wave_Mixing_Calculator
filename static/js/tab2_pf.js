@@ -18,7 +18,6 @@ async function runPf(useRem) {
     return;
   }
 
-  currentPfSourceInput = input;
   localStorage.setItem('qc_tab2_source_input', input);
 
   const expand = !!document.getElementById('pf-expand')?.checked;
@@ -40,21 +39,19 @@ async function runPf(useRem) {
     }, 'Calculation failed');
 
     currentPfLatex = data.latex;
-    currentPfExpr = data.expr_str;
+    currentPfSourceInput = input;
     output.innerHTML = '';
     renderMath(data.latex, output);
 
     const remLatex = data.remainder_latex;
     if (useRem && remLatex !== null && remLatex !== undefined) {
       currentPfRemainderLatex = remLatex;
-      currentPfRemainderExpr = data.remainder_str || '';
       remainderContainer.style.display = 'block';
       remainderOutput.innerHTML = '';
       renderMath(remLatex, remainderOutput);
     } else {
       remainderContainer.style.display = 'none';
       currentPfRemainderLatex = '';
-      currentPfRemainderExpr = '';
     }
   } catch (err) {
     output.classList.add('error');

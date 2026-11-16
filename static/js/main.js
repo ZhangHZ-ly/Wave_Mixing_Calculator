@@ -59,22 +59,19 @@ document.addEventListener('DOMContentLoaded', () => {
   updateAssertLabels();
   renderStaticMath();
 
-  // Restore & wire separately cached source inputs for Tab 2 and Tab 3
+  // Restore & persist the input drafts of Tab 2 and Tab 3
   const sourceInputs = [
-    { id: 'pf-input', key: 'qc_tab2_source_input', setCurrent: v => { currentPfSourceInput = v; } },
-    { id: 'wm-input', key: 'qc_tab3_source_input', setCurrent: v => { currentWmSourceInput = v; } }
+    { id: 'pf-input', key: 'qc_tab2_source_input' },
+    { id: 'wm-input', key: 'qc_tab3_source_input' }
   ];
-  for (const { id, key, setCurrent } of sourceInputs) {
+  for (const { id, key } of sourceInputs) {
     const inputEl = document.getElementById(id);
     if (!inputEl) continue;
     const cached = localStorage.getItem(key);
     if (cached && !inputEl.value) inputEl.value = cached;
     inputEl.addEventListener('input', () => {
       const v = inputEl.value.trim();
-      if (v) {
-        setCurrent(v);
-        localStorage.setItem(key, v);
-      }
+      if (v) localStorage.setItem(key, v);
     });
   }
 
@@ -82,7 +79,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const pfExpandEl = document.getElementById('pf-expand');
   if (pfExpandEl) pfExpandEl.checked = localStorage.getItem('qc_tab2_expand') === '1';
 
-  // Live-update the edited item's leading order (and its details table) from the modal order inputs
+  // Live-preview the edited item's leading order in its details table from the modal order inputs.
+  // The item itself is only updated on Save (saveSymbol / saveOperator read the input), so Cancel discards the edit.
   const orderInputs = [
     { id: 'sym-order', detailsId: 'sym-details-body', isEditable: item => !isBuiltinSymbol(item) },
     { id: 'op-order', detailsId: 'op-details-body', isEditable: item => item.type === 'operator' && item.kind === 'boson' }
@@ -94,9 +92,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!activeEditItem || !isEditable(activeEditItem)) return;
       const val = parseOrderInput(inputEl.value);
       if (val === null) return;
-      activeEditItem.order = val;
       const detailsBody = document.getElementById(detailsId);
-      if (detailsBody) renderItemDetailsTable(activeEditItem, detailsBody, activeWorkspace);
+      if (detailsBody) renderItemDetailsTable({ ...activeEditItem, order: val }, detailsBody, activeWorkspace);
     });
   }
 });

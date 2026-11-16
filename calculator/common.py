@@ -1,10 +1,8 @@
 from __future__ import annotations
 import keyword
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 import re
-from cas_qwm.wm_variables import g_hat  # parametric gain operator \hat{g}
-from sympy.core.symbol import Symbol
 from sympy.functions.elementary.exponential import exp
 from sympy.functions.elementary.hyperbolic import cosh, sinh, tanh
 from sympy.functions.elementary.miscellaneous import sqrt
@@ -112,11 +110,6 @@ def is_valid_variable_name(name: str) -> Tuple[bool, str]:
     return True, ""
 
 
-def is_valid_python_name(name: str) -> bool:
-    """Validate whether name conforms to Python identifier rules and does not conflict with keywords or built-ins."""
-    return is_valid_variable_name(name)[0]
-
-
 def validated_name(defn: Dict[str, Any], label: str) -> str:
     """Return the stripped 'name' of a definition dict, raising ValueError if it is not a valid identifier."""
     name = (defn.get('name') or '').strip()
@@ -124,6 +117,29 @@ def validated_name(defn: Dict[str, Any], label: str) -> str:
     if not valid:
         raise ValueError(f"Invalid {label} identifier: {err_msg}")
     return name
+
+
+def order_by_refs(named_expressions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Order the saved-expression definitions so that each follows the definitions it references
+    (`refs`: name in its source input -> definition id). A definition only references definitions
+    that existed when it was saved, so the references are acyclic.
+    """
+    by_id = {ne['id']: ne for ne in named_expressions}
+    ordered: List[Dict[str, Any]] = []
+    visited = set()
+
+    def visit(def_id: str) -> None:
+        if def_id in visited or def_id not in by_id:
+            return
+        visited.add(def_id)
+        for ref_id in by_id[def_id].get('refs', {}).values():
+            visit(ref_id)
+        ordered.append(by_id[def_id])
+
+    for def_id in by_id:
+        visit(def_id)
+    return ordered
 
 
 def symbol_assumptions(defn: Dict[str, Any]) -> Dict[str, bool]:

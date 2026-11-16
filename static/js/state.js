@@ -3,16 +3,11 @@
 // ====================================================
 // Global State
 let currentSingleModeLatex = '';
-let currentSingleModeExprStr = '';
 let currentPfLatex = '';
-let currentPfExpr = '';
 let currentPfRemainderLatex = '';
-let currentPfRemainderExpr = '';
-// Separately cached source formula text for Page 2 and Page 3
-let currentPfSourceInput = localStorage.getItem('qc_tab2_source_input') || '';
+// Source input of the last successful Tab 2 calculation (saved with its result)
+let currentPfSourceInput = '';
 let currentWmLatex = '';
-let currentWmExpr = '';
-let currentWmSourceInput = localStorage.getItem('qc_tab3_source_input') || '';
 
 // Cached multi-representation results (time and parametric gain)
 let cachedWmResult = null;
@@ -32,24 +27,14 @@ const PROCESS_LABELS = {
   fwm: 'Four-Wave Mixing'
 };
 
-function normalizeWmProcess(proc, dc) {
-  if (proc === 'twm_dc' || proc === 'twm_fc' || proc === 'fwm') return proc;
-  if (typeof dc === 'boolean') return dc ? 'twm_dc' : 'twm_fc';
-  return 'twm_dc';
-}
-
-// Mixing process a saved item was created under (legacy items only carry a boolean `dc`)
+// Mixing process a saved item was created under
 function itemProcess(item, fallback = null) {
-  if (item.process) return item.process;
-  if (typeof item.dc === 'boolean') return item.dc ? 'twm_dc' : 'twm_fc';
-  return fallback;
+  return item.process || fallback;
 }
 
 // Whether a saved expression (transitively) references the default wave-mixing operators
-function itemHasDefaultOps(item, allItems = wmTableItems) {
-  return (typeof item.hasDefaultOps === 'boolean')
-    ? item.hasDefaultOps
-    : exprContainsDefaultOperators(item.latex_t || item.latex_g || item.latex || '', allItems);
+function itemHasDefaultOps(item) {
+  return item.hasDefaultOps === true;
 }
 
 // Built-in parametric symbols (nlc, pm) have fixed orders and cannot be edited
@@ -83,24 +68,42 @@ const DEFAULT_WM_TABLE_ITEMS = [
   { id: 'c7', type: 'mm_op', mmKind: 'Num2', name: 'N_t', displayName: '', notes: 'Multimode number operator (MultimodeNum2)' }
 ];
 
+// Built-in tables of the saved-expression definitions ({ id: entry }), independent of the display
+// order: a definition overwritten or deleted in the table is kept while another definition
+// references it (`refs`: name in its source input -> id of the definition it referred to)
+let tableDefs = JSON.parse(localStorage.getItem('qc_table_defs_en') || '{}');
+let wmTableDefs = JSON.parse(localStorage.getItem('qc_wm_table_defs_en') || '{}');
+
+function getWorkspaceDefs(ws) {
+  return (ws === 'tab3') ? wmTableDefs : tableDefs;
+}
+
+// Definitions of the table's saved expressions together with the ones they reference (transitively)
+function reachableDefs(items, defs) {
+  const out = {};
+  for (const item of items) {
+    if (item.type === 'named_expr') out[item.id] = deepClone(item);
+  }
+  const stack = Object.values(out).flatMap(e => Object.values(e.refs || {}));
+  while (stack.length) {
+    const id = stack.pop();
+    if (out[id] || !defs[id]) continue;
+    out[id] = defs[id];
+    stack.push(...Object.values(defs[id].refs || {}));
+  }
+  return out;
+}
+
+// Saved expressions of the table referenced by a source input: { name: definition id }
+function namedRefs(source, items) {
+  const names = new Set(source.match(/[A-Za-z_]\w*/g));
+  return Object.fromEntries(items.filter(x => x.type === 'named_expr' && names.has(x.name)).map(x => [x.name, x.id]));
+}
+
 let tableItems = JSON.parse(localStorage.getItem('qc_table_items_en') || 'null');
 if (!tableItems || !tableItems.length) {
   tableItems = deepClone(DEFAULT_TABLE_ITEMS);
   saveTableItemsToStorage();
-} else {
-  let tableUpdated = false;
-  tableItems.forEach(item => {
-    if (item.type === 'named_expr' && !item.sourceInput) {
-      if (item.exprStr) {
-        item.sourceInput = item.exprStr;
-        tableUpdated = true;
-      } else if (currentPfSourceInput) {
-        item.sourceInput = currentPfSourceInput;
-        tableUpdated = true;
-      }
-    }
-  });
-  if (tableUpdated) saveTableItemsToStorage();
 }
 
 let wmTableItems = JSON.parse(
@@ -109,21 +112,6 @@ let wmTableItems = JSON.parse(
 if (!wmTableItems || !wmTableItems.length) {
   wmTableItems = deepClone(DEFAULT_WM_TABLE_ITEMS);
   saveWmTableItemsToStorage();
-} else {
-  let wmUpdated = false;
-  wmTableItems.forEach(item => {
-    if (item.type === 'named_expr') {
-      if (!item.sourceInput && currentWmSourceInput) {
-        item.sourceInput = currentWmSourceInput;
-        wmUpdated = true;
-      }
-      if (!item.process && typeof item.dc === 'boolean') {
-        item.process = itemProcess(item);
-        wmUpdated = true;
-      }
-    }
-  });
-  if (wmUpdated) saveWmTableItemsToStorage();
 }
 
 // Propositional logic condition rules between calculation presets (P) and expression states (E):
@@ -137,7 +125,7 @@ const CONDITION_RULES = {
     conflictBadge: 'process conflict',
     conflictTitle: 'Mixing Process Inconsistency Warning',
     conflictMsg: 'Variables containing default operators have different algebraic definitions, Hamiltonians, and subspaces across down-conversion, state transfer, and four-wave mixing.',
-    checkApplies: (item, allItems) => itemHasDefaultOps(item, allItems),
+    checkApplies: (item) => itemHasDefaultOps(item),
     getExprVal: (item) => itemProcess(item)
   },
   single_mode: {
@@ -161,7 +149,7 @@ const CONDITION_RULES = {
     conflictBadge: 'degeneracy conflict',
     conflictTitle: 'Single-Mode Degeneracy Inconsistency Warning',
     conflictMsg: 'Single-mode expressions of degenerate (signal = idler) and non-degenerate down-conversion are built on different mode structures and cannot be mixed.',
-    // only single-mode expressions carry a degeneracy (absent on older entries: non-degenerate)
+    // only single-mode expressions carry a degeneracy
     checkApplies: (item) => item.single_mode === true,
     getExprVal: (item) => item.degenerate === true
   }
@@ -222,33 +210,22 @@ function extractWorkspaceDefinitions(ws) {
     mm_kind: mm.mmKind
   })) : [];
 
-  const namedExprs = items.filter(x => x.type === 'named_expr').map(ne => {
-    const neProc = itemProcess(ne);
-    const neDc = typeof ne.dc === 'boolean' ? ne.dc : (neProc ? (neProc !== 'twm_fc') : null);
-    return {
-      name: ne.name,
-      expr_str: ne.exprStr || ne.exprStr_t || '',
-      expr_str_t: ne.exprStr_t || ne.exprStr || '',
-      expr_str_g: ne.exprStr_g || ne.exprStr || '',
-      source_input: ne.sourceInput || '',
-      latex: ne.latex || null,
-      latex_t: ne.latex_t || null,
-      latex_g: ne.latex_g || null,
-      order: orderText(ne.order, null),
-      leading_order: orderText(isOrder(ne.leadingOrder) ? ne.leadingOrder : ne.leading_order),
-      dc: neDc,
-      process: neProc,
-      single_mode: typeof ne.single_mode === 'boolean' ? ne.single_mode : null,
-      degenerate: typeof ne.degenerate === 'boolean' ? ne.degenerate : null
-    };
-  });
+  // all definitions of the built-in table; only those in the table carry their name
+  const visible = Object.fromEntries(items.filter(x => x.type === 'named_expr').map(x => [x.id, x]));
+  const namedExprs = Object.values({ ...getWorkspaceDefs(ws), ...visible }).map(ne => ({
+    id: ne.id,
+    name: visible[ne.id] ? ne.name : null,
+    source_input: ne.sourceInput,
+    refs: ne.refs || {},
+    order: orderText(ne.order, null),
+    leading_order: orderText(ne.leadingOrder)
+  }));
 
   return { symbols, operators, mmOperators, namedExprs };
 }
 
 // Perturbative orders are stored and exchanged with the backend as exact text ('-2', '1/2'),
 // which the backend parses as SymPy numbers (Rationals), so that fractions stay exact.
-// Numbers (entries stored by older versions) are accepted wherever an order is read.
 
 // Normalized order text of an input (integer, decimal or fraction), or null if invalid
 function parseOrderInput(text) {
@@ -267,21 +244,18 @@ function parseOrderInput(text) {
   return null;
 }
 
-// Whether a stored value is an order (text or number)
+// Whether a stored value is an order
 function isOrder(order) {
-  return typeof order === 'number' || (typeof order === 'string' && order !== '');
+  return typeof order === 'string' && order !== '';
 }
 
-// Numeric value of a stored order (text or number), for the client-side checks and comparisons
+// Numeric value of a stored order, for the client-side checks and comparisons
 function orderValue(order) {
-  if (typeof order === 'number') return order;
-  if (typeof order === 'string') {
-    const frac = order.match(/^([+-]?\d+)\/(\d+)$/);
-    if (frac) return parseInt(frac[1], 10) / parseInt(frac[2], 10);
-    const v = parseFloat(order);
-    return isNaN(v) ? 0 : v;
-  }
-  return 0;
+  if (!isOrder(order)) return 0;
+  const frac = order.match(/^([+-]?\d+)\/(\d+)$/);
+  if (frac) return parseInt(frac[1], 10) / parseInt(frac[2], 10);
+  const v = parseFloat(order);
+  return isNaN(v) ? 0 : v;
 }
 
 // Text of a stored order (as sent to the backend / shown in the tables); `fallback` if absent
@@ -307,7 +281,7 @@ const FWM_EVOLVED_CAPS = { strong: 2, weak: 1 };
 
 function getWmProcess() {
   const el = document.getElementById('wm-process');
-  return el ? normalizeWmProcess(el.value, true) : 'twm_dc';
+  return el ? el.value : 'twm_dc';
 }
 
 function getWmMismatch() {
@@ -421,7 +395,7 @@ function formatConflictItemDetails(item) {
   if (item.order !== undefined && item.order !== null && item.order !== '') {
     lines.push(`<div><strong>Accuracy Order:</strong> ${item.order}</div>`);
   }
-  const leadOrd = [item.leadingOrder, item.leading_order, item.order].find(isOrder) ?? null;
+  const leadOrd = [item.leadingOrder, item.order].find(isOrder) ?? null;
   if (leadOrd !== null) {
     lines.push(`<div><strong>Leading Order:</strong> ${leadOrd}</div>`);
   }
@@ -651,10 +625,14 @@ function validateVariableName(name) {
 
 // LocalStorage Persistence Helpers
 function saveTableItemsToStorage() {
+  tableDefs = reachableDefs(tableItems, tableDefs);
   localStorage.setItem('qc_table_items_en', JSON.stringify(tableItems));
+  localStorage.setItem('qc_table_defs_en', JSON.stringify(tableDefs));
 }
 
 function saveWmTableItemsToStorage() {
+  wmTableDefs = reachableDefs(wmTableItems, wmTableDefs);
   localStorage.setItem('qc_wm_table_items_en', JSON.stringify(wmTableItems));
+  localStorage.setItem('qc_wm_table_defs_en', JSON.stringify(wmTableDefs));
 }
 

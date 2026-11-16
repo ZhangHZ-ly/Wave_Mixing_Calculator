@@ -5,7 +5,7 @@ import re
 import tokenize
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 from cas_qwm.op_pattern import BosonNum, BosonPat, FermionPat
 from cas_qwm.pattern_perturb.pattern_form import _vpk
@@ -33,12 +33,12 @@ from .common import (
     RESERVED_NAMES,
     WM_TRANSFORMS,
     safe_subs,
+    order_by_refs,
     symbol_assumptions,
     validated_name,
 )
 from .conditions import normalize_process, process_is_dc, is_degenerate
-from .wm_transforms import t_to_g, apply_assertions
-from .pf_expr import PF_VARIABLES
+from .wm_transforms import apply_assertions
 
 # Cached TWMSolver instances indexed by [dc][mismatch]
 TWM_SOLVERS = (
@@ -61,101 +61,26 @@ def _solver_process(s: WMSolver) -> str:
     return 'twm_dc' if s.dc else 'twm_fc'
 
 
-def eval_wm_solve(
-    dc: bool = True,
-    mismatch: bool = False,
-    var_index: int = 0,
-    order: int = 1,
-    process: Optional[str] = None,
-    **kwargs,
-) -> Tuple[str, str]:
-    """
-    Evaluates Wave Mixing Heisenberg evolution for Tab 3.
-    Returns: (latex_t, latex_g)
-    """
-    proc = normalize_process(process, dc)
-    s = get_wm_solver(proc, mismatch=bool(mismatch))
-
-    if proc == 'fwm':
-        expr_t = s.sol_expr(var_index, max(-1, order))
-        if not mismatch:
-            expr_t = s._zq(expr_t)
-    else:
-        expr_t = s.sol_expr(var_index, max(-1, order - 1))
-    expr_g = t_to_g(expr_t, process=proc, mismatch=bool(mismatch))
-
-    return latex(expr_t), latex(expr_g)
-
-
 WM_VARIABLES: Dict[str, WMWrapper] = {}
 LAST_EVAL_WM: Dict[str, Any] = {}
 
 
-def save_wm_variable(
-    name: str,
-    val_t: Any,
-    val_g: Any = None,
-    solver: Any = None,
-    latex_t: Optional[str] = None,
-    latex_g: Optional[str] = None,
-    **kwargs
-) -> WMWrapper:
-    proc = normalize_process(kwargs.get('process'), kwargs.get('dc'))
-    s = solver if isinstance(solver, WMSolver) else get_wm_solver(proc, mismatch=bool(kwargs.get('mismatch', False)))
-    w = WMWrapper.from_val(val_t, s.processor)
-    order = kwargs.pop('order', None)
+def save_wm_variable(def_id: str, val: Any, solver: WMSolver, order: Any = None) -> WMWrapper:
+    w = WMWrapper.from_val(val, solver.processor)
     # accuracy order: the recorded one, or the wrapper's own if lower
     if order is not None and not w.is_exact:
         order = min(as_order(order), w.order)
     elif order is None:
         order = w.order
     w = WMWrapper(w.processor, dict(w.dict_repr), w.b_left, order)
-    w.name = name
-    w.val_t = w
-    w.val_g = val_g if val_g is not None else t_to_g(
-        w,
-        process=kwargs.get('process', _solver_process(s)),
-        mismatch=bool(kwargs.get('mismatch', False)),
-    )
-    w.latex_t = latex_t
-    w.latex_g = latex_g
-    for k, v in kwargs.items():
-        if k != 'dc':
-            setattr(w, k, v)
-    WM_VARIABLES[name] = w
+    WM_VARIABLES[def_id] = w
     return w
 
 
-def save_latest_wm_variable(name: str, **kwargs) -> Optional[WMWrapper]:
+def save_latest_wm_variable(def_id: str) -> Optional[WMWrapper]:
     if not LAST_EVAL_WM:
         return None
-    proc = normalize_process(LAST_EVAL_WM.get('process'), LAST_EVAL_WM.get('dc', True))
-    s = LAST_EVAL_WM.get('solver') or get_wm_solver(proc, mismatch=bool(LAST_EVAL_WM.get('mismatch', False)))
-    return save_wm_variable(
-        name,
-        LAST_EVAL_WM['val_t'],
-        val_g=LAST_EVAL_WM.get('val_g'),
-        solver=s,
-        latex_t=LAST_EVAL_WM.get('latex_t'),
-        latex_g=LAST_EVAL_WM.get('latex_g'),
-        order=LAST_EVAL_WM.get('order'),
-        leading_order=LAST_EVAL_WM.get('leading_order'),
-        dc=LAST_EVAL_WM.get('dc'),
-        process=proc,
-        mismatch=LAST_EVAL_WM.get('mismatch', False),
-        single_mode=LAST_EVAL_WM.get('single_mode'),
-        degenerate=LAST_EVAL_WM.get('degenerate', False),
-        **kwargs
-    )
-
-
-def get_wm_variable(name: str) -> Optional[WMWrapper]:
-    return WM_VARIABLES.get(name)
-
-
-def clear_wm_variables() -> None:
-    WM_VARIABLES.clear()
-    LAST_EVAL_WM.clear()
+    return save_wm_variable(def_id, LAST_EVAL_WM['val_t'], LAST_EVAL_WM['solver'], order=LAST_EVAL_WM['order'])
 
 
 def compute_val_leading_order(
@@ -305,12 +230,7 @@ def analyze_expression_terms(
             name = node.id
             if name in named_map:
                 ne = named_map[name]
-                raw_lo = ne.get('leading_order', ne.get('leadingOrder', 0))
-                return False, as_order(raw_lo or 0), 'named', ne
-            if name in WM_VARIABLES:
-                cvar = WM_VARIABLES[name]
-                lo = as_order(getattr(cvar, 'leading_order', None) or 0)
-                return False, lo, 'named', cvar
+                return False, as_order(ne.get('leading_order') or 0), 'named', ne
             if name in evolved_names:
                 lo = strong_lo if name in strong_names else S.Zero
                 return False, lo, 'evolved', name
@@ -825,48 +745,34 @@ def _prepare_wm_evaluation(
         mm_name = validated_name(mm_def, 'multimode operator')
         local_dict[mm_name] = init_ops['A'] if mm_def.get('mm_kind', 'COP') == 'COP' else init_ops['N_t']
 
-    def _bind_named(ne_name: str, ne: Dict[str, Any], w_ne: WMWrapper, save: bool) -> None:
+    # Saved expressions: the stored object of each definition, or its source input re-evaluated
+    # with the definitions it was saved with; the table names are bound to their current definitions
+    base_dict = dict(local_dict)
+    built: Dict[str, WMWrapper] = {}
+    for ne in order_by_refs(named_expressions):
+        ne_name = validated_name(ne, 'expression') if ne.get('name') else None
+        w_ne = WM_VARIABLES.get(ne['id'])
+        is_new = w_ne is None
+        if is_new:
+            ne_str = (ne.get('source_input') or '').strip()
+            if not ne_str:
+                continue
+            scope = {**base_dict, **{n: built[r] for n, r in ne.get('refs', {}).items() if r in built}}
+            try:
+                validate_input_identifiers(ne_str, scope)
+                w_ne = wrap(parse_expr(ne_str, local_dict=scope, transformations=WM_TRANSFORMS))
+            except Exception as e:
+                raise ValueError(f"Failed to evaluate named expression '{ne_name or ne_str}': {e}")
         # a value without an accuracy of its own takes the recorded order of the table entry
         if w_ne.is_exact and ne.get('order') is not None:
             w_ne = w_ne.with_order(as_order(ne['order']))
         if single_mode:
             w_ne = w_ne.to_single_mode(degenerate=degenerate)
-        local_dict[ne_name] = w_ne
-        if save:
-            save_wm_variable(
-                ne_name,
-                w_ne,
-                solver=s,
-                latex_t=ne.get('latex_t'),
-                latex_g=ne.get('latex_g'),
-                order=None if w_ne.is_exact else w_ne.order,
-                leading_order=ne.get('leading_order'),
-                dc=is_dc,
-                process=proc,
-                mismatch=mismatch,
-                single_mode=single_mode,
-                degenerate=degenerate
-            )
-
-    for ne in named_expressions:
-        ne_name = validated_name(ne, 'expression')
-
-        if ne.get('val') is not None:
-            _bind_named(ne_name, ne, wrap(ne['val']), save=True)
-        elif ne_name in WM_VARIABLES:
-            _bind_named(ne_name, ne, WM_VARIABLES[ne_name], save=False)
-        elif ne_name in PF_VARIABLES:
-            _bind_named(ne_name, ne, wrap(PF_VARIABLES[ne_name]), save=False)
-        else:
-            ne_str = (ne.get('source_input') or ne.get('sourceInput') or '').strip()
-            if not ne_str:
-                continue
-            try:
-                validate_input_identifiers(ne_str, local_dict)
-                parsed_ne = parse_expr(ne_str, local_dict=local_dict, transformations=WM_TRANSFORMS)
-                _bind_named(ne_name, ne, wrap(parsed_ne), save=True)
-            except Exception as e:
-                raise ValueError(f"Failed to evaluate named expression '{ne_name}': {e}")
+        if is_new:
+            save_wm_variable(ne['id'], w_ne, s, order=None if w_ne.is_exact else w_ne.order)
+        built[ne['id']] = w_ne
+        if ne_name:
+            local_dict[ne_name] = w_ne
 
     try:
         validate_input_identifiers(text, local_dict)
@@ -932,20 +838,7 @@ def finalize_wm_result(
         leading_order = S.Zero
 
     LAST_EVAL_WM.clear()
-    LAST_EVAL_WM.update({
-        'val_t': val_t,
-        'val_g': val_g,
-        'solver': s,
-        'latex_t': latex_t,
-        'latex_g': latex_g,
-        'order': res_order,
-        'leading_order': leading_order,
-        'dc': ctx.is_dc,
-        'process': proc,
-        'mismatch': ctx.mismatch,
-        'single_mode': ctx.single_mode,
-        'degenerate': ctx.degenerate,
-    })
+    LAST_EVAL_WM.update({'val_t': val_t, 'solver': s, 'order': res_order})
 
     return latex_curr, latex_t, latex_g, leading_order, len(s), res_order
 

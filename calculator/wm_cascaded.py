@@ -17,7 +17,7 @@ in evo_cache, per solver, solution order, relative accuracy and phases.
 """
 from __future__ import annotations
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 from cas_qwm.op_pattern import BosonNum, BosonPat
 from cas_qwm.pattern_perturb import PF, PF1

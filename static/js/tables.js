@@ -74,9 +74,7 @@ function renderWorkspaceTable(ws) {
       dispCell = `<td style="text-align: center; color: var(--text-secondary);"><span class="cell-text">&ndash;</span></td>`;
 
       if (isWm) {
-        attrOrDef = item.sourceInput || ((item.latex_t || item.latex_g)
-          ? `[Time Form (t)]:\n${item.latex_t || ''}\n\n[Gain Form (g)]:\n${item.latex_g || ''}`
-          : (item.latex || ''));
+        attrOrDef = item.sourceInput;
 
         // Evaluate condition conflicts via propositional logic
         const itemProc = itemProcess(item);
@@ -106,7 +104,7 @@ function renderWorkspaceTable(ws) {
           tr.classList.add('row-warning');
         }
       } else {
-        attrOrDef = item.sourceInput || item.exprStr || localStorage.getItem('qc_tab2_source_input') || item.latex || '';
+        attrOrDef = item.sourceInput;
       }
     }
 
@@ -237,8 +235,7 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
       isStrong = (curDc && item.modeIndex === 0) || (!curDc && item.modeIndex === 2);
       leadOrd = isStrong ? -1 : 0;
       const solverKey = `${curProcess}_${curMismatch}`;
-      const legacyKey = `${curDc}_${curMismatch}`;
-      const curSolLen = cachedSolverSolLens[solverKey] || cachedSolverSolLens[legacyKey] || 1;
+      const curSolLen = cachedSolverSolLens[solverKey] || 1;
       addRow('Accuracy (Order)', `<span class="badge badge-info">${curSolLen + leadOrd - 1}</span>${AUTO_NOTE}`);
     }
     addRow('Leading Order', `<span class="badge badge-gray">${leadOrd}</span> <span class="details-note">${isStrong ? '(Strong driving mode)' : '(Weak signal/idler mode)'}</span>`);
@@ -372,7 +369,7 @@ function onOpKindChanged() {
   const kind = document.getElementById('op-kind')?.value;
   const opOrderGroup = document.getElementById('op-order-group');
   if (opOrderGroup) {
-    opOrderGroup.style.display = (kind === 'boson' && activeWorkspace === 'tab3') ? 'block' : 'none';
+    opOrderGroup.style.display = (kind === 'boson' && activeWorkspace === 'tab3') ? 'flex' : 'none';
   }
 }
 
@@ -385,13 +382,14 @@ function toggleDetailsGroup(groupId, bodyId, show) {
   if (show) renderItemDetailsTable(activeEditItem, body, activeWorkspace);
 }
 
-// Show/hide a modal's leading-order input group and initialise its value
+// Show/hide a modal's leading-order input group and initialise its value (also when hidden, so that
+// no stale text from a previous edit is read on save)
 function toggleOrderGroup(groupId, inputId, show, value) {
   const group = document.getElementById(groupId);
   if (!group) return;
-  group.style.display = show ? 'block' : 'none';
+  group.style.display = show ? 'flex' : 'none';
   const input = document.getElementById(inputId);
-  if (show && input) input.value = value;
+  if (input) input.value = value;
 }
 
 const SYMBOL_FLAG_FIELDS = { isReal: 'sym-real', isInteger: 'sym-integer', isNonnegative: 'sym-nonnegative', isPositive: 'sym-positive' };
@@ -649,11 +647,7 @@ function openSaveAnswerModal(ws) {
       return;
     }
     title = 'Save Answer Area Expression (Tab 3)';
-    preview = {
-      latexT: cachedWmResult?.latex_t || currentWmLatex,
-      latexG: cachedWmResult?.latex_g || currentWmLatex,
-      defaultTab: wmUseGain ? 'g' : 't'
-    };
+    preview = { latexT: cachedWmResult.latex_t, latexG: cachedWmResult.latex_g, defaultTab: wmUseGain ? 'g' : 't' };
   } else {
     if (!currentPfLatex) {
       alert('Answer area has no evaluated PF result! Please enter an expression and compute it first.');
@@ -671,20 +665,13 @@ function openSaveAnswerModal(ws) {
     if (orderInfo) orderInfo.style.display = 'none';
   } else if (orderInfo && orderInput) {
     orderInfo.style.display = 'block';
-    const leadingOrd = orderText(cachedWmResult && cachedWmResult.leading_order);
-    const curProc = cachedWmResult?.process || getWmProcess();
+    const { leading_order: leadingOrd, process: curProc, single_mode: isSingleMode, degenerate: isDeg } = cachedWmResult;
     const procLabel = PROCESS_LABELS[curProc] || curProc;
-    const isSingleMode = (cachedWmResult && typeof cachedWmResult.single_mode === 'boolean')
-      ? cachedWmResult.single_mode
-      : getWmSingleMode();
-    const isDeg = (cachedWmResult && typeof cachedWmResult.degenerate === 'boolean')
-      ? cachedWmResult.degenerate
-      : getWmDegenerate();
     const modeLabel = isSingleMode ? (isDeg ? 'Degenerate Single Mode' : 'Single Mode') : 'Multimode';
     // accuracy order of the result (from the product rule; may fall below the preset when
     // referenced variables of insufficient order were used)
     const presetOrd = parseInt(orderInput.value);
-    const resOrd = orderText(cachedWmResult && cachedWmResult.order, String(presetOrd));
+    const resOrd = cachedWmResult.order;
     const lowered = !isNaN(presetOrd) && orderValue(resOrd) < presetOrd ? ` (below preset ${presetOrd})` : '';
     document.getElementById('wm-save-order-val').textContent = `${resOrd}${lowered} (Leading Order: ${leadingOrd}) | ${procLabel} | ${modeLabel}`;
   }
@@ -693,23 +680,23 @@ function openSaveAnswerModal(ws) {
   document.getElementById('saveAnswerModal').classList.add('active');
 }
 
-// Insert a named expression, or overwrite the existing entry of that name after confirmation.
-// `build(existing)` returns the entry fields (without id). Returns false if the user declined.
-function upsertNamedItem(arr, name, build, tabName = '') {
+// Insert a named expression, or replace the entry of that name after confirmation. The entry always
+// gets a new definition id, so that a replaced definition stays in the built-in table while others
+// reference it. Returns the entry, or null if the user declined.
+function upsertNamedItem(arr, name, fields, tabName = '') {
   const dupIndex = arr.findIndex(x => x.name === name);
-  const existing = dupIndex !== -1 ? arr[dupIndex] : null;
-  if (existing && !confirm(`Identifier '${name}' already exists in the ${tabName ? tabName + ' ' : ''}table. Do you want to overwrite its definition?`)) {
-    return false;
+  if (dupIndex !== -1 && !confirm(`Identifier '${name}' already exists in the ${tabName ? tabName + ' ' : ''}table. Do you want to overwrite its definition?`)) {
+    return null;
   }
-  const entry = { id: existing ? existing.id : String(Date.now()), ...build(existing) };
-  if (existing) arr[dupIndex] = entry;
+  const entry = { id: String(Date.now()), type: 'named_expr', name, displayName: '', ...fields };
+  if (dupIndex !== -1) arr[dupIndex] = entry;
   else arr.push(entry);
 
   const where = tabName ? ` in ${tabName}` : '';
-  showToast(existing
+  showToast(dupIndex !== -1
     ? `Expression '${name}' overwritten successfully${where}!`
     : `Expression successfully saved as variable '${name}'${where}!`);
-  return true;
+  return entry;
 }
 
 async function saveAnswerExpression() {
@@ -736,17 +723,17 @@ async function saveAnswerExpression() {
       });
     }
 
-    const smSource = `Pat(${opName}, ${document.getElementById('sm-first-op').value}, ${document.getElementById('sm-exponents').value.trim()})`;
-    const saved = upsertNamedItem(tableItems, name, () => ({
-      type: 'named_expr',
-      name: name,
-      displayName: '',
+    // Same exponent tokens as the backend; the creation-first product is Pat(dag(op), ...)
+    const exps = document.getElementById('sm-exponents').value.match(/[a-zA-Z][a-zA-Z0-9_]*|\d+/g) || [];
+    const opArg = document.getElementById('sm-first-op').value === 'creation' ? `dag(${opName})` : opName;
+    const smSource = exps.every(x => /^0+$/.test(x)) ? '1' : `Pat(${opArg}, ${exps.join(', ')})`;
+    const entry = upsertNamedItem(tableItems, name, {
       sourceInput: smSource,
-      exprStr: currentSingleModeExprStr || '',
+      refs: {},
       latex: currentSingleModeLatex,
       notes: notes
-    }), 'Tab 2');
-    if (!saved) return;
+    }, 'Tab 2');
+    if (!entry) return;
 
     saveWorkspaceToStorage('tab2');
     closeModal('saveAnswerModal');
@@ -754,71 +741,41 @@ async function saveAnswerExpression() {
   }
 
   const arr = getWorkspaceArray(activeWorkspace);
-  const isWmWs = (activeWorkspace === 'tab3');
-  const currentInputText = isWmWs
-    ? (cachedWmResult?.sourceInput || currentWmSourceInput || localStorage.getItem('qc_tab3_source_input') || document.getElementById('wm-input')?.value?.trim() || '')
-    : (currentPfSourceInput || localStorage.getItem('qc_tab2_source_input') || document.getElementById('pf-input')?.value?.trim() || '');
-  const currentWmOrder = (isWmWs && document.getElementById('wm-order'))
-    ? parseInt(document.getElementById('wm-order').value)
-    : null;
+  let entry;
+  if (activeWorkspace === 'tab3') {
+    const r = cachedWmResult;
+    entry = upsertNamedItem(arr, name, {
+      sourceInput: r.sourceInput,
+      refs: namedRefs(r.sourceInput, arr),
+      latex_t: r.latex_t,
+      latex_g: r.latex_g,
+      order: r.order,
+      leadingOrder: r.leading_order,
+      process: r.process,
+      single_mode: r.single_mode,
+      degenerate: r.degenerate,
+      hasDefaultOps: exprContainsDefaultOperators(r.latex_t, wmTableItems) || exprContainsDefaultOperators(r.latex_g, wmTableItems),
+      notes: notes
+    });
+  } else {
+    entry = upsertNamedItem(arr, name, {
+      sourceInput: currentPfSourceInput,
+      refs: namedRefs(currentPfSourceInput, arr),
+      latex: currentPfLatex,
+      remainder_latex: currentPfRemainderLatex || null,
+      notes: notes
+    });
+  }
+  if (!entry) return;
 
-  // Inform backend to persist the latest evaluated object directly under this variable name
+  // The backend keeps the latest evaluated object under the new definition id
   try {
     await fetch('/api/variable/save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workspace: activeWorkspace, name: name, notes: notes })
+      body: JSON.stringify({ workspace: activeWorkspace, id: entry.id })
     });
   } catch (_) {}
-
-  let saved;
-  if (isWmWs) {
-    const latexT = cachedWmResult?.latex_t || currentWmLatex;
-    const latexG = cachedWmResult?.latex_g || currentWmLatex;
-    const exprStrT = cachedWmResult?.expr_str_t || currentWmExpr || '';
-    const exprStrG = cachedWmResult?.expr_str_g || currentWmExpr || '';
-    const curProcess = cachedWmResult?.process || getWmProcess();
-
-    saved = upsertNamedItem(arr, name, (existing) => ({
-      type: 'named_expr',
-      name: name,
-      displayName: '',
-      sourceInput: currentInputText || existing?.sourceInput || '',
-      exprStr: cachedWmResult?.expr_str || currentWmExpr || exprStrT || currentInputText || '',
-      exprStr_t: exprStrT,
-      exprStr_g: exprStrG,
-      latex_t: latexT,
-      latex_g: latexG,
-      order: orderText(cachedWmResult && cachedWmResult.order, isNaN(currentWmOrder) ? null : String(currentWmOrder)),
-      leadingOrder: orderText(cachedWmResult && cachedWmResult.leading_order),
-      dc: curProcess !== 'twm_fc',
-      process: curProcess,
-      single_mode: (cachedWmResult && typeof cachedWmResult.single_mode === 'boolean')
-        ? cachedWmResult.single_mode
-        : getWmSingleMode(),
-      degenerate: (cachedWmResult && typeof cachedWmResult.degenerate === 'boolean')
-        ? cachedWmResult.degenerate
-        : getWmDegenerate(),
-      hasDefaultOps: exprContainsDefaultOperators(latexT, wmTableItems) || exprContainsDefaultOperators(latexG, wmTableItems),
-      notes: notes
-    }));
-  } else {
-    if (!currentPfLatex) {
-      alert('No evaluated result to save. Please calculate a result first.');
-      return;
-    }
-    saved = upsertNamedItem(arr, name, (existing) => ({
-      type: 'named_expr',
-      name: name,
-      displayName: '',
-      sourceInput: currentInputText || existing?.sourceInput || '',
-      exprStr: currentPfExpr || existing?.exprStr || '',
-      latex: currentPfLatex || null,
-      remainder_latex: currentPfRemainderLatex || null,
-      notes: notes
-    }));
-  }
-  if (!saved) return;
 
   saveWorkspaceToStorage(activeWorkspace);
   closeModal('saveAnswerModal');
@@ -837,12 +794,7 @@ function openRenameModal(itemId, ws) {
   if (srcGroup && srcInput) {
     if (activeWorkspace !== 'tab3' && item.type === 'named_expr') {
       srcGroup.style.display = 'block';
-      const rawText = item.sourceInput || item.exprStr || localStorage.getItem('qc_tab2_source_input') || '';
-      srcInput.value = rawText;
-      if (!item.sourceInput && rawText) {
-        item.sourceInput = rawText;
-        saveTableItemsToStorage();
-      }
+      srcInput.value = item.sourceInput;
     } else {
       srcGroup.style.display = 'none';
       srcInput.value = '';

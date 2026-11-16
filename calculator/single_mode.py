@@ -10,28 +10,6 @@ from sympy.physics.quantum.boson import BosonOp
 from sympy.physics.quantum.fermion import FermionOp
 from sympy.printing.latex import latex
 
-def _fermion_target_to_expr_str(target, name: str) -> str:
-    """Format single-mode fermion result into a valid Python expression string for Tab 2."""
-    if target == 0 or target == S.Zero:
-        return "0"
-    if target == 1 or target == S.One:
-        return "1"
-    if isinstance(target, FermionOp):
-        return name if target.is_annihilation else f"dag({name})"
-    if isinstance(target, FermionPat) and target.exps == (1, 1):
-        if target.left_base.is_annihilation:
-            return f"{name} * dag({name})"
-        else:
-            return f"dag({name}) * {name}"
-    try:
-        norm_test = 1 - FermionPat(name, False, 1, 1)
-        if target == norm_test:
-            return f"1 - dag({name}) * {name}"
-    except Exception:
-        pass
-    return str(target)
-
-
 def _has_unknowns(target, exp_symbols: Set[Symbol]) -> bool:
     """Check whether the simplified quantum expression contains any undetermined symbols (unknowns)."""
     if not exp_symbols:
@@ -51,13 +29,13 @@ def _check_normal_orderable(simplified, exp_symbols: Set[Symbol]) -> None:
         raise ValueError("Cannot perform normal ordering: undetermined symbols exist in the simplified expression.")
 
 
-def eval_single_mode(mode_type: str, name: str, first_op: str, exp_str: str, action: str) -> Tuple[str, Optional[bool], str, Optional[str]]:
+def eval_single_mode(mode_type: str, name: str, first_op: str, exp_str: str, action: str) -> Tuple[str, Optional[bool], Optional[str]]:
     """
     Evaluates single-mode quantum operator product (BosonPat or FermionPat).
     Letters in exp_str are treated as undetermined nonnegative integers (Symbol(..., integer=True, nonnegative=True)).
     Other non-alphanumeric characters are treated as separators.
     Normal ordering is not supported if the simplified expression contains unknowns.
-    Returns: (latex_str, is_hermitian, expr_str, note)
+    Returns: (latex_str, is_hermitian, note)
     """
     is_boson = (mode_type == 'boson')
     name = (name or '').strip() or ('a' if is_boson else 'c')
@@ -111,6 +89,5 @@ def eval_single_mode(mode_type: str, name: str, first_op: str, exp_str: str, act
             norm = 1 - FermionPat(name, False, 1, 1) if is_pair and simp.left_base.is_annihilation else simp
 
     target = orig if action == 'original' else (simp if action == 'patform' else norm)
-    target_str = str(target) if is_boson else _fermion_target_to_expr_str(target, name)
     note = _FF_NOTE if target.has(FallingFactorial) else None
-    return latex(target), is_hermitian, target_str, note
+    return latex(target), is_hermitian, note

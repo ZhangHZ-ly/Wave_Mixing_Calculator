@@ -39,7 +39,6 @@ async function runSingleMode(action) {
     const data = await postJson('/api/single_mode', { type, name, first_op: firstOp, exponents, action }, 'Calculation error');
 
     currentSingleModeLatex = data.latex;
-    currentSingleModeExprStr = data.expr_str;
     output.innerHTML = '';
     renderMath(data.latex, output);
 
@@ -64,7 +63,6 @@ async function runSingleMode(action) {
     output.classList.add('error');
     output.textContent = err.message;
     currentSingleModeLatex = '';
-    currentSingleModeExprStr = '';
     hermBadge.className = 'badge badge-gray';
     hermBadge.textContent = 'Error';
     if (noteEl) noteEl.style.display = 'none';

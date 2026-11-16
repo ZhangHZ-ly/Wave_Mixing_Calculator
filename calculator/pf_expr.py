@@ -21,6 +21,7 @@ from .common import (
     ELEMENTARY_FUNCS,
     TRANSFORMS,
     safe_subs,
+    order_by_refs,
     symbol_assumptions,
     validated_name,
 )
@@ -43,32 +44,18 @@ def _to_pf(val: Any, use_rem: bool = False) -> PF:
     return PF.from_val(pf(expr, as_dict=None, rem=True))
 
 
-def save_pf_variable(name: str, pf_val: Any, rem: Any = None, use_rem: bool = False, **kwargs) -> PF:
-    p = _to_pf(pf_val, use_rem=use_rem)
+def save_pf_variable(def_id: str, pf_val: Any, rem: Any = None) -> PF:
+    p = _to_pf(pf_val)
     if rem is not None or not hasattr(p, 'rem'):
         p.rem = sympify(S.Zero if rem is None else rem)
-    PF_VARIABLES[name] = p
+    PF_VARIABLES[def_id] = p
     return p
 
 
-def save_latest_pf_variable(name: str, **kwargs) -> Optional[PF]:
+def save_latest_pf_variable(def_id: str) -> Optional[PF]:
     if not LAST_EVAL_PF:
         return None
-    return save_pf_variable(
-        name,
-        LAST_EVAL_PF['pf'],
-        rem=LAST_EVAL_PF.get('rem', S.Zero),
-        **kwargs
-    )
-
-
-def get_pf_variable(name: str) -> Optional[PF]:
-    return PF_VARIABLES.get(name)
-
-
-def clear_pf_variables() -> None:
-    PF_VARIABLES.clear()
-    LAST_EVAL_PF.clear()
+    return save_pf_variable(def_id, LAST_EVAL_PF['pf'], rem=LAST_EVAL_PF['rem'])
 
 
 def eval_pf_form(
@@ -78,12 +65,12 @@ def eval_pf_form(
     named_expressions: List[Dict[str, Any]],
     use_rem: bool = False,
     expand: bool = False,
-) -> Tuple[str, str, Optional[str], Optional[str]]:
+) -> Tuple[str, Optional[str]]:
     """
     Evaluates quantum expressions using PF add/mul/power arithmetic.
     If expand is True, the coefficients (functions of number operators), the non-PF part
     and the remainder are expanded with _mexpand (multiplication and power expansion only).
-    Returns: (latex_result, expr_str, remainder_latex, remainder_str)
+    Returns: (latex_result, remainder_latex); remainder_latex is None without use_rem
     """
     text = (text or '').strip()
     if not text:
@@ -210,28 +197,26 @@ def eval_pf_form(
         if d_name and d_name != op_name:
             disp_subs[Symbol(op_name)] = Symbol(d_name)
 
-    # Register saved named expressions directly from PF
-    for ne in named_expressions:
-        ne_name = validated_name(ne, 'expression')
-
-        if ne.get('val') is not None:
-            p_ne = _to_pf(ne['val'], use_rem)
-            if ne.get('rem') is not None:
-                p_ne.rem = sympify(ne['rem'])
-            local_dict[ne_name] = _bind(p_ne)
-            save_pf_variable(ne_name, p_ne, rem=p_ne.rem)
-        elif ne_name in PF_VARIABLES:
-            local_dict[ne_name] = _bind(PF_VARIABLES[ne_name])
-        else:
-            ne_str = (ne.get('expr_str') or ne.get('source_input') or ne.get('sourceInput') or '').strip()
+    # Saved expressions: the stored object of each definition, or its source input re-evaluated
+    # with the definitions it was saved with; the table names are bound to their current definitions
+    base_dict = dict(local_dict)
+    built: Dict[str, PF] = {}
+    for ne in order_by_refs(named_expressions):
+        ne_name = validated_name(ne, 'expression') if ne.get('name') else None
+        p_ne = PF_VARIABLES.get(ne['id'])
+        if p_ne is None:
+            ne_str = (ne.get('source_input') or '').strip()
             if not ne_str:
                 continue
+            scope = {**base_dict, **{n: _bind(built[r]) for n, r in ne.get('refs', {}).items() if r in built}}
             try:
-                p_ne = _to_pf(parse_expr(ne_str, local_dict=local_dict, transformations=TRANSFORMS), use_rem)
-                local_dict[ne_name] = _bind(p_ne)
-                save_pf_variable(ne_name, p_ne, rem=p_ne.rem)
+                p_ne = _to_pf(parse_expr(ne_str, local_dict=scope, transformations=TRANSFORMS), use_rem)
             except Exception as e:
-                raise ValueError(f"Failed to evaluate named expression '{ne_name}': {e}")
+                raise ValueError(f"Failed to evaluate named expression '{ne_name or ne_str}': {e}")
+            save_pf_variable(ne['id'], p_ne, rem=p_ne.rem)
+        built[ne['id']] = p_ne
+        if ne_name:
+            local_dict[ne_name] = _bind(p_ne)
 
     try:
         parsed_target = parse_expr(text, local_dict=local_dict, transformations=TRANSFORMS)
@@ -246,22 +231,16 @@ def eval_pf_form(
         pf_result.rem = remainder_expr
 
     # Apply display name substitutions to LaTeX output
-    expr_disp = safe_subs(pf_result.expr(), disp_subs)
-    latex_str = latex(expr_disp)
-    expr_str = str(expr_disp)
+    latex_str = latex(safe_subs(pf_result.expr(), disp_subs))
 
-    rem_latex = rem_str = None
+    rem_latex = None
     if use_rem:
-        rem_disp = safe_subs(remainder_expr, disp_subs)
-        rem_latex = latex(rem_disp)
-        rem_str = str(rem_disp)
+        rem_latex = latex(safe_subs(remainder_expr, disp_subs))
 
     LAST_EVAL_PF.clear()
     LAST_EVAL_PF.update({
         'pf': pf_result,
         'rem': remainder_expr,
-        'latex_str': latex_str,
-        'remainder_latex': rem_latex,
     })
 
-    return latex_str, expr_str, rem_latex, rem_str
+    return latex_str, rem_latex

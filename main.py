@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
@@ -9,7 +9,6 @@ from pydantic import BaseModel
 from calculator import (
     eval_single_mode,
     eval_pf_form,
-    eval_wm_solve,
     eval_operator_combination,
     eval_combination_assertions,
     eval_cascaded_combination,
@@ -47,8 +46,8 @@ class SymbolDef(BaseModel):
     is_nonnegative: bool = False
     is_positive: bool = False
     builtin_key: Optional[str] = None
-    # exact text such as '1/2' (parsed as a Rational by the backend) or a number
-    order: Optional[Union[int, float, str]] = 0
+    # exact text such as '1/2' (parsed as a Rational by the backend)
+    order: str = '0'
 
 
 class OperatorDef(BaseModel):
@@ -57,8 +56,8 @@ class OperatorDef(BaseModel):
     name: str
     display_name: Optional[str] = None
     mode_index: Optional[int] = 0
-    # exact text such as '1/2' (parsed as a Rational by the backend) or a number
-    order: Optional[Union[int, float, str]] = 0
+    # exact text such as '1/2' (parsed as a Rational by the backend)
+    order: str = '0'
 
 
 class MMOperatorDef(BaseModel):
@@ -67,27 +66,21 @@ class MMOperatorDef(BaseModel):
 
 
 class NamedExprDef(BaseModel):
-    name: str
-    expr_str: Optional[str] = ""
-    expr_str_t: Optional[str] = None
-    expr_str_g: Optional[str] = None
+    # definition of a saved expression; `name` is None for a definition no longer in the table
+    # but still referenced by others
+    id: str
+    name: Optional[str] = None
     source_input: Optional[str] = None
-    latex: Optional[str] = None
-    latex_t: Optional[str] = None
-    latex_g: Optional[str] = None
-    # orders as exact text (e.g. '1/2'; numbers from older stored entries are accepted too)
-    order: Optional[Union[int, float, str]] = None
-    leading_order: Optional[Union[int, float, str]] = None
-    dc: Optional[bool] = None
-    process: Optional[str] = None
-    single_mode: Optional[bool] = None
-    degenerate: Optional[bool] = None
+    # name in the source input -> id of the definition it referred to when saved
+    refs: Dict[str, str] = {}
+    # orders as exact text (e.g. '1/2')
+    order: Optional[str] = None
+    leading_order: Optional[str] = None
 
 
 class SaveVarRequest(BaseModel):
     workspace: str
-    name: str
-    notes: Optional[str] = ""
+    id: str
 
 
 class PatternFormRequest(BaseModel):
@@ -99,18 +92,8 @@ class PatternFormRequest(BaseModel):
     expand: bool = False
 
 
-class SolveRequest(BaseModel):
-    dc: bool = True
-    process: Optional[str] = None
-    mismatch: bool = False
-    var_index: int
-    order: int
-    use_gain: bool = False
-
-
 class CombinationRequest(BaseModel):
     text: str
-    dc: bool = True
     process: Optional[str] = None
     mismatch: bool = False
     order: int = 1
@@ -160,13 +143,12 @@ def index():
 @app.post("/api/single_mode")
 def api_single_mode(req: SingleModeRequest):
     try:
-        latex_str, is_herm, expr_str, note = eval_single_mode(
+        latex_str, is_herm, note = eval_single_mode(
             req.type, req.name, req.first_op, req.exponents, req.action
         )
         return {
             "latex": latex_str,
             "is_hermitian": is_herm,
-            "expr_str": expr_str,
             "note": note
         }
     except Exception as e:
@@ -174,11 +156,10 @@ def api_single_mode(req: SingleModeRequest):
 
 
 @app.post("/api/pf_form")
-@app.post("/api/pattern_form")
 def api_pattern_form(req: PatternFormRequest):
     try:
         use_rem = req.use_rem
-        latex_str, expr_str, rem_latex, rem_str = eval_pf_form(
+        latex_str, rem_latex = eval_pf_form(
             req.text,
             [s.model_dump() for s in req.symbols],
             [op.model_dump() for op in req.operators],
@@ -188,28 +169,7 @@ def api_pattern_form(req: PatternFormRequest):
         )
         return {
             "latex": latex_str,
-            "expr_str": expr_str,
             "remainder_latex": rem_latex,
-            "remainder_str": rem_str,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.post("/api/solve")
-def solve(req: SolveRequest):
-    try:
-        proc = normalize_process(req.process, req.dc)
-        latex_t, latex_g = eval_wm_solve(
-            dc=process_is_dc(proc),
-            mismatch=req.mismatch,
-            var_index=req.var_index,
-            order=req.order,
-            process=proc,
-        )
-        return {
-            "latex_t": latex_t,
-            "latex_g": latex_g
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -218,7 +178,7 @@ def solve(req: SolveRequest):
 @app.post("/api/combination")
 def api_combination(req: CombinationRequest):
     try:
-        proc = normalize_process(req.process, req.dc)
+        proc = normalize_process(req.process)
         is_dc = process_is_dc(proc)
         latex_curr, latex_t, latex_g, leading_order, sol_len, res_order = eval_operator_combination(
             req.text,
@@ -256,7 +216,7 @@ def api_combination(req: CombinationRequest):
 @app.post("/api/combination/assert")
 def api_combination_assert(req: AssertionRequest):
     try:
-        proc = normalize_process(req.process, req.dc)
+        proc = normalize_process(req.process)
         is_dc = process_is_dc(proc)
         latex_curr, latex_t, latex_g, leading_order, sol_len, res_order = eval_combination_assertions(
             req.text,
@@ -300,7 +260,7 @@ def api_combination_assert(req: AssertionRequest):
 @app.post("/api/combination/cascade")
 def api_combination_cascade(req: CascadeRequest):
     try:
-        proc = normalize_process(req.process, req.dc)
+        proc = normalize_process(req.process)
         is_dc = process_is_dc(proc)
         latex_curr, latex_t, latex_g, leading_order, sol_len, res_order = eval_cascaded_combination(
             req.text,
@@ -349,10 +309,10 @@ def api_combination_cascade(req: CascadeRequest):
 def api_save_variable(req: SaveVarRequest):
     try:
         if req.workspace == 'tab3':
-            save_latest_wm_variable(req.name, notes=req.notes or "")
+            save_latest_wm_variable(req.id)
         else:
-            save_latest_pf_variable(req.name)
-        return {"status": "ok", "name": req.name}
+            save_latest_pf_variable(req.id)
+        return {"status": "ok"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

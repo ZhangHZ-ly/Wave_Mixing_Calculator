@@ -188,7 +188,7 @@ function ensureCascadeSymbol(cascade) {
       isInteger: false,
       isNonnegative: nonnegative,
       isPositive: false,
-      order: 0,
+      order: '0',
       notes
     });
     created.push(`${nonnegative ? 'nonnegative' : 'real'} '${name}'`);
@@ -236,7 +236,6 @@ function toggleWmGainDisplay() {
   onWmPresetChange();
   if (cachedWmResult) {
     currentWmLatex = pickResultLatex(cachedWmResult, wmUseGain);
-    currentWmExpr = wmUseGain ? (cachedWmResult.expr_str_g || cachedWmResult.expr_str) : (cachedWmResult.expr_str_t || cachedWmResult.expr_str);
     showOutputLatex(document.getElementById('wm-output'), currentWmLatex);
   }
 }
@@ -258,7 +257,7 @@ function exprContainsDefaultOperators(exprText, allNamedExprs, visited = new Set
     if (visited.has(ne.name) || !textReferencesName(exprText, ne.name)) continue;
     visited.add(ne.name);
     if (ne.hasDefaultOps === true) return true;
-    const childText = (ne.exprStr_t || ne.exprStr_g || ne.exprStr || ne.sourceInput || ne.latex_t || ne.latex_g || ne.latex || '');
+    const childText = ne.sourceInput || '';
     if (exprContainsDefaultOperators(childText, allNamedExprs, visited)) return true;
   }
   return false;
@@ -297,27 +296,24 @@ function closeConditionWarningModal(proceed) {
   }
 }
 
-function getReferencedNamedExprs(exprText, allNamedExprs) {
-  const referenced = [];
-  const queue = [exprText];
-  const visitedNames = new Set();
-
-  while (queue.length > 0) {
-    const currentText = queue.shift();
-    for (const ne of allNamedExprs) {
-      if (visitedNames.has(ne.name) || !textReferencesName(currentText, ne.name)) continue;
-      visitedNames.add(ne.name);
-      referenced.push(ne);
-      const childExpr = ne.exprStr_t || ne.exprStr || ne.sourceInput || ne.latex_t || ne.latex;
-      if (childExpr) queue.push(childExpr);
-    }
+// Definitions referenced by an input: the table entries it names, and (transitively) the
+// definitions these were saved with
+function getReferencedNamedExprs(exprText) {
+  const visible = wmTableItems.filter(x => x.type === 'named_expr');
+  const defs = { ...wmTableDefs, ...Object.fromEntries(visible.map(x => [x.id, x])) };
+  const referenced = {};
+  const stack = Object.values(namedRefs(exprText, visible));
+  while (stack.length) {
+    const id = stack.pop();
+    if (referenced[id] || !defs[id]) continue;
+    referenced[id] = defs[id];
+    stack.push(...Object.values(defs[id].refs || {}));
   }
-  return referenced;
+  return Object.values(referenced);
 }
 
 function collectConditionConflicts(input, curProcess, isSingleMode, isDegenerate = false) {
-  const allNamedExprs = wmTableItems.filter(x => x.type === 'named_expr');
-  const referencedNamedExprs = getReferencedNamedExprs(input, allNamedExprs);
+  const referencedNamedExprs = getReferencedNamedExprs(input);
 
   const conflicts = [];
   const currentPresets = {
@@ -555,7 +551,7 @@ function getFactorInfoJs(node, curProcess) {
     if (tableItem) {
       switch (tableItem.type) {
         case 'named_expr': {
-          const lo = orderValue([tableItem.leadingOrder, tableItem.leading_order].find(isOrder));
+          const lo = orderValue(tableItem.leadingOrder);
           return { isExact: false, lo, cat: 'named_expr', ref: tableItem };
         }
         case 'evolved_op': {
@@ -746,7 +742,6 @@ function readWmSourceInput(output) {
     showOutputError(output, 'Please enter a combination expression to calculate!');
     return null;
   }
-  currentWmSourceInput = input;
   localStorage.setItem('qc_tab3_source_input', input);
   return input;
 }
@@ -758,7 +753,7 @@ function readWmPresets(output) {
     showOutputError(output, 'Please enter a valid retained order (integer)!');
     return null;
   }
-  return { curProcess: getWmProcess(), isDc: getWmDc(), isMismatch: getWmMismatch(), orderVal };
+  return { curProcess: getWmProcess(), isMismatch: getWmMismatch(), orderVal };
 }
 
 // Ask the user to confirm (1) preset-condition conflicts and (2) insufficient accuracy orders of
@@ -795,7 +790,6 @@ function buildWmRequest(input, ctx, useGain, extra = {}) {
   const { symbols, operators, mmOperators, namedExprs } = extractWorkspaceDefinitions('tab3');
   return {
     text: input,
-    dc: ctx.isDc,
     process: ctx.curProcess,
     mismatch: ctx.isMismatch,
     order: ctx.orderVal,
@@ -856,9 +850,7 @@ async function runWm() {
 
     cachedWmResult = data;
     cachedWmResult.sourceInput = input;
-    currentWmSourceInput = input;
     currentWmLatex = (wmUseGain ? data.latex_g : data.latex_t) || data.latex || '';
-    currentWmExpr = data.expr_str;
 
     updateCachedSolLen(ctx, data.sol_len);
     notifyLoweredOrder(ctx, data.order);
@@ -886,24 +878,65 @@ const SUB_DIGITS = '₀₁₂';
 // down-conversion and four-wave mixing; [2] the coupled mode for the seeded mode `mode`
 function wmSeedChoices(proc, mode) {
   const locked = proc !== 'twm_fc';
-  const seeded = locked
-    ? [{ value: '1', text: 'signal |β₁⟩' }]
-    : [{ value: '1', text: 'signal |β₁⟩' }, { value: '0', text: 'pump |β₀⟩' }];
+  const signal = { value: '1', label: 'signal', tex: '|\\beta_1\\rangle' };
+  const seeded = locked ? [signal] : [signal, { value: '0', label: 'pump', tex: '|\\beta_0\\rangle' }];
   const k = locked ? 2 : 1 - Number(mode);  // index of the coupled mode
   const coupled = [
-    { value: 'coherent', text: `another coherent state |β${SUB_DIGITS[k]}⟩` },
-    { value: 'vacuum', text: `vacuum |0⟩${SUB_DIGITS[k]}` }
+    { value: 'coherent', label: 'another coherent state', tex: `|\\beta_${k}\\rangle` },
+    { value: 'vacuum', label: 'vacuum', tex: `|0\\rangle_${k}` }
   ];
-  if (proc === 'twm_dc') coupled.push({ value: 'itself', text: 'itself (degenerate)' });
+  if (proc === 'twm_dc') coupled.push({ value: 'itself', label: 'itself (degenerate)' });
   return { locked, seeded, coupled };
 }
 
-// Fills a select with the given options, keeping the current value when it is still offered
-function fillSelect(el, options, fallback) {
+// Fills a (hidden) select with the given options, keeping the current value when it is still
+// offered, and renders its KaTeX dropdown
+function fillSelect(el, options, fallback, locked = false) {
   if (!el) return;
   const prev = el.value;
-  el.innerHTML = options.map(o => `<option value="${o.value}">${escapeHtml(o.text)}</option>`).join('');
+  el.innerHTML = options.map(o => `<option value="${o.value}">${escapeHtml(o.label)}</option>`).join('');
   el.value = options.some(o => o.value === prev) ? prev : fallback;
+  el.disabled = locked;
+  renderTexSelect(el, options);
+}
+
+// Option content: its label followed by the state in KaTeX
+function texOptionHtml(o) {
+  if (!o.tex) return escapeHtml(o.label);
+  const tex = typeof katex !== 'undefined'
+    ? katex.renderToString(o.tex, { throwOnError: false }) : escapeHtml(o.tex);
+  return `${escapeHtml(o.label)} ${tex}`;
+}
+
+// Native options cannot show KaTeX: the hidden select keeps the value, and a dropdown right after
+// it shows the options; picking one sets the select and fires its change event
+function renderTexSelect(el, options) {
+  let box = el.nextElementSibling;
+  if (!box || !box.classList.contains('tex-select')) {
+    box = document.createElement('div');
+    box.className = 'dropdown tex-select';
+    box.innerHTML = '<button type="button" class="tex-select-btn"></button><div class="dropdown-content"></div>';
+    el.after(box);
+    box.firstChild.setAttribute('aria-label', el.getAttribute('aria-label') || '');
+    box.firstChild.onclick = () => {
+      const open = !box.classList.contains('open');
+      closeDropdowns();
+      box.classList.toggle('open', open);
+    };
+  }
+  const btn = box.firstChild;
+  btn.disabled = el.disabled;
+  btn.innerHTML = texOptionHtml(options.find(o => o.value === el.value) || options[0]);
+  const menu = box.lastChild;
+  menu.innerHTML = options.map(o => `<button type="button" data-value="${o.value}">${texOptionHtml(o)}</button>`).join('');
+  menu.querySelectorAll('button').forEach(b => {
+    b.onclick = () => {
+      closeDropdowns();
+      if (el.value === b.dataset.value) return;
+      el.value = b.dataset.value;
+      el.dispatchEvent(new Event('change'));
+    };
+  });
 }
 
 // Seeding assertion of the request ({seed_mode, seed_vac_c, seed_observed}), or null when off
@@ -980,10 +1013,9 @@ function updateSeedControls() {
   const modeSel = document.getElementById('assert-seed-mode');
   const coupledSel = document.getElementById('assert-seed-coupled');
   let choices = wmSeedChoices(proc, modeSel?.value || '1');
-  fillSelect(modeSel, choices.seeded, '1');
+  fillSelect(modeSel, choices.seeded, '1', choices.locked);
   choices = wmSeedChoices(proc, modeSel?.value || '1');  // coupled options follow the seeded mode
   fillSelect(coupledSel, choices.coupled, 'vacuum');
-  if (modeSel) modeSel.disabled = choices.locked;
 
   const observedGroup = document.getElementById('assert-seed-observed-group');
   if (observedGroup) observedGroup.hidden = !on || singleMode;

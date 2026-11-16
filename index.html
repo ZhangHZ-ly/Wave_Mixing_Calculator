@@ -438,11 +438,11 @@ window.addEventListener('error', function(e) {
         <div id="assert-seed-row" class="assert-seed-row">
           <label class="checkbox-label" for="assert-seed">
             <input type="checkbox" id="assert-seed" onchange="updateAssertLabels()">
-            <span>Coherent seeding in separate</span>
+            <span>Coherent seeding in separated</span>
           </label>
-          <select id="assert-seed-mode" class="assert-seed-select" aria-label="Seeded mode" onchange="updateAssertLabels()"></select>
+          <select id="assert-seed-mode" aria-label="Seeded mode" hidden onchange="updateAssertLabels()"></select>
           <span>, coupled with</span>
-          <select id="assert-seed-coupled" class="assert-seed-select" aria-label="Coupled mode" onchange="updateAssertLabels()"></select>
+          <select id="assert-seed-coupled" aria-label="Coupled mode" hidden onchange="updateAssertLabels()"></select>
           <label id="assert-seed-observed-group" class="checkbox-label" for="assert-seed-observed" hidden
                  title="Whether the single-mode weak-field operators of the expression (e.g. a_s alone, or in a single-mode product with *) are the seeded mode itself or another, unseeded mode">
             <input type="checkbox" id="assert-seed-observed" onchange="updateAssertModeTag()">
@@ -517,6 +517,11 @@ window.addEventListener('error', function(e) {
           <label class="checkbox-label"><input type="checkbox" id="sym-positive"> Positive (> 0)</label>
         </div>
       </div>
+      <div id="sym-order-group" class="form-group" style="display: none; margin-bottom: 0.75rem;">
+        <label for="sym-order">Leading Order (Perturbative)</label>
+        <input type="text" id="sym-order" inputmode="decimal" value="0" placeholder="e.g. 0, -1, 1/2" spellcheck="false" autocomplete="off">
+        <span class="form-tip">Integer, decimal or fraction (kept exact); used in the perturbation-order bookkeeping</span>
+      </div>
       <div class="form-group">
         <label for="sym-notes">Notes / Description</label>
         <input type="text" id="sym-notes" placeholder="Optional note to describe symbol meaning">
@@ -562,6 +567,11 @@ window.addEventListener('error', function(e) {
       <div class="form-group" style="margin-bottom: 0.75rem;">
         <label for="op-disp">Display Text / LaTeX (defaults to identifier name)</label>
         <input type="text" id="op-disp" placeholder="e.g. \alpha or a">
+      </div>
+      <div id="op-order-group" class="form-group" style="display: none; margin-bottom: 0.75rem;">
+        <label for="op-order">Leading Order (Perturbative)</label>
+        <input type="text" id="op-order" inputmode="decimal" value="0" placeholder="e.g. 0, -1, 1/2" spellcheck="false" autocomplete="off">
+        <span class="form-tip">Integer, decimal or fraction (kept exact); boson modes only, used in the perturbation-order bookkeeping</span>
       </div>
       <div class="form-group">
         <label for="op-notes">Notes / Description</label>

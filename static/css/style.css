@@ -829,6 +829,7 @@
     border: 1px solid var(--border-color);
     border-radius: var(--radius);
     font-size: 0.92rem;
+    font-weight: 500;
   }
   .assert-seed-row .checkbox-label {
     font-weight: 500;
@@ -838,19 +839,49 @@
   .assert-seed-row .checkbox-label[hidden] {
     display: none;
   }
-  .assert-seed-row select.assert-seed-select {
-    width: auto;
-    padding: 0.2rem 0.4rem;
-    font-size: 0.875rem;
-    font-weight: 600;
+  /* dropdowns with KaTeX options (the native select is hidden) */
+  .tex-select .tex-select-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.35rem 0.75rem;
+    border: 1px solid #d5dde7;
+    border-radius: 6px;
     background: #fff;
+    font: inherit;
+    font-weight: 500;
+    color: var(--text-primary);
     cursor: pointer;
   }
+  .tex-select .tex-select-btn::after {
+    content: '\25BE';
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+  }
+  .tex-select .tex-select-btn:focus-visible {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+  }
   /* a seeded mode fixed by the process (down-conversion, four-wave mixing) */
-  .assert-seed-row select.assert-seed-select:disabled {
+  .tex-select .tex-select-btn:disabled {
     background: #e2e8f0;
-    color: #475569;
+    color: var(--text-primary);
     cursor: not-allowed;
+  }
+  .tex-select .dropdown-content {
+    left: 0;
+    right: auto;
+    min-width: 100%;
+    white-space: nowrap;
+  }
+  .tex-select .dropdown-content button {
+    padding: 0.45rem 0.8rem;
+    font: inherit;
+    font-weight: 500;
+  }
+  .tex-select .katex {
+    font-size: 1.1em;
   }
   .checkbox-label.is-disabled {
     opacity: 0.5;
@@ -859,6 +890,7 @@
   #assert-seed-note {
     flex-basis: 100%;
     margin: 0;
+    font-weight: 400;
   }
 
   /* Toast Notification */
