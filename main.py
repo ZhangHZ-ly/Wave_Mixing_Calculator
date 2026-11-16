@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -138,6 +138,12 @@ def index():
     cdn_base = "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist"
     content = content.replace("/static/katex", cdn_base)
     return HTMLResponse(content)
+
+
+# Chrome DevTools probes this path for a workspace configuration; answer with no content instead of 404
+@app.get("/.well-known/appspecific/com.chrome.devtools.json", include_in_schema=False)
+def chrome_devtools_probe():
+    return Response(status_code=204)
 
 
 @app.post("/api/single_mode")

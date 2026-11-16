@@ -42,6 +42,10 @@
     align-items: center;
     gap: 0.5rem;
   }
+  header.app-header .app-icon {
+    width: 1em;
+    height: 1em;
+  }
   header.app-header p {
     font-size: 0.95rem;
     color: var(--text-secondary);
