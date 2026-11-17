@@ -333,7 +333,7 @@ function saveWorkspaceToStorage(ws) {
 // clear = true: drop all custom orders (full reset); false: only restore the base mode orders.
 async function resetWmProcessorPE(clear) {
   try {
-    const res = await fetch('/api/combination/reset', {
+    const res = await fetch('/api/wave_mixing/reset', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ clear: !!clear })

@@ -643,7 +643,7 @@ function openSaveAnswerModal(ws) {
     preview = { singleLatex: currentSingleModeLatex };
   } else if (activeWorkspace === 'tab3') {
     if (!currentWmLatex) {
-      alert('Answer area has no evaluated combination result! Please enter an expression and compute it first.');
+      alert('Answer area has no evaluated wave-mixing result! Please enter an expression and compute it first.');
       return;
     }
     title = 'Save Answer Area Expression (Tab 3)';

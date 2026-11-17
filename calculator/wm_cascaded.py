@@ -50,7 +50,7 @@ from .wave_mixing import (WMEvalContext, _prepare_wm_evaluation, coherent_alpha,
 from .wm_transforms import apply_assertions
 
 __all__ = ['tc', 'evo_cache', 'cascade_evolve', 'resolve_cascade_symbol', 'resolve_cascade_phase',
-           'eval_cascaded_combination']
+           'eval_wave_mixing_cascade']
 
 tc = Dummy('t_c', nonnegative=True)  # further evolution time of the cascaded stage
 # {(solver, solution order): {input-operator object: evolved WMWrapper at t_c}}
@@ -488,7 +488,7 @@ def resolve_cascade_phase(text: str, ctx: WMEvalContext, k: int) -> Expr:
     return val
 
 
-def eval_cascaded_combination(
+def eval_wave_mixing_cascade(
     text: str,
     dc: bool,
     order: int,

@@ -731,7 +731,7 @@ function closeOrderWarningModal(proceed) {
 }
 
 // ----------------------------------------------------
-// Shared Tab 3 calculation flow (combination & assertions)
+// Shared Tab 3 calculation flow (evolution & assertions)
 // ----------------------------------------------------
 
 // Read and cache the Tab 3 expression input; returns null (with an error shown) if empty
@@ -739,7 +739,7 @@ function readWmSourceInput(output) {
   const input = document.getElementById('wm-input').value.trim();
   output.classList.remove('error');
   if (!input) {
-    showOutputError(output, 'Please enter a combination expression to calculate!');
+    showOutputError(output, 'Please enter a wave-mixing expression to calculate!');
     return null;
   }
   localStorage.setItem('qc_tab3_source_input', input);
@@ -841,12 +841,12 @@ async function runWm() {
   if (!(await confirmWmWarnings(input, ctx, output))) return;
   ensureCascadeSymbol(cascade);
 
-  output.innerHTML = '<span style="color: var(--text-secondary);">Calculating operator combination...</span>';
+  output.innerHTML = '<span style="color: var(--text-secondary);">Calculating wave-mixing evolution...</span>';
 
   try {
     const data = cascade
-      ? await postJson('/api/combination/cascade', buildWmRequest(input, ctx, useGain, { cascade_symbol: cascade.name, cascade_phases: cascade.phases.map(ph => ph.text) }), 'Cascaded calculation failed')
-      : await postJson('/api/combination', buildWmRequest(input, ctx, useGain), 'Combination calculation failed');
+      ? await postJson('/api/wave_mixing/cascade', buildWmRequest(input, ctx, useGain, { cascade_symbol: cascade.name, cascade_phases: cascade.phases.map(ph => ph.text) }), 'Cascaded calculation failed')
+      : await postJson('/api/wave_mixing', buildWmRequest(input, ctx, useGain), 'Wave-mixing calculation failed');
 
     cachedWmResult = data;
     cachedWmResult.sourceInput = input;
@@ -1146,8 +1146,8 @@ async function runWmAssertions() {
       ...(seedReq || {})
     };
     const data = cascade
-      ? await postJson('/api/combination/cascade', buildWmRequest(input, ctx, assertUseGain, { ...assertions, cascade_symbol: cascade.name, cascade_phases: cascade.phases.map(ph => ph.text) }), 'Cascaded assertion calculation failed')
-      : await postJson('/api/combination/assert', buildWmRequest(input, ctx, assertUseGain, assertions), 'Assertion calculation failed');
+      ? await postJson('/api/wave_mixing/cascade', buildWmRequest(input, ctx, assertUseGain, { ...assertions, cascade_symbol: cascade.name, cascade_phases: cascade.phases.map(ph => ph.text) }), 'Cascaded assertion calculation failed')
+      : await postJson('/api/wave_mixing/assert', buildWmRequest(input, ctx, assertUseGain, assertions), 'Assertion calculation failed');
 
     cachedAssertResult = data;
     currentAssertLatex = (assertUseGain ? data.latex_g : data.latex_t) || data.latex || '';

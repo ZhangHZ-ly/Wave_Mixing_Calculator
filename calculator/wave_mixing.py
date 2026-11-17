@@ -843,7 +843,7 @@ def finalize_wm_result(
     return latex_curr, latex_t, latex_g, leading_order, len(s), res_order
 
 
-def eval_combination_assertions(
+def eval_wave_mixing_assertions(
     text: str,
     dc: bool,
     order: int,
@@ -884,7 +884,7 @@ def eval_combination_assertions(
     return finalize_wm_result(ctx, val_t, val_g, order, use_gain)
 
 
-def eval_operator_combination(
+def eval_wave_mixing(
     text: str,
     dc: bool,
     order: int,
@@ -899,7 +899,7 @@ def eval_operator_combination(
     degenerate: bool = False,
 ) -> Tuple[str, str, str, Any, int, Any]:
     """Evaluates an operator combination without any input-state assertions."""
-    return eval_combination_assertions(
+    return eval_wave_mixing_assertions(
         text, dc, order, use_gain, symbols, operators, mm_operators, named_expressions,
         mismatch=mismatch, single_mode=single_mode, process=process, degenerate=degenerate,
     )

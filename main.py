@@ -9,9 +9,9 @@ from pydantic import BaseModel
 from calculator import (
     eval_single_mode,
     eval_pf_form,
-    eval_operator_combination,
-    eval_combination_assertions,
-    eval_cascaded_combination,
+    eval_wave_mixing,
+    eval_wave_mixing_assertions,
+    eval_wave_mixing_cascade,
     save_latest_pf_variable,
     save_latest_wm_variable,
     TWM_SOLVERS,
@@ -92,7 +92,7 @@ class PatternFormRequest(BaseModel):
     expand: bool = False
 
 
-class CombinationRequest(BaseModel):
+class WaveMixingRequest(BaseModel):
     text: str
     process: Optional[str] = None
     mismatch: bool = False
@@ -107,7 +107,7 @@ class CombinationRequest(BaseModel):
     named_expressions: List[NamedExprDef] = []
 
 
-class AssertionRequest(CombinationRequest):
+class AssertionRequest(WaveMixingRequest):
     coherent_drive: bool = False
     vacuum_signal: bool = False
     vacuum_other_weak: bool = False
@@ -181,12 +181,12 @@ def api_pattern_form(req: PatternFormRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/api/combination")
-def api_combination(req: CombinationRequest):
+@app.post("/api/wave_mixing")
+def api_wave_mixing(req: WaveMixingRequest):
     try:
         proc = normalize_process(req.process)
         is_dc = process_is_dc(proc)
-        latex_curr, latex_t, latex_g, leading_order, sol_len, res_order = eval_operator_combination(
+        latex_curr, latex_t, latex_g, leading_order, sol_len, res_order = eval_wave_mixing(
             req.text,
             dc=is_dc,
             mismatch=req.mismatch,
@@ -219,12 +219,12 @@ def api_combination(req: CombinationRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/api/combination/assert")
-def api_combination_assert(req: AssertionRequest):
+@app.post("/api/wave_mixing/assert")
+def api_wave_mixing_assert(req: AssertionRequest):
     try:
         proc = normalize_process(req.process)
         is_dc = process_is_dc(proc)
-        latex_curr, latex_t, latex_g, leading_order, sol_len, res_order = eval_combination_assertions(
+        latex_curr, latex_t, latex_g, leading_order, sol_len, res_order = eval_wave_mixing_assertions(
             req.text,
             dc=is_dc,
             mismatch=req.mismatch,
@@ -263,12 +263,12 @@ def api_combination_assert(req: AssertionRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/api/combination/cascade")
-def api_combination_cascade(req: CascadeRequest):
+@app.post("/api/wave_mixing/cascade")
+def api_wave_mixing_cascade(req: CascadeRequest):
     try:
         proc = normalize_process(req.process)
         is_dc = process_is_dc(proc)
-        latex_curr, latex_t, latex_g, leading_order, sol_len, res_order = eval_cascaded_combination(
+        latex_curr, latex_t, latex_g, leading_order, sol_len, res_order = eval_wave_mixing_cascade(
             req.text,
             dc=is_dc,
             mismatch=req.mismatch,
@@ -327,8 +327,8 @@ class ResetPERequest(BaseModel):
     clear: bool = False  # True: drop all custom orders; False: only restore the base mode orders
 
 
-@app.post("/api/combination/reset")
-def api_reset_combination(req: Optional[ResetPERequest] = None):
+@app.post("/api/wave_mixing/reset")
+def api_wave_mixing_reset(req: Optional[ResetPERequest] = None):
     clear = bool(req and req.clear)
     try:
         for p in {s.processor for pair in TWM_SOLVERS for s in pair} | {FWM_SOLVER.processor}:

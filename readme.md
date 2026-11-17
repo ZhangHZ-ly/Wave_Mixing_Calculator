@@ -303,16 +303,16 @@ The web page talks to the FastAPI backend through JSON endpoints, which can also
 | `POST /api/single_mode` | Tab 1 calculation. |
 | `POST /api/pattern_form` | Tab 2 calculation (`use_rem` for the remainder mode). |
 | `POST /api/solve` | Raw perturbative solution of one field (`var_index` 0/1/2) at a given order. |
-| `POST /api/combination` | Tab 3 evolution of an expression. Besides `text`, `process`, `mismatch`, `order` and `use_gain`, it accepts `single_mode` and `degenerate` (effective only together with `single_mode` in down-conversion). The response `order` is the accuracy order the result actually reaches. |
-| `POST /api/combination/assert` | Tab 3 evaluation under input-state assertions: `coherent_drive`, `vacuum_signal`, `vacuum_other_weak`, and the coherent seeding `seed_mode` (omitted: no seeding; down-conversion `1` signal / `0` degenerate, state transfer `1` signal / `0` pump, ignored for four-wave mixing), `seed_vac_c` (coupled mode in vacuum, else coherent) and `seed_observed`. |
-| `POST /api/combination/cascade` | Tab 3 cascaded-system evolution. |
+| `POST /api/wave_mixing` | Tab 3 evolution of an expression. Besides `text`, `process`, `mismatch`, `order` and `use_gain`, it accepts `single_mode` and `degenerate` (effective only together with `single_mode` in down-conversion). The response `order` is the accuracy order the result actually reaches. |
+| `POST /api/wave_mixing/assert` | Tab 3 evaluation under input-state assertions: `coherent_drive`, `vacuum_signal`, `vacuum_other_weak`, and the coherent seeding `seed_mode` (omitted: no seeding; down-conversion `1` signal / `0` degenerate, state transfer `1` signal / `0` pump, ignored for four-wave mixing), `seed_vac_c` (coupled mode in vacuum, else coherent) and `seed_observed`. |
+| `POST /api/wave_mixing/cascade` | Tab 3 cascaded-system evolution. |
 | `POST /api/variable/save` | Save the latest result as a named variable. |
-| `POST /api/combination/reset` | Restore the base mode orders of the wave-mixing processors; with `{"clear": true}`, also drop all custom orders (used by *Reset Defaults*). |
+| `POST /api/wave_mixing/reset` | Restore the base mode orders of the wave-mixing processors; with `{"clear": true}`, also drop all custom orders (used by *Reset Defaults*). |
 
 Example:
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/combination \
+curl -X POST http://127.0.0.1:8000/api/wave_mixing \
      -H "Content-Type: application/json" \
      -d '{"text": "dag(a_s) a_s", "process": "twm_dc", "mismatch": false, "order": 0, "use_gain": true}'
 ```

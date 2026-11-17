@@ -8,10 +8,10 @@ from .wave_mixing import (
     FWM_SOLVER,
     save_latest_wm_variable,
     order_text,
-    eval_operator_combination,
-    eval_combination_assertions,
+    eval_wave_mixing,
+    eval_wave_mixing_assertions,
 )
-from .wm_cascaded import eval_cascaded_combination
+from .wm_cascaded import eval_wave_mixing_cascade
 
 __all__ = [
     'eval_single_mode',
@@ -24,7 +24,7 @@ __all__ = [
     'FWM_SOLVER',
     'save_latest_wm_variable',
     'order_text',
-    'eval_operator_combination',
-    'eval_combination_assertions',
-    'eval_cascaded_combination',
+    'eval_wave_mixing',
+    'eval_wave_mixing_assertions',
+    'eval_wave_mixing_cascade',
 ]
