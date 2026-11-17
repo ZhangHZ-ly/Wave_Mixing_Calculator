@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from calculator import (
     eval_single_mode,
-    eval_pf_form,
+    eval_pattern_form,
     eval_wave_mixing,
     eval_wave_mixing_assertions,
     eval_wave_mixing_cascade,
@@ -161,11 +161,11 @@ def api_single_mode(req: SingleModeRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/api/pf_form")
+@app.post("/api/pattern_form")
 def api_pattern_form(req: PatternFormRequest):
     try:
         use_rem = req.use_rem
-        latex_str, rem_latex = eval_pf_form(
+        latex_str, rem_latex = eval_pattern_form(
             req.text,
             [s.model_dump() for s in req.symbols],
             [op.model_dump() for op in req.operators],

@@ -58,7 +58,7 @@ def save_latest_pf_variable(def_id: str) -> Optional[PF]:
     return save_pf_variable(def_id, LAST_EVAL_PF['pf'], rem=LAST_EVAL_PF['rem'])
 
 
-def eval_pf_form(
+def eval_pattern_form(
     text: str,
     symbols: List[Dict[str, Any]],
     operators: List[Dict[str, Any]],

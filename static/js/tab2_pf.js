@@ -29,7 +29,7 @@ async function runPf(useRem) {
   const { symbols, operators, namedExprs } = extractWorkspaceDefinitions('tab2');
 
   try {
-    const data = await postJson('/api/pf_form', {
+    const data = await postJson('/api/pattern_form', {
       text: input,
       symbols,
       operators,
