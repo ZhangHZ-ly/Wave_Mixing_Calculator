@@ -63,7 +63,7 @@ def _as_processor(dc) -> WMProcessor:
     from .wm_solver import twm_processors  # deferred: wm_solver imports this module
     return twm_processors[bool(dc)]
 
-# ---- coherent seeding of one mode pair (see WMWrapper.eval_seeded) ----
+# ---- coherent seeding of one mode pair (see WMWrapper._eval_seeded) ----
 # A single-mode operator word is a tuple of (kind, e): kind 0 = b^e, 1 = b†^e, 2 = N_b^e.
 
 def _pat_word(b) -> list:
@@ -91,7 +91,7 @@ def _compact(word) -> tuple:
     return tuple(out)
 
 def _beta_mono(beta, m: int, n: int):
-    """Coherent average β̄^m β^n, with the pairs written as |β|^2."""
+    """Coherent average conj(β)^m β^n, with the pairs written as |β|^2."""
     k = min(m, n)
     rest = beta ** (n - k) if n > m else conjugate(beta) ** (m - k)
     return Abs(beta) ** (2 * k) * rest
@@ -573,30 +573,16 @@ class WMWrapper:
         """
         Evaluates this WMWrapper with one separate mode b of the weak fields seeded in the
         coherent state |β_j> (the global symbols beta_j, j the index of the mode), coupled with
-        its partner mode in another coherent state or in vacuum:
+        its partner mode in another coherent state or in vacuum.
 
-        - mode: the seeded mode. Three-wave down-conversion: 1 seeds the signal b_1 (|β_1>),
-          coupled with the idler b_2; 0 seeds a degenerate mode (signal = idler = b, |β_1>),
-          coupled with itself. State transfer: the index (1: signal, 0: pump) of the seeded
-          mode, coupled with the other weak mode. Four-wave mixing: no effect (signal b_1,
-          coupled with the idler b_2).
-        - vac_c: the coupled mode is in vacuum (True) or in its coherent state |β_k> (False);
-          no effect for a degenerate seed.
-        - observed: the single-mode weak-field operators of the expression (the key and the
-          patterns of single-mode products) are the seeded modes themselves and are averaged
-          as well; otherwise they stand for another, unseeded mode and are kept. For a
-          degenerate seed, only the key can be observed (single-mode products of signal and
-          idler were taken with [a_1, a_2†] = 0, which a degenerate mode breaks).
+        :param mode: The subscript of the seeded mode. For parametric down-conversion and FWM,
+        the signal is seeeded by default, and 0 indicates that the degenerate mode is seeded.
 
-        The seeded modes are of order 0 like the other weak modes, so the average is taken
-        exactly instead of perturbatively. Every multimode operator is split into the b part
-        and the rest, Σ X = X_b + Σ' X, where the rest keeps the symbols (and the mode count
-        n_m) of the full sum; powers of the multimode COPs are expanded binomially,
-        (B + Σ')^e = Σ_j C(e, j) B^j Σ'^(e-j), since B commutes with the rest. A degenerate b
-        part follows the degenerate map of to_single_mode: Σ(a_1 a_2) -> b²/2,
-        Σ(1 + N_1 + N_2) -> N_b + 1/2, Σ(N_j + d) -> (N_b + d)/2. The b operators of each
-        term (key, COP parts, patterns, then the tail, polynomial in N_b) are normal-ordered
-        and averaged over the coherent states, giving polynomials in β and conj(β).
+        :param vac_c: The coupled mode is in vacuum (True) or in its coherent state |β_k> (False);
+        no effect for a degenerate seed.
+
+        :param observed: Whethre the single-mode weak-field operators of the expression
+        are the seeded modes themselves.
 
         After to_single_mode there is no multimode sum left: with `observed`, the weak modes
         themselves are then in these states.
@@ -619,14 +605,12 @@ class WMWrapper:
     def _eval_seeded(self, amps: dict, observed: bool = False, degenerate: bool = False) -> 'WMWrapper':
         """
         Coherent average over the seeded mode pair b of the two weak fields (see
-        seeded_separate): `amps` maps the weak-mode names to their amplitudes (0: vacuum);
+        seeded_separate): `amps` maps the weak-mode names (Symbols, as in p.a[0].names) to their amplitudes (0: vacuum);
         with `degenerate`, both weak fields share the single seeded mode, of the amplitude
         of the first name.
         """
         p = self.processor
         names = p.a[0].names
-        to_name = lambda m: sympify(getattr(m, 'name', m))
-        amps = {to_name(m): sympify(v) for m, v in amps.items()}
         # word slots of the seeded modes: one per weak field, or a single degenerate one
         slot = dict.fromkeys(names, 0) if degenerate else {n: j for j, n in enumerate(names)}
         n_slots = 1 if degenerate else 2
