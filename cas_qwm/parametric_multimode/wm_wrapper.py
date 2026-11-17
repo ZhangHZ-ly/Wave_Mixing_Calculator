@@ -22,9 +22,8 @@ from ..op_pattern import BosonNum, BosonPat, FermionPat
 from ..op_pattern.boson_pattern import fac
 from ..pattern_perturb.pattern_form import pf_add, _vpk, bn_simp
 from .multimode import MultimodeNum, MultimodeNum2, MultimodeCOP
-from ..wm_variables import alpha_0, alpha_2, betas
-from .wm_processor import (WMProcessor, vac_pf, _merge_dicts,
-                           _t_mul, _tdz, t_, _g, nlc, nm)
+from ..wm_variables import alpha_0, alpha_2, betas, t_, nlc, nm
+from .wm_processor import WMProcessor, vac_pf, _merge_dicts, _t_mul, _tdz
 
 __all__ = ['WMWrapper']
 
@@ -1064,7 +1063,7 @@ class WMWrapper:
         elif isinstance(var, str):
             if var == 't':
                 is_wrt_t = True
-            elif var in ('g', '_g', r'\hat{g}'):
+            elif var in ('g', r'\hat{g}'):
                 is_wrt_g = True
             elif var == 'nlc':
                 var = nlc
@@ -1072,7 +1071,7 @@ class WMWrapper:
                 var = Symbol(var)
         elif var == t_ or str(var) == '_t':
             is_wrt_t = True
-        elif str(var) in ('g', '_g', r'\hat{g}'):
+        elif str(var) in ('g', r'\hat{g}'):
             is_wrt_g = True
 
         if is_wrt_g and gc is not None:

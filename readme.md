@@ -39,7 +39,7 @@ Calc/
 │   ├── pattern_perturb/     #   Layer 2: pattern form (PF, pf) and perturbative expansion (PE)
 │   ├── parametric_multimode/#   Layer 3: multimode wave-mixing processors and solvers
 │   ├── dsolve_pm.py         #   ODE solvers for polynomial × (hyperbolic) trigonometric sources
-│   └── wm_variables.py      #   Shared symbols: a_0, a_1, a_2, t, χ
+│   └── wm_variables.py      #   Shared symbols: a_0, a_1, a_2, t, χ, Δk, n_m, g
 ├── calculator/              # Backend glue between the web UI and cas_qwm (parsing, presets, assertions)
 ├── static/                  # Front-end assets (CSS, JavaScript; optional local KaTeX)
 ├── index.html               # Single-page web interface

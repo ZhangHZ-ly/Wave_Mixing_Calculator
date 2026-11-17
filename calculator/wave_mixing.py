@@ -10,8 +10,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from cas_qwm.op_pattern import BosonNum, BosonPat, FermionPat
 from cas_qwm.pattern_perturb.pattern_form import _vpk
 from cas_qwm.parametric_multimode import *
-from cas_qwm.parametric_multimode.wm_processor import t_, _g, nm, nlc, _tdz
-from cas_qwm.parametric_multimode.wm_solver import pm
+from cas_qwm.parametric_multimode.wm_processor import _tdz
+from cas_qwm.wm_variables import t_, nlc, pm, nm, gain
 from cas_qwm.pattern_perturb import PF, PF1
 from sympy.core.expr import Expr
 from sympy.core.function import diff
@@ -99,7 +99,7 @@ def compute_val_leading_order(
         if not expr_t.has(t_):
             return expr_t
         gc_eff = (nlc * s.nd) if (proc == 'fwm' and not expr_t.has(pm)) else s.gc
-        return expr_t.subs({t_: _g / gc_eff})
+        return expr_t.subs({t_: gain / gc_eff})
 
     w_sub = WMWrapper.from_val(val, s.processor).apply(_sub_t_for_order, on_npf=True)
     if w_sub.b_left is None:

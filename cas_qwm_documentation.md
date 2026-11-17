@@ -329,10 +329,9 @@ In down-conversion (`dc=True`) the strong driving field is $a_0$; in frequency c
 | `nlc` | nonlinear coupling $\chi$ (real, non-negative) |
 | `pm` | phase mismatch $\Delta k$ (real) |
 | `nm` | number of mode pairs $n_m$ |
-| `_g` | dummy parametric gain $g$ |
 | `alpha_0`, `alpha_2` | coherent amplitudes of the strong driving field (down-conversion and four-wave mixing: $a_0$; state transfer: $a_2$) |
 | `beta_0`, `beta_1`, `beta_2`, `betas` | coherent amplitudes of a seeded weak mode, `betas[j]` = `beta_j` |
-| `gain`, `g_hat` | scalar parametric gain $g$ (real) and the gain operator $\hat g$ (non-commutative) used by the gain display |
+| `gain`, `g_hat` | scalar parametric gain $g$ (real; also the integration variable of the g-domain solutions) and the gain operator $\hat g$ (non-commutative) used by the gain display |
 
 ### Multimode operators
 
@@ -507,6 +506,6 @@ Every name below can be imported directly from `cas_qwm`.
 |---|---|
 | `op_pattern` | `BosonNum`, `BosonPat`, `NumShift`, `apply_num_shift`, `FermionPat`, `UidCommutator`, `extract_modes`, `check_num`, `in_boson_num`, `mul_pattern`, `redo_mul` |
 | `pattern_perturb` | `BSC`, `FSC`, `PF`, `pf`, `pf_add`, `PF0`, `PF1`, `PE`, `perturb_rec` |
-| `parametric_multimode` | `a_p`, `a_s`, `a_i`, `t_`, `nlc`, `pm`, `nm`, `_g`, `p2s`, `dsolve_pm1`, `dsolve_pm2`, `MultimodeCOP`, `MultimodeNum`, `MultimodeNum2`, `WMProcessor`, `twm_processors`, `fwm_processor`, `vac_pf`, `WMWrapper`, `WMSolver`, `TWMSolver`, `FWMSolver` |
+| `parametric_multimode` | `a_p`, `a_s`, `a_i`, `t_`, `nlc`, `pm`, `nm`, `gain`, `g_hat`, `p2s`, `dsolve_pm1`, `dsolve_pm2`, `MultimodeCOP`, `MultimodeNum`, `MultimodeNum2`, `WMProcessor`, `twm_processors`, `fwm_processor`, `vac_pf`, `WMWrapper`, `WMSolver`, `TWMSolver`, `FWMSolver` |
 
 Further functions (e.g. `pattern_form`, `is_pattern_form`, `bn_simp` in `cas_qwm.pattern_perturb.pattern_form`, and the Jacobi elliptic functions in `cas_qwm.jacobi`) can be imported from their submodules.

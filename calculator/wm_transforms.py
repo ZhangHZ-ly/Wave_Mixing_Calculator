@@ -4,9 +4,7 @@ from typing import Optional, Tuple
 from cas_qwm.op_pattern import BosonNum
 from cas_qwm.pattern_perturb import PF
 from cas_qwm.pattern_perturb.pattern_form import _ps, bn_simp
-from cas_qwm.parametric_multimode.wm_processor import t_, _g, nlc, a_p, a_i
-from cas_qwm.wm_variables import alpha_0, alpha_2, gain, g_hat
-from cas_qwm.parametric_multimode.wm_solver import pm
+from cas_qwm.wm_variables import a_p, a_i, t_, nlc, pm, alpha_0, alpha_2, gain, g_hat
 from sympy.core.singleton import S
 from sympy.core.traversal import bottom_up
 from sympy.functions.elementary.complexes import Abs
@@ -51,7 +49,7 @@ def t_to_g(
         g_sym, extra_subs = g_hat, {}
 
     inv_gc = bottom_up(1 / gc, _ps)
-    sub_dict = {t_: g_sym * inv_gc, _g: g_sym, **extra_subs}
+    sub_dict = {t_: g_sym * inv_gc, **extra_subs}
 
     f = lambda expr: bn_simp(expr.subs(sub_dict))
     return obj.apply(f, on_npf=True) if hasattr(obj, 'apply') else f(obj)

@@ -20,14 +20,14 @@ from sympy.physics.quantum.commutator import Commutator
 from ..wm_variables import *
 from ..op_pattern import BosonNum, BosonPat, NumShift
 from ..pattern_perturb import BSC, PF, PF0, PF1, PE
-from ..pattern_perturb.pattern_form import pf_add, _vpk, _ps, _mps, _key
+from ..pattern_perturb.pattern_form import pf_add, _vpk, _ps, _mps
 from ..pattern_perturb.perturb_expander import perturb_rec
 from ..dsolve_pm import group_terms, TR8h_selective, TR8_selective
 from sympy.functions.elementary.hyperbolic import cosh, sinh
 from sympy.functions.elementary.trigonometric import cos, sin
 from .multimode import (MultimodeCOP, MultimodeNum, MultimodeNum2)
 
-__all__ = ['WMProcessor', '_g', 'nm', 'vac_pf']
+__all__ = ['WMProcessor', 'vac_pf']
 
 def _collapse_boson_num(expr, vac_names):
     if not isinstance(expr, Expr) or expr.is_number:
@@ -74,8 +74,6 @@ def _merge_dicts(ds) -> dict:
 
 # Dummy symbols for MultimodeNum, MultimodeNum2, driving BosonNum
 _n1, _n2, _nd = symbols('n_1 n_2 n_d', Dummy=True, nonnegative=True)
-_g = Dummy('g', real=True)  # Dummy symbol for the parametric gain
-nm = Symbol('n_m', nonnegative=True)  # Mode count symbol n_m
 
 _e = lambda p: S.Zero if p == 1 else (p.exp if p.is_Pow else S.One)
 
@@ -304,11 +302,11 @@ class WMProcessor:
             coeffs = []
             x_part = []
             for factor in Mul.make_args(term):
-                if factor.has(_g):
+                if factor.has(gain):
                     x_part.append(factor)
                 else:
                     coeffs.append(factor)
-            term_grouped = group_terms(_mexpand(Mul(*x_part)), _g, self.dc)
+            term_grouped = group_terms(_mexpand(Mul(*x_part)), gain, self.dc)
             for k, v in term_grouped.items():
                 grouped[k].append(Mul(Add(*v), *coeffs))
         return grouped

@@ -25,7 +25,7 @@ from cas_qwm.pattern_perturb.pattern_form import _vpk
 from cas_qwm.parametric_multimode import (
     MultimodeCOP, MultimodeNum, MultimodeNum2, WMSolver, WMWrapper,
 )
-from cas_qwm.parametric_multimode.wm_processor import t_, nm, a_p, a_s, a_i
+from cas_qwm.wm_variables import t_, nm, a_p, a_s, a_i
 from sympy.core.add import Add
 from sympy.core.expr import Expr
 from sympy.core.function import Function
@@ -52,7 +52,7 @@ from .wm_transforms import apply_assertions
 __all__ = ['tc', 'evo_cache', 'cascade_evolve', 'resolve_cascade_symbol', 'resolve_cascade_phase',
            'eval_wave_mixing_cascade']
 
-tc = Dummy('t_c', nonnegative=True)  # further evolution time of the cascaded stage
+tc = Dummy('t_c', real=True)  # further evolution time of the cascaded stage
 # {(solver, solution order): {input-operator object: evolved WMWrapper at t_c}}
 evo_cache = defaultdict(dict)
 

@@ -2,19 +2,17 @@ from collections.abc import Sequence
 from functools import cache
 from sympy.core.singleton import S
 from sympy.core.numbers import I
-from sympy.core.symbol import Symbol
 from sympy.core.mul import Mul
 from sympy.functions.elementary.exponential import exp
 from sympy.physics.quantum.dagger import Dagger
 from ..pattern_perturb.pattern_form import PF, _vpk
 from ..dsolve_pm import dsd1, dsd2
 from .multimode import MultimodeNum2
-from .wm_processor import WMProcessor, a_p, a_s, a_i, t_, nlc, _g
+from ..wm_variables import a_p, a_s, a_i, t_, nlc, pm, gain
+from .wm_processor import WMProcessor
 from .wm_wrapper import WMWrapper
 
-__all__ = ['pm', 'twm_processors', 'fwm_processor', 'WMSolver', 'TWMSolver', 'FWMSolver']
-
-pm = Symbol('Δk', real=True)
+__all__ = ['twm_processors', 'fwm_processor', 'WMSolver', 'TWMSolver', 'FWMSolver']
 
 # Three- and four-wave mixing are maintained by separate processors, so that each keeps
 # its own perturbative mode orders (drive -1 for TWM, -1/2 for FWM; weak fields 0)
@@ -82,11 +80,11 @@ class WMSolver(Sequence):
 
     def _expand_g(self, w: WMWrapper, order) -> WMWrapper:
         """
-        Expands w to the given order and rewrites t_ as _g / gc for the g-domain dsolve.
+        Expands w to the given order and rewrites t_ as gain / gc for the g-domain dsolve.
         The result is kept unlabeled (exact arithmetic): the recursion needs the products of
         the lower-order solutions without truncation.
         """
-        sub = {t_: _g / self.gc}
+        sub = {t_: gain / self.gc}
         return w.expand(order).apply(lambda t: t.subs(sub), on_npf=True).with_order(S.Infinity)
 
 
@@ -172,7 +170,7 @@ class TWMSolver(WMSolver):
                 rhs = p.d_add(t1, -term2, last_sol[mode] @ (s3 * self.nd))
                 w_rhs = self._expand_g(rhs @ gc2, order)
                 sol = w_rhs.apply(
-                    lambda t: p.n_simp(dsd2(_g, p.p2s_group(t), dc, subs=self.gc * t_))
+                    lambda t: p.n_simp(dsd2(gain, p.p2s_group(t), dc, subs=self.gc * t_))
                 )
                 return sol + init
 
@@ -198,7 +196,7 @@ class TWMSolver(WMSolver):
             def _d1ts():
                 b = self._sol[0][0] if dc else self._sol[0][2]
                 w_rhs = self._expand_g(self.dd_last * (-I * nlc / self.gc), order)
-                s0 = w_rhs.apply(lambda t: p.n_simp(dsd1(_g, p.p2s_group(t), subs=self.gc * t_)))
+                s0 = w_rhs.apply(lambda t: p.n_simp(dsd1(gain, p.p2s_group(t), subs=self.gc * t_)))
                 return s0 + b
 
             if dc:
@@ -263,7 +261,7 @@ class FWMSolver(WMSolver):
         dd2 = sol_0[1] @ sol_0[0].adjoint() @ sol_0[2]
 
         w_rhs = self._expand_g((dd2 + xpm_c + coeff @ xpm_t) @ (-2 * I * nlc / self.gc), 2)
-        s0 = w_rhs.apply(lambda t: p.n_simp(dsd1(_g, p.p2s_group(t), subs=self.gc * t_)))
+        s0 = w_rhs.apply(lambda t: p.n_simp(dsd1(gain, p.p2s_group(t), subs=self.gc * t_)))
 
         sol_1 = (sol_0[0] + s0, sol_0[1], sol_0[2])
         # Each stored solution carries the highest order it applies to (with χ of order 2: the
