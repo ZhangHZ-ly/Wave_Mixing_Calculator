@@ -23,6 +23,7 @@ from ..pattern_perturb import BSC, PF, PF0, PF1, PE
 from ..pattern_perturb.pattern_form import pf_add, _vpk, _ps, _mps
 from ..pattern_perturb.perturb_expander import perturb_rec
 from ..dsolve_pm import group_terms, TR8h_selective, TR8_selective
+from sympy.functions.elementary.exponential import exp
 from sympy.functions.elementary.hyperbolic import cosh, sinh
 from sympy.functions.elementary.trigonometric import cos, sin
 from .multimode import (MultimodeCOP, MultimodeNum, MultimodeNum2)
@@ -336,6 +337,12 @@ class WMProcessor:
         tr8 = TR8h_selective if self.dc else TR8_selective
 
         groups = {S.One: e}  # {time-dependent part: coefficient}
+
+        def expand_x(m):
+            # exponentials of the time variables are held fixed while expanding: expand_mul
+            # would move exp(-x) into an expanded denominator as exp(x)
+            phases = {a: Dummy() for a in m.atoms(exp) if a.has(*xs)}
+            return _mexpand(m.xreplace(phases)).xreplace({d: a for a, d in phases.items()})
         for x in xs:
             def is_time(f):
                 if f.is_Pow and f.exp.is_Integer and f.exp > 0:
@@ -363,7 +370,7 @@ class WMProcessor:
                     cs, x_part = [], []
                     for f in Mul.make_args(term):
                         (x_part if f.has(x) else cs).append(f)
-                    for t in Add.make_args(_mexpand(Mul(*x_part))):
+                    for t in Add.make_args(expand_x(Mul(*x_part))):
                         tf, rest = [], []
                         for f in Mul.make_args(t):
                             (tf if is_time(f) else rest).append(f)
@@ -372,7 +379,15 @@ class WMProcessor:
             groups = {k: Add(*v) for k, v in grouped.items()}
 
         back = {d: a for a, d in nums.items()}
-        return Add(*(k.xreplace(back) * simp(c.xreplace(back)) for k, c in groups.items()))
+
+        def simp_coeff(c):
+            # exponentials of the time variables (e.g. phases) are held fixed, so that
+            # `simp` does not merge them into the powers of the other factors
+            c = c.xreplace(back)
+            phases = {a: Dummy() for a in c.atoms(exp) if a.has(*xs)}
+            return simp(c.xreplace(phases)).xreplace({d: a for a, d in phases.items()})
+
+        return Add(*(k.xreplace(back) * simp_coeff(c) for k, c in groups.items()))
 
     def d_add(self, *ws):
         """
