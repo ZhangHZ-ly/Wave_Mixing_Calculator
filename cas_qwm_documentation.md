@@ -23,6 +23,8 @@ All examples on this page were run with SymPy 1.14 from the repository root.
   - [`pf`](#pf--pattern_form) · [`PF`](#pf-class) · [`PE`](#pe--perturbative-expander) · [`perturb_rec`](#perturb_rec)
 - [Layer 3 — `cas_qwm.parametric_multimode`](#layer-3--cas_qwmparametric_multimode)
   - [Shared symbols](#shared-symbols) · [Multimode operators](#multimode-operators) · [`TWMSolver` / `FWMSolver`](#twmsolver--fwmsolver) · [`WMWrapper`](#wmwrapper) · [`WMProcessor`](#wmprocessor) · [`dsolve_pm1` / `dsolve_pm2` / `p2s`](#differential-equation-helpers)
+- [Two strong inputs — `cas_qwm.twm_dual_stimulated`](#two-strong-inputs--cas_qwmtwm_dual_stimulated)
+  - [Method](#method) · [`TWMDualSolver`](#twmdualsolver) · [`exact_fock_apply`](#exact_fock_apply) · [Accuracy](#accuracy) · [Jacobi elliptic functions](#jacobi-elliptic-functions--cas_qwmjacobi) · [`dsolve_lame`](#elliptic-polynomial-algebra--cas_qwmjacobidsolve_lame) · [`elliptic_algebra`](#elliptic-pf-coefficients--cas_qwmjacobielliptic_algebra)
 - [Exported names](#exported-names)
 
 ---
@@ -53,6 +55,7 @@ The package is organised in three layers; each layer only depends on the ones ab
 | 1 | `cas_qwm.op_pattern` | Single-mode operator patterns (`BosonPat`, `FermionPat`), number operators (`BosonNum`), number shifts and commutators. |
 | 2 | `cas_qwm.pattern_perturb` | Pattern-form reordering (`pf`), the `PF` algebra, perturbative expansion (`PE`). |
 | 3 | `cas_qwm.parametric_multimode` | Multimode operators, wave-mixing processors (`WMProcessor`), solvers (`TWMSolver`, `FWMSolver`), the `WMWrapper` algebra, ODE helpers (`dsolve_pm1`, `dsolve_pm2`, `p2s`). |
+| – | `cas_qwm.jacobi`, `cas_qwm.twm_dual_stimulated` | The `jacobi` package holds all the elliptic algebra: Jacobi elliptic functions (`jacobi.py`), the elliptic-polynomial ring with its closed-form Lamé solver (`dsolve_lame.py`), and the λ-series of that ring as `PF` coefficients with their `PE` coefficient algebra (`elliptic_algebra.py`). `twm_dual_stimulated` applies it to single-mode three-wave mixing with two strong inputs (`TWMDualSolver`). |
 
 ## Printing conventions
 
@@ -287,6 +290,7 @@ Non-integer orders (e.g. `-1/2`) are allowed. Functions are expanded as multivar
 | `update(orders, clear=False)` | Add / change orders of symbols or modes (an order of 0 removes the entry); `clear=True` first drops all previous orders. Registered types are kept. |
 | `assumptions` | Plain `dict` of orders; string keys (mode names) are sympified to `Symbol`s. |
 | `register(type, category, ...)` | Teach the expander the order rule of a new expression type (`'c'` constant, `'s'` symbol, `'p'` pattern). |
+| `register_algebra(alg, cancel=False)` | Hand the expressions recognized by a coefficient algebra over to it (see below). |
 | `handle_order_limits(handle, n_args=1)` | Analyse the order constraints of a function handle. |
 | `copy(cache=False)` | Copy of the expander. |
 
@@ -299,6 +303,8 @@ Non-integer orders (e.g. `-1/2`) are allowed. Functions are expanded as multivar
 >>> pe.leading_order(x**2*sin(y) + x**3)
 (x**2*sin(y), 2)
 ```
+
+**Coefficient algebras.** Some coefficients are better expanded in their own canonical representation than as SymPy expressions. A registered algebra provides `match(expr) -> bool`, `leading_order(expr) -> (term, order)` and `expand(expr, n) -> iterable of (term, order)`. `leading_order`, `expand_expr` and therefore `lo_pf` / `expand_pf` hand every matching expression to it. The orders stay entirely in the expansion step: `NumShift` and the `PF` products shift the number operators exactly, and the algebra expands the shifted coefficients when `PE` truncates them. `EllipticAlgebra` (`cas_qwm.jacobi.elliptic_algebra`) is such an algebra; `TWMDualSolver` uses it for its elliptic coefficients.
 
 ### `perturb_rec`
 
@@ -498,6 +504,184 @@ x*sinh(2*x)/2 - cosh(2*x)/4 + 1/4
 
 ---
 
+## Two strong inputs — `cas_qwm.twm_dual_stimulated`
+
+Single-mode three-wave mixing $H = \hbar\chi(a_1 a_2 a_0^\dagger + a_1^\dagger a_2^\dagger a_0)$ in which **two inputs are strong** and one is weak: sum-frequency generation from a strong signal and idler (weak pump, `weak='p'`), or difference-frequency generation from a strong pump and one strong lower-frequency field (`weak='s'` or `weak='i'`). The leading order is the classical Jacobi elliptic solution; the solver computes the quantum corrections recursively, to any order. The derivation, the check of the first-order formulas of the original notes and the corrections to them are in [docs/dual_stimulated_twm.md](docs/dual_stimulated_twm.md).
+
+### Method
+
+1. **Conservation laws.** $M_s = \hat N_1 + \hat N_0$, $M_i = \hat N_2 + \hat N_0$ and $H' = H/\hbar\chi$ are conserved. Using $\hat N_0(t) = M_s - a_1^\dagger(t) a_1(t)$ etc., every field obeys a **closed** second-order Heisenberg equation:
+
+$$\ddot a_1 = \chi^2\big[(2\hat N_1 + \hat N_0 - \hat N_2)\,a_1 - 2\,a_1^\dagger a_1 a_1\big](t),\qquad
+\ddot a_2 = \chi^2\big[(2\hat N_2 + \hat N_0 - \hat N_1)\,a_2 - 2\,a_2^\dagger a_2 a_2\big](t),$$
+$$\ddot a_0 = \chi^2\big[-(\hat N_1 + \hat N_2 + 2\hat N_0 + 1)\,a_0 + 2\,a_0^\dagger a_0 a_0\big](t),$$
+
+   where the linear coefficients are conserved and stand on the left of the field.
+2. **Forward recursion.** The strong fields are of order $-1$, the weak one of order 0, and $\chi$ of order 1. The leading order (order $-1$) is the classical solution; order $k$ solves the variational equation with a source given by the order-$k$ residual of the lower orders. Operator products are evaluated with `PF`: the coefficients are `EllipticTail` functions of the number operators, which `NumShift` shifts exactly, so the commutator (ordering) corrections enter automatically. `PE` truncates the products by orders, with `EllipticAlgebra` registered as a coefficient algebra (both in `cas_qwm.jacobi.elliptic_algebra`). The coupling term $g^\dagger a_0 a_0$ of the variational equation is the antilinear involution $J[X] = T^2X^\dagger/N_T$ ($T$ the leading key, $N_T = T^\dagger T$ at leading order), which a `PF` product evaluates: it maps the key $K$ to $T^2K^\dagger$, conjugates the coefficient and applies the exact weak-number shift. $P = g + J[g]$ and $Q = g - J[g]$ then obey uncoupled equations, solved once per pair $\{K, J(K)\}$ at a representative key: $g_K = (P + Q)_K/2$, $g_{J(K)} = J[(P - Q)_K/2]$. These are **Lamé equations of degree 1 and 2**, $y'' = (n(n+1)m\,\mathrm{sn}^2 - h)y$. Only six of them occur, and their fundamental solutions are tabulated in closed form (one is a Jacobi function or a derivative of one; the other contains $u$ and $E$):
+
+| $(n, h)$ | $y_1$ | $y_2$ |
+|---|---|---|
+| $(1, 1)$ | $\mathrm{cn}$ | $[\mathrm{cn}((1-m)u - E) + \mathrm{sn}\,\mathrm{dn}]/(1-m)$ |
+| $(1, m)$ | $\mathrm{dn}$ | $(E\,\mathrm{dn} - m\,\mathrm{sn}\,\mathrm{cn})/(1-m)$ |
+| $(1, 1+m)$ | $\mathrm{cn}\,\mathrm{dn} - \mathrm{sn}(u - E)$ | $\mathrm{sn}$ |
+| $(2, 1+m)$ | $\mathrm{cn}\,\mathrm{dn}$ | $[(1-m)u\,\mathrm{cn}\,\mathrm{dn} - (1+m)E\,\mathrm{cn}\,\mathrm{dn} + (1+m^2)\mathrm{sn} - m(1+m)\mathrm{sn}^3]/(1-m)^2$ |
+| $(2, 1+4m)$ | $\mathrm{cn} - u\,\mathrm{sn}\,\mathrm{dn} + [(2m-1)E\,\mathrm{sn}\,\mathrm{dn} + m(1-2m)\mathrm{cn}\,\mathrm{sn}^2]/(m-1)$ | $\mathrm{sn}\,\mathrm{dn}$ |
+| $(2, 4+m)$ | $\mathrm{dn} - 2u\,\mathrm{sn}\,\mathrm{cn} + [(m-2)E\,\mathrm{sn}\,\mathrm{cn} + (2-m)\mathrm{dn}\,\mathrm{sn}^2]/(m-1)$ | $\mathrm{sn}\,\mathrm{cn}$ |
+
+   They are normalized to unit Wronskian, $y_1(0) = y_2'(0) = 1$, $y_1'(0) = y_2(0) = 0$. The particular solution $y_2\int_0^u y_1 S - y_1\int_0^u y_2 S$ is integrated in closed form by recursion, as in `dsolve_pm` (module `cas_qwm.jacobi.dsolve_lame`). The integrands are polynomials in $(u, E)$ times $\mathrm{sn}^{2k}$ or $\mathrm{sn}^{2k+1}\mathrm{cn}\,\mathrm{dn}$. These are reduced by the recurrence of $\int\mathrm{sn}^{2k}$ and by integration by parts. Every coefficient lies in the ring $\mathbb Q(m)[n, u, E(u), \mathrm{sn}, \mathrm{cn}, \mathrm{dn}]$, where $E$ is Jacobi's epsilon function. No numerical step is involved.
+3. **Variables.** The weak number $n = \hat N_w$ and two conserved strong quantities $L_X, L_Y$ are used:
+
+| `weak` | $L_X$ | $L_Y$ | parameter $m$ | strong fields at leading order |
+|---|---|---|---|---|
+| `'p'` | $\hat N_1 + \hat N_0$ | $\hat N_2 + \hat N_0$ | $L_X/L_Y$ | $a_1 \to \mathrm{cn}\,a_1$, $a_2 \to \mathrm{dn}\,a_2$, $a_0 \to -i\lambda\,\mathrm{sn}\,a_1a_2$ |
+| `'s'` | $\hat N_0 + \hat N_1$ | $\hat N_2 - \hat N_1$ | $-L_X/L_Y$ | $a_0 \to \mathrm{cn}\,a_0$, $a_2 \to \mathrm{dn}\,a_2$, $a_1 \to -i\lambda\,\mathrm{sn}\,a_0a_2^\dagger$ |
+| `'i'` | $\hat N_0 + \hat N_2$ | $\hat N_1 - \hat N_2$ | $-L_X/L_Y$ | $a_0 \to \mathrm{cn}\,a_0$, $a_1 \to \mathrm{dn}\,a_1$, $a_2 \to -i\lambda\,\mathrm{sn}\,a_0a_1^\dagger$ |
+
+   with $u = \chi t\sqrt{L_Y}$, $\lambda = L_Y^{-1/2}$ and the Jacobi functions of $(u|m)$. A negative parameter is the imaginary-modulus form of the $\mathrm{sd}, \mathrm{cd}, \mathrm{nd}$ functions of the notes. A shifted coefficient is expanded by the registered algebra: exactly in $n$, and as a Taylor series in $\lambda^2$ on $(u, m, \lambda)$, using the closed-form $m$-derivatives of the Jacobi functions.
+4. **No phase mismatch.** A mismatch $\Delta k \sim \chi\sqrt L$ changes the leading orbit (Armstrong et al., Phys. Rev. 127, 1918, Secs. V–VI): the modulus is set by the roots of the mismatched cubic, and the phase is an elliptic integral of the third kind, which lies outside the ring above. It is therefore not included.
+
+The solution is returned in **pattern form**: a sum of canonical-operator keys with number-operator coefficients on the right. This is the representation used by `PF`. For $a_1$ with a weak pump, the keys are $(a_0^\dagger a_1 a_2)^r a_1$ and $(a_0 a_1^\dagger a_2^\dagger)^{r-1} a_2^\dagger a_0$, i.e. the harmonic decomposition of the notes' standard form $U a_1 + V a_2^\dagger a_0$.
+
+### `TWMDualSolver`
+
+```python
+TWMDualSolver(weak='p')
+```
+
+| Member | Description |
+|---|---|
+| `get_sol(target, order)` | List of the `PF` terms of orders $-1, \dots,$ `order` of mode `target` (`0`/`'p'`, `1`/`'s'`, `2`/`'i'`); their coefficients are `EllipticTail`s of `alg`. Computed recursively and cached. |
+| `sol_pf(target, order)` | The solution accurate up to `order` as one `PF`. It can be multiplied with other `PF`s and truncated with `pe.expand_pf`. |
+| `sol_expr(target, order, explicit=True)` | SymPy expression accurate up to `order`. `explicit=True`: in number operators and $t$ (Jacobi functions of operator arguments); `explicit=False`: with the symbols `u`, `m`, `λ`, `n`, `sn`, `cn`, `dn`, `E`. |
+| `apply(target, order, fock, chi_t)` | Numerical action on $|n_0, n_1, n_2\rangle$ at $\chi t$ = `chi_t`; returns `{(n_0, n_1, n_2): amplitude}`. |
+| `symbols()` | Expressions of $L_X, L_Y, m, n, u$ in number operators. |
+| `residual(target, A, cap)` | Residual of the closed equation (in $u$ units) of a `PF` `A`, expanded up to order `cap`. |
+| `alg`, `pe` | The `EllipticAlgebra` of the coefficients, and the `PE` instance (strong modes of order $-1$, `alg` registered) that counts and truncates the orders. |
+
+```python
+>>> P = s.sol_pf('s', 1)
+>>> n_s = s.pe.expand_pf(P.adjoint() * P, 0)   # N_s(t) up to order 0, as a PF
+```
+
+```python
+>>> from cas_qwm import TWMDualSolver
+>>> s = TWMDualSolver('p')
+>>> s.sol_expr('s', 0, explicit=False)     # signal, accurate up to the first correction
+cn*a_1 + λ**3*(-I*E*cn/(2*m**2 - 2*m) - I*cn*u/(2*m) + I*dn*sn/(2*m - 2))*Dagger(a_0)*BP(a_1; 2)*a_2 + λ*(-I*E*cn/(2*m - 2) - I*cn*u/2 + I*dn*sn*(2 - m)/(2*m - 2))*a_0*Dagger(a_2)
+```
+
+Solving order 2 takes about 2 s per field, and order 3 about 10 s.
+
+### `exact_fock_apply`
+
+```python
+exact_fock_apply(target, fock, chi_t)
+```
+
+Exact single-mode reference, $a_\text{target}(t)|n_0, n_1, n_2\rangle$ as `{(n_0, n_1, n_2): amplitude}`. In a conserved block $(M_s, M_i)$, $H'$ is a tridiagonal matrix in $n_0$. The state is propagated there by a Chebyshev expansion of $e^{\mp i\chi H' t}$ (Jacobi–Anger series, Bessel coefficients from Miller's recurrence). It is pure Python in double precision and needs no NumPy; $N = 3200$ takes a few seconds.
+
+```python
+>>> from cas_qwm import exact_fock_apply
+>>> ex = exact_fock_apply('s', (1, 400, 800), 2.0 / 801**0.5)
+>>> ap = s.apply('s', 2, (1, 400, 800), 2.0 / 801**0.5)
+```
+
+### Accuracy
+
+Each order gains a factor $L^{-1/2}$. Typical errors $\|(a^\text{exact} - a^\text{pert})|n\rangle\|$ for `weak='p'`, target $a_1$, $u = 3$, $n_0 = 2$, $(\hat N_1, \hat N_2) = (N/2, N)$:
+
+| order | $N = 200$ | $N = 800$ | $N = 3200$ |
+|---|---|---|---|
+| $-1$ (classical) | 2.1 | 2.2 | 2.2 |
+| 0 | 1.0e-1 | 3.8e-2 | 1.7e-2 |
+| 1 | 8.1e-2 | 2.1e-2 | 5.3e-3 |
+| 2 | 5.6e-3 | 5.8e-4 | 6.8e-5 |
+
+All nine (weak mode, target) combinations were checked up to order 2 (weak pump up to order 3), at times beyond the first zero of $\mathrm{cn}$.
+
+### Jacobi elliptic functions — `cas_qwm.jacobi`
+
+`jacobi_sn(u, m)`, `jacobi_cn(u, m)`, `jacobi_dn(u, m)` and Jacobi's epsilon function `jacobi_epsilon(u, m)` $= E(u|m) = \int_0^u \mathrm{dn}^2(v|m)\,dv$. All use the parameter convention $m = k^2$, as in mpmath and DLMF §22. They evaluate numerically through `evalf` / `N` for any real or complex arguments, including $m < 0$ and $m > 1$. The derivatives with respect to both arguments are in closed form, so the ring generated by $u, E, \mathrm{sn}, \mathrm{cn}, \mathrm{dn}$ over $\mathbb Q(m)$ is closed under $\partial_u$ and $\partial_m$:
+
+$$\partial_m \mathrm{sn} = \mathrm{cn}\,\mathrm{dn}\,X + \frac{\mathrm{sn}\,\mathrm{cn}^2}{2(1-m)},\quad
+\partial_m \mathrm{cn} = -\mathrm{sn}\,\Phi,\quad
+\partial_m \mathrm{dn} = -\frac{\mathrm{sn}^2\mathrm{dn}}{2(1-m)} - m\,\mathrm{sn}\,\mathrm{cn}\,X,\quad
+\partial_m E = \frac{E - u}{2m} + \mathrm{dn}\,\Phi,$$
+
+with $X = \dfrac{(1-m)u - E}{2m(1-m)}$ and $\Phi = \partial_m \mathrm{am} = \dfrac{u\,\mathrm{dn}}{2m} - \dfrac{E\,\mathrm{dn}}{2m(1-m)} + \dfrac{\mathrm{sn}\,\mathrm{cn}}{2(1-m)}$.
+
+```python
+>>> from sympy import Rational, N
+>>> from cas_qwm import jacobi_sn, jacobi_epsilon
+>>> N(jacobi_sn(Rational(23, 10), Rational(37, 100)))
+0.905451503535721
+>>> N(jacobi_epsilon(Rational(23, 10), -Rational(1, 2)))
+2.94782630151328
+```
+
+### Elliptic-polynomial algebra — `cas_qwm.jacobi.dsolve_lame`
+
+The ring algebra behind `TWMDualSolver`, independent of the operator layer. Its elements are SymPy `PolyElement`s of the ring `R` $= \mathbb Q(m)[n, u, E, s, c, d, j]$ ($s, c, d = \mathrm{sn}, \mathrm{cn}, \mathrm{dn}(u|m)$, $j^2 = -1$), kept reduced modulo $c^2 = 1 - s^2$, $d^2 = 1 - m s^2$.
+
+| Name | Description |
+|---|---|
+| `m`, `R`, `M` | The parameter symbol, the ring (generators `R.gens` = $n, u, E, s, c, d, j$; `R.one`, `R.zero`) and $m$ as a coefficient. |
+| `red(f)`, `mul(f, g)` | Reduction of $c^2, d^2, j^2$; reduced product. |
+| `diff_u(f)`, `diff_m(f)`, `diff_um(f, a, b)` | $\partial_u$, $\partial_m$ (closed form, see above), and the cached $\partial_u^a\partial_m^b$. |
+| `conj(f)`, `at0(f)`, `key(f)` | Complex conjugate ($j \to -j$), value at $u = 0$, hashable key. |
+| `antideriv(f)`, `integrate0(f)` | Antiderivative in $u$ and $\int_0^u$, by the recurrence of $\int\mathrm{sn}^{2k}$ and integration by parts; `ObstructionError` if it leaves the ring (e.g. $\int E\,du$). |
+| `LAME`, `lame(V)` | Closed-form fundamental solutions of the six Lamé equations above, keyed by $(\nu, h)$; lookup by the potential $V = \nu(\nu+1)m s^2 - h$. |
+| `solve_lame(V, S, y0, dy0)` | Solution of $y'' - V y = S$, $y(0) = y_0$, $y'(0) = y'_0$, by variation of constants. |
+| `evaluate(f, m, values)` | Numerical value at the parameter `m` and the generator values $(n, u, E, s, c, d, j)$ (e.g. mpmath numbers). |
+
+```python
+>>> from cas_qwm.jacobi.dsolve_lame import R, M, solve_lame
+>>> n, u, E, s, c, d, j = R.gens
+>>> y = solve_lame(2*M*s**2 - 1, c, 0, 0)       # y'' = (2m sn² - 1) y + cn, y(0) = y'(0) = 0
+>>> y.as_expr()
+E**2*c/(2*m**2 - 2*m) + E*c*u/m - E*d*s/(m**2 - m) + c*s**2/(2*m - 2) + c*u**2*(m - 1)/(2*m) - d*s*u/m
+```
+
+### Elliptic PF coefficients — `cas_qwm.jacobi.elliptic_algebra`
+
+Functions of three number operators $(N_1, N_2, N_3)$ in the variables of the ring: $L_X = \sum_k x_k N_k$, $L_Y = \sum_k y_k N_k$, $n = \sum_k z_k N_k$, with $m = \varepsilon L_X/L_Y$, $\lambda = L_Y^{-1/2}$ and $u = \chi t\sqrt{L_Y}$. Such a function is an **LSeries** `{p: f_p}` $= \sum_p \lambda^p f_p(u, m, n)$ with $f_p$ in the ring of `dsolve_lame`.
+
+```python
+EllipticAlgebra(nops, lx, ly, ln, eps=1)
+```
+
+| Member | Description |
+|---|---|
+| `N` | The number operators `nops` as LSeries. |
+| `tail(f)` | The `PF` coefficient of an LSeries: `EllipticTail(id, N_1, N_2, N_3)`, a SymPy function of the number operators. `NumShift` (and therefore every `PF` product) shifts its arguments exactly, e.g. to `F3(N_0, -1 + N_1, N_2)`; its adjoint conjugates the series. |
+| `match`, `leading_order`, `expand` | The `PE` coefficient-algebra interface (see `PE`): polynomials in `nops` and the tails of this algebra are expanded here. A shifted tail is expanded exactly in $n$ and as a Taylor series in $\lambda^2$ on $(u, m, \lambda)$, using the closed-form derivatives of the Jacobi functions. |
+| `to_ls(expr, maxp)` | LSeries of such a polynomial, truncated at $\lambda^{\text{maxp}}$. |
+| `shift(f, dN, maxp)` | $f(N + \Delta N)$, truncated at $\lambda^{\text{maxp}}$. |
+| `symbols(chi_t=None)` | $L_X, L_Y, m, n$ (and $u$) in the number operators. |
+| `to_expr(f, chi_t=None)` | SymPy expression of an LSeries: in number operators and Jacobi functions if `chi_t` is given, otherwise in the symbols `λ`, `m`, `n`, `u`, `sn`, `cn`, `dn`, `E`. |
+| `evaluator(nvals, chi_t)` | Function giving the numerical value of an LSeries at given numbers of quanta. |
+
+The module also provides the LSeries operations `ls_add`, `ls_mul` (truncated), `ls_scale` and `ls_map`.
+
+```python
+>>> from cas_qwm import PE, PF, a_s
+>>> from cas_qwm.op_pattern import BosonNum
+>>> from cas_qwm.jacobi.dsolve_lame import R
+>>> from cas_qwm.jacobi.elliptic_algebra import EllipticAlgebra
+>>> n, u, E, s, c, d, j = R.gens
+>>> nops = [BosonNum(x) for x in ('a_0', 'a_1', 'a_2')]
+>>> alg = EllipticAlgebra(nops, (1, 1, 0), (1, 0, 1), (1, 0, 0))   # weak pump
+>>> pe = PE({'a_1': -1, 'a_2': -1}); pe.register_algebra(alg)
+>>> A = PF({k: alg.tail({0: c}) for k in PF.from_val(a_s).table})  # a_1 cn(u|m)
+>>> (A * A).table                                                  # exact shift (ids vary)
+{((BP(a_1; 2),), ()): F0(N_(a_0), -1 + N_(a_1), N_(a_2))*F0(N_(a_0), N_(a_1), N_(a_2))}
+>>> (t,) = pe.expand_pf(A * A, 0).table.values()                    # expanded up to order 0
+>>> alg.to_expr(alg.to_ls(t, 2))
+-sn**2 + λ**2*(E*cn*dn*sn/(2*m**2 - 2*m) + cn*dn*sn*u/(2*m) + sn**4/(2*m - 2) - sn**2/(2*m - 2)) + 1
+```
+
+---
+
 ## Exported names
 
 Every name below can be imported directly from `cas_qwm`.
@@ -507,5 +691,7 @@ Every name below can be imported directly from `cas_qwm`.
 | `op_pattern` | `BosonNum`, `BosonPat`, `NumShift`, `apply_num_shift`, `FermionPat`, `UidCommutator`, `extract_modes`, `check_num`, `in_boson_num`, `mul_pattern`, `redo_mul` |
 | `pattern_perturb` | `BSC`, `FSC`, `PF`, `pf`, `pf_add`, `PF0`, `PF1`, `PE`, `perturb_rec` |
 | `parametric_multimode` | `a_p`, `a_s`, `a_i`, `t_`, `nlc`, `pm`, `nm`, `gain`, `g_hat`, `p2s`, `dsolve_pm1`, `dsolve_pm2`, `MultimodeCOP`, `MultimodeNum`, `MultimodeNum2`, `WMProcessor`, `twm_processors`, `fwm_processor`, `vac_pf`, `WMWrapper`, `WMSolver`, `TWMSolver`, `FWMSolver` |
+| `jacobi` | `jacobi_sn`, `jacobi_cn`, `jacobi_dn`, `jacobi_epsilon` |
+| `twm_dual_stimulated` | `TWMDualSolver`, `exact_fock_apply` |
 
-Further functions (e.g. `pattern_form`, `is_pattern_form`, `bn_simp` in `cas_qwm.pattern_perturb.pattern_form`, and the Jacobi elliptic functions in `cas_qwm.jacobi`) can be imported from their submodules.
+Further functions (e.g. `pattern_form`, `is_pattern_form`, `bn_simp` in `cas_qwm.pattern_perturb.pattern_form`) can be imported from their submodules.

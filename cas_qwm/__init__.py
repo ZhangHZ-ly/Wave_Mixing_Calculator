@@ -8,6 +8,11 @@ Layered architecture (in ascending order of abstraction, descending order of pri
    PatternForm (PF) normal ordered polynomial representations and perturbation expansion (PE).
 3. parametric_multimode:
    Multimode processors, solvers (TWM, FWM), differential equations (dsolve_pm), and algebraic wrappers.
+4. jacobi, twm_dual_stimulated:
+   The jacobi package holds the elliptic algebra: Jacobi elliptic functions, the elliptic-polynomial
+   ring with its Lamé solver (jacobi.dsolve_lame) and its PF/PE coefficient algebra
+   (jacobi.elliptic_algebra); twm_dual_stimulated applies it to the single-mode three-wave mixing
+   with two strong inputs.
 
 Lazy loading is implemented via PEP 562 (__getattr__, __dir__).
 Submodules and their exported symbols are loaded on demand upon first access,
@@ -70,18 +75,24 @@ if TYPE_CHECKING:
         TWMSolver,
         FWMSolver,
     )
+    from .jacobi import jacobi_sn, jacobi_cn, jacobi_dn, jacobi_epsilon
+    from .twm_dual_stimulated import TWMDualSolver, exact_fock_apply
 
 # Submodules in priority order (op_pattern is the base layer with highest priority)
 _PRIORITY_MODULES: List[str] = [
     'cas_qwm.op_pattern',
     'cas_qwm.pattern_perturb',
     'cas_qwm.parametric_multimode',
+    'cas_qwm.jacobi',
+    'cas_qwm.twm_dual_stimulated',
 ]
 
 _SUBMODULES: Dict[str, str] = {
     'op_pattern': 'cas_qwm.op_pattern',
     'pattern_perturb': 'cas_qwm.pattern_perturb',
     'parametric_multimode': 'cas_qwm.parametric_multimode',
+    'jacobi': 'cas_qwm.jacobi',
+    'twm_dual_stimulated': 'cas_qwm.twm_dual_stimulated',
 }
 
 _MODULE_EXPORTS: Dict[str, List[str]] = {
@@ -132,6 +143,16 @@ _MODULE_EXPORTS: Dict[str, List[str]] = {
         'TWMSolver',
         'FWMSolver',
     ],
+    'cas_qwm.jacobi': [
+        'jacobi_sn',
+        'jacobi_cn',
+        'jacobi_dn',
+        'jacobi_epsilon',
+    ],
+    'cas_qwm.twm_dual_stimulated': [
+        'TWMDualSolver',
+        'exact_fock_apply',
+    ],
 }
 
 # Construct static symbol mapping in priority order.
@@ -146,6 +167,8 @@ __all__: List[str] = [
     'op_pattern',
     'pattern_perturb',
     'parametric_multimode',
+    'jacobi',
+    'twm_dual_stimulated',
 ]
 _seen: Set[str] = set(__all__)
 for _mod_name in _PRIORITY_MODULES:

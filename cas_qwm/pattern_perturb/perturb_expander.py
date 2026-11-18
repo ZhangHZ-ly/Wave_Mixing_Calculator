@@ -365,11 +365,21 @@ class PE:
     order of 1: << 1, adds one order of perturbation
     order of -1: >> 1, cancels one order of perturbation
     order of oo (S.Infinity): pure zero
+
+    Coefficient algebras (register_algebra) take over the orders and expansions of the expressions
+    they recognize, e.g. functions of number operators kept in a canonical series representation.
+    An algebra provides
+        match(expr) -> bool: whether expr belongs to the algebra,
+        leading_order(expr) -> (leading term, order),
+        expand(expr, n) -> iterable of (term, order) up to the order n.
+    leading_order and expand_expr (hence lo_pf and expand_pf) hand every matching expression to
+    it, so the orders stay in the expansion step: NumShift and the PF products shift the number
+    operators exactly, and the algebra expands the shifted coefficients when they are truncated.
     """
     exclude = frozenset({Add, Mul, Pow, conjugate, Abs,
                         Integral, Sum, Derivative, Subs,
                         Commutator, AntiCommutator, UidCommutator})
-    __slots__ = ('assumptions', 'rc', 'rs', 'rp', '_lo_cache', '_subs_cache')
+    __slots__ = ('assumptions', 'rc', 'rs', 'rp', 'algebras', '_lo_cache', '_subs_cache')
 
     def __init__(self, assumptions=None):
         # Plain dict with sympified keys/values (see _akey); faster lookups than a sympy Dict
@@ -382,6 +392,7 @@ class PE:
             BosonPat: ('name', lambda p: Add(*p.exps)),
             FermionPat: ('name', lambda p: Add(*p.exps)),
         }
+        self.algebras = []
         self._lo_cache = dict()
         self._subs_cache = dict()
 
@@ -416,6 +427,17 @@ class PE:
                 self.rs.add(t)
             case 'p':
                 self.rp[t] = (id, fh)
+
+    def register_algebra(self, alg, cancel=False):
+        """
+        Registers a coefficient algebra (see the class docstring for its interface).
+        If cancel == True, the algebra is removed.
+        """
+        if alg in self.algebras:
+            self.algebras.remove(alg)
+        if not cancel:
+            self.algebras.append(alg)
+        self._lo_cache.clear()
     
     def update(self, orders: dict | None = None, clear: bool = False):
         """
@@ -450,6 +472,7 @@ class PE:
         new.rc = self.rc.copy()
         new.rs = self.rs.copy()
         new.rp = self.rp.copy()
+        new.algebras = self.algebras.copy()
         if cache:
             new._lo_cache = self._lo_cache.copy()
             new._subs_cache = self._subs_cache.copy()
@@ -468,6 +491,9 @@ class PE:
             return S.Zero, S.Infinity
         if expr.is_number:
             return expr, S.Zero
+        for alg in self.algebras:
+            if alg.match(expr):
+                return alg.leading_order(expr)
         if isinstance(expr, (Abs, conjugate)):
             le, oe = self.leading_order(expr.args[0])
             return expr.func(le), oe
@@ -595,6 +621,10 @@ class PE:
         # we expect the order limit to be identified
         if not n.is_number or n.is_infinite:
             raise ValueError('Expect identified finite order')
+        for alg in self.algebras:
+            if alg.match(expr):
+                yield from alg.expand(expr, n)
+                return
         if expr in self._subs_cache:
             yield from self.expand_expr(self._subs_cache[expr], n)
             return
