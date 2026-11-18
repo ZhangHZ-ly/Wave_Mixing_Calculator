@@ -9,7 +9,7 @@ from ..pattern_perturb.pattern_form import PF, _vpk
 from ..dsolve_pm import dsd1, dsd2
 from .multimode import MultimodeNum2
 from ..wm_variables import a_p, a_s, a_i, t_, nlc, pm, gain
-from .wm_processor import WMProcessor
+from .wm_processor import WMProcessor, unify_radicand
 from .wm_wrapper import WMWrapper
 
 __all__ = ['twm_processors', 'fwm_processor', 'WMSolver', 'TWMSolver', 'FWMSolver']
@@ -87,6 +87,18 @@ class WMSolver(Sequence):
         sub = {t_: gain / self.gc}
         return w.expand(order).apply(lambda t: t.subs(sub), on_npf=True).with_order(S.Infinity)
 
+    def _unify(self, x):
+        """
+        Brings the powers of the radicand of gc (4 gc^2, containing the phase mismatch) in an
+        expression, a PF or a WMWrapper to one form (see unify_radicand), so that the solutions
+        and the products built from them keep it instead of expanded forms.
+        """
+        rad = (2 * self.gc) ** 2
+        if not rad.has(pm):
+            return x
+        f = lambda e: unify_radicand(e, rad)
+        return x.apply(f, on_npf=True) if hasattr(x, 'apply') else f(x)
+
 
 class TWMSolver(WMSolver):
     """
@@ -146,7 +158,7 @@ class TWMSolver(WMSolver):
             else:
                 return PF({((Dagger(a_i),), ()): dsd2(self.gc * t_, dict(), False,
                                                       S.Zero, -I * nlc / self.gc)})
-        self.fdf0 = _fdf0
+        self.fdf0 = cache(lambda n0, mode: self._unify(_fdf0(n0, mode)))
 
     def _get_sol(self, order: int):
         if order < -1:
@@ -169,9 +181,8 @@ class TWMSolver(WMSolver):
                 t1 = -term1 if mode == 0 else term1
                 rhs = p.d_add(t1, -term2, last_sol[mode] @ (s3 * self.nd))
                 w_rhs = self._expand_g(rhs @ gc2, order)
-                sol = w_rhs.apply(
-                    lambda t: p.n_simp(dsd2(gain, p.p2s_group(t), dc, subs=self.gc * t_))
-                )
+                sol = w_rhs.apply(lambda t: self._unify(
+                    p.n_simp(dsd2(gain, p.p2s_group(t), dc, subs=self.gc * t_))))
                 return sol + init
 
             if dc:
@@ -196,7 +207,8 @@ class TWMSolver(WMSolver):
             def _d1ts():
                 b = self._sol[0][0] if dc else self._sol[0][2]
                 w_rhs = self._expand_g(self.dd_last * (-I * nlc / self.gc), order)
-                s0 = w_rhs.apply(lambda t: p.n_simp(dsd1(gain, p.p2s_group(t), subs=self.gc * t_)))
+                s0 = w_rhs.apply(lambda t: self._unify(
+                    p.n_simp(dsd1(gain, p.p2s_group(t), subs=self.gc * t_))))
                 return s0 + b
 
             if dc:
@@ -253,7 +265,7 @@ class FWMSolver(WMSolver):
             a_i: {(None,): PF({_vpk: dsd2(self.gc * t_, dict(),
                                               True, S.One, self.hpm / self.gc)})}
         })
-        sol_0 = (fwm0_0, fwm0_1, fwm0_2)
+        sol_0 = (fwm0_0, self._unify(fwm0_1), self._unify(fwm0_2))
 
         xpm_c = WMWrapper(p, {(None,): PF({((a_p,), ()): S.Half * MultimodeNum2(a_s.name, a_i.name)})})
         coeff = WMWrapper(p, {(None,): PF({((a_p,), ()): S.Half})})
@@ -261,7 +273,8 @@ class FWMSolver(WMSolver):
         dd2 = sol_0[1] @ sol_0[0].adjoint() @ sol_0[2]
 
         w_rhs = self._expand_g((dd2 + xpm_c + coeff @ xpm_t) @ (-2 * I * nlc / self.gc), 2)
-        s0 = w_rhs.apply(lambda t: p.n_simp(dsd1(gain, p.p2s_group(t), subs=self.gc * t_)))
+        s0 = w_rhs.apply(lambda t: self._unify(
+            p.n_simp(dsd1(gain, p.p2s_group(t), subs=self.gc * t_))))
 
         sol_1 = (sol_0[0] + s0, sol_0[1], sol_0[2])
         # Each stored solution carries the highest order it applies to (with χ of order 2: the

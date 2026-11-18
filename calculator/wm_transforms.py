@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 from cas_qwm.op_pattern import BosonNum
 from cas_qwm.pattern_perturb import PF
 from cas_qwm.pattern_perturb.pattern_form import _ps, bn_simp
+from cas_qwm.parametric_multimode.wm_processor import unify_radicand
 from cas_qwm.wm_variables import a_p, a_i, t_, nlc, pm, alpha_0, alpha_2, gain, g_hat
 from sympy.core.function import _mexpand
 from sympy.core.singleton import S
@@ -55,18 +56,15 @@ def t_to_g(
     sub_dict = {t_: g_sym * inv_gc, **extra_subs}
 
     if proc == 'fwm' and mismatch:
-        # the radicand of gc appears both factored and expanded (product-to-sum); all its powers
-        # are brought to the expanded form so that gc t -> g cancels
-        rad = _mexpand((2 * gc) ** 2)
-        sub_dict[t_] = g_sym * 2 * rad ** (-S.Half)
-        is_rad = lambda x: x.is_Pow and x.base.has(pm) and x.base != rad and _mexpand(x.base) == rad
+        # all powers of the radicand of gc take its form, so that gc t -> g cancels
+        rad = (2 * gc) ** 2
 
         # the self-phase-modulation phases exp(±i nlc N t) keep t (in g they would carry 1/gc)
         def f(expr):
             spm = {a: Dummy() for a in expr.atoms(exp) if a.has(t_) and not a.has(pm)}
             back = {d: a.subs(extra_subs) for a, d in spm.items()}
             e = expr.xreplace(spm).subs(extra_subs)
-            e = e.replace(is_rad, lambda x: rad ** x.exp).subs(sub_dict)
+            e = unify_radicand(e, rad).subs(sub_dict)
             return bn_simp(e).xreplace(back)
     else:
         f = lambda expr: bn_simp(expr.subs(sub_dict))
@@ -171,6 +169,10 @@ def apply_assertions(
     val = val.expand(order)
     if proc == 'fwm' and not mismatch:
         val = s._zq(val)
+    if mismatch:
+        # one form of the radicand of gc (= 4 gc^2), so that its powers merge in the simplification
+        rad = (2 * s.gc) ** 2
+        val = val.apply(lambda e: unify_radicand(e, rad), on_npf=True)
     val = val.apply(_postprocess_pf)
     if single_mode:
         val = val.to_single_mode(degenerate=degenerate)

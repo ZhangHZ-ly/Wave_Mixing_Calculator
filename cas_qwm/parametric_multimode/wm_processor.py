@@ -9,10 +9,12 @@ from sympy.core.symbol import Dummy, Symbol, symbols
 from sympy.core.numbers import Integer
 from sympy.core.add import Add
 from sympy.core.mul import Mul
+from sympy.core.power import Pow
 from sympy.core.function import _mexpand
-from sympy.core.traversal import bottom_up
+from sympy.core.traversal import bottom_up, preorder_traversal
 from sympy.core.exprtools import factor_terms
 from sympy.core.sorting import default_sort_key
+from sympy.polys.polytools import cancel
 from sympy.polys.rationaltools import together
 from sympy.simplify.radsimp import collect
 from sympy.physics.quantum.boson import BosonOp
@@ -28,7 +30,7 @@ from sympy.functions.elementary.hyperbolic import cosh, sinh
 from sympy.functions.elementary.trigonometric import cos, sin
 from .multimode import (MultimodeCOP, MultimodeNum, MultimodeNum2)
 
-__all__ = ['WMProcessor', 'vac_pf']
+__all__ = ['WMProcessor', 'vac_pf', 'unify_radicand']
 
 def _collapse_boson_num(expr, vac_names):
     if not isinstance(expr, Expr) or expr.is_number:
@@ -77,6 +79,45 @@ def _merge_dicts(ds) -> dict:
 _n1, _n2, _nd = symbols('n_1 n_2 n_d', Dummy=True, nonnegative=True)
 
 _e = lambda p: S.Zero if p == 1 else (p.exp if p.is_Pow else S.One)
+
+
+def unify_radicand(expr, rad):
+    """
+    Brings the powers of the radicand `rad` of the gain coefficient (gc = sqrt(rad)/2, e.g.
+    4 nlc^2 N - Δk^2 for mismatched TWM, Δk(4 nlc N - Δk) for mismatched FWM) to the base `rad`
+    itself, so that they merge (and cancel against gc) instead of standing in expanded forms:
+    - a base that expands to rad is replaced by rad;
+    - an integer power of a base q * rad^k (q a monomial, possibly with roots of rad, e.g.
+      rad^2 expanded or -Δk^2 sqrt(rad) + 4 nlc^2 N sqrt(rad) = rad^(3/2)) is split into
+      q^e rad^(k e).
+    """
+    target = _mexpand(rad)
+    root = rad ** S.Half
+    g = Dummy(positive=True)
+
+    def canon(x):
+        if not x.is_Pow or x.base == rad or not x.base.has(pm):
+            return x
+        if _mexpand(x.base) == target:
+            return rad ** x.exp
+        if not (x.exp.is_Integer and x.base.is_Add):
+            return x
+        # number operators commute here; commutative dummies let `cancel` divide by rad
+        nums = {a: Dummy() for a in preorder_traversal(x.base)
+                if isinstance(a, (BosonNum, MultimodeNum, MultimodeNum2))}
+        b = x.base.xreplace({root: g}).xreplace(nums)
+        r = target.xreplace(nums)
+        if not (b.is_commutative and r.is_commutative):
+            return x
+        back = {d: a for a, d in nums.items()}
+        for k in range(1, 5):
+            q = cancel(b / r ** k)
+            if not q.atoms(Add):
+                # (q rad^k)^e = q^e rad^(k e): the number operators in q commute with rad
+                return q.xreplace(back).xreplace({g: root}) ** x.exp * rad ** (k * x.exp)
+        return x
+
+    return bottom_up(expr, canon)
 
 
 class WMProcessor:
@@ -339,10 +380,14 @@ class WMProcessor:
         groups = {S.One: e}  # {time-dependent part: coefficient}
 
         def expand_x(m):
-            # exponentials of the time variables are held fixed while expanding: expand_mul
-            # would move exp(-x) into an expanded denominator as exp(x)
-            phases = {a: Dummy() for a in m.atoms(exp) if a.has(*xs)}
-            return _mexpand(m.xreplace(phases)).xreplace({d: a for a, d in phases.items()})
+            # only products are distributed: powers other than positive integer ones (denominators,
+            # roots, also inside the function arguments) and exponentials of the time variables
+            # are held fixed, since expand_mul would expand their bases and move exp(-x), numbers
+            # and roots into expanded denominators
+            held = {a: Dummy() for a in m.atoms(Pow, exp)
+                    if (a.func is exp and a.has(*xs))
+                    or (a.is_Pow and not (a.exp.is_Integer and a.exp > 0))}
+            return _mexpand(m.xreplace(held)).xreplace({d: a for a, d in held.items()})
         for x in xs:
             def is_time(f):
                 if f.is_Pow and f.exp.is_Integer and f.exp > 0:
@@ -355,7 +400,7 @@ class WMProcessor:
                 """[(time part, constant)] of the product-to-sum of a product of time factors."""
                 if tp not in p2s_cache:
                     out = []
-                    for t in Add.make_args(_mexpand(tr8(tp, x))):
+                    for t in Add.make_args(expand_x(tr8(tp, x))):
                         key, const = [], []
                         for f in Mul.make_args(t):
                             (key if is_time(f) else const).append(f)
