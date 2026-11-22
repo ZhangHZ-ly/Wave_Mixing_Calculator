@@ -376,9 +376,9 @@ class PE:
     __slots__ = ('assumptions', 'rc', 'rs', 'rp', 'algebras', '_lo_cache', '_subs_cache')
 
     def __init__(self, assumptions=None):
-        # plain dict (faster than a sympy Dict); keys must be SymPy objects (see update)
+        # plain dict (faster than a sympy Dict) with sympified keys and values
         self.assumptions = {} if assumptions is None else {
-            k: sympify(v) for k, v in dict(assumptions).items()
+            sympify(k): sympify(v) for k, v in dict(assumptions).items()
         }
         # fermion patterns (and FermionOp) are of order 0 (exponents 0 or 1 only)
         self.rc = {FermionPat}
