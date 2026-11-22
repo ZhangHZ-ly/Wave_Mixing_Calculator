@@ -70,11 +70,13 @@ function renderWorkspaceTable(ws) {
         attrOrDef = isDc ? 'MultimodeNum2: Σ (1 + N1 + N2) (Down-conversion / FWM)' : 'MultimodeNum2: Σ (N1 - N0) (State Transfer)';
       }
     } else if (item.type === 'named_expr') {
-      typeBadge = badge('badge-gray', 'Saved Expression');
+      typeBadge = item.assertion ? badge('badge-asserted', 'Asserted Expression') : badge('badge-gray', 'Saved Expression');
       dispCell = `<td style="text-align: center; color: var(--text-secondary);"><span class="cell-text">&ndash;</span></td>`;
 
       if (isWm) {
-        attrOrDef = item.sourceInput;
+        attrOrDef = item.assertion
+          ? `[Asserted: ${assertionConds(item.assertion, itemProcess(item, curProcess), item.single_mode === true).join(', ')}]\n${item.sourceInput}`
+          : item.sourceInput;
 
         // Evaluate condition conflicts via propositional logic
         const itemProc = itemProcess(item);
@@ -195,7 +197,7 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
   }
 
   // 1. Object Type / Class
-  let typeDesc = ITEM_DETAIL_TYPE_LABELS[item.type] || '';
+  let typeDesc = item.assertion ? 'Asserted Expression (Named Variable)' : (ITEM_DETAIL_TYPE_LABELS[item.type] || '');
   if (item.type === 'operator') typeDesc = item.kind === 'boson' ? 'Boson Field Operator' : 'Fermion Field Operator';
   else if (item.type === 'evolved_op') typeDesc = (curProcess === 'fwm') ? 'Evolved Operator (Four-Wave Mixing)' : 'Evolved Operator (Three-Wave Mixing)';
   addRow('Object Type', `<strong>${escapeHtml(typeDesc)}</strong>`);
@@ -206,6 +208,18 @@ function renderItemDetailsTable(item, tbodyEl, ws) {
 
   if (item.type === 'named_expr' && item.sourceInput) {
     addRow('Source Input', `<code>${escapeHtml(item.sourceInput)}</code>`);
+  }
+
+  // read-only assertion configuration of an asserted expression
+  if (item.type === 'named_expr' && item.assertion) {
+    const cfg = item.assertion;
+    const conds = assertionConds(cfg, itemProcess(item, curProcess), item.single_mode === true);
+    addRow('Assertions', conds.map(c => `<span class="badge badge-asserted">${escapeHtml(c)}</span>`).join(' ')
+      + ` <span class="details-note">(preset order ${escapeHtml(String(cfg.order))}, read-only)</span>`);
+    if (cfg.cascade) {
+      const phases = cfg.cascade.phases.map((ph, k) => `φ${SUB_DIGITS[k]} = ${ph || '0'}`).join(', ');
+      addRow('Cascaded System', `<code>${escapeHtml(cfg.cascade.symbol)}</code> <span class="details-note">(${escapeHtml(phases)})</span>`);
+    }
   }
 
   // 3. Accuracy / Order
@@ -648,6 +662,13 @@ function openSaveAnswerModal(ws) {
     }
     title = 'Save Answer Area Expression (Tab 3)';
     preview = { latexT: cachedWmResult.latex_t, latexG: cachedWmResult.latex_g, defaultTab: wmUseGain ? 'g' : 't' };
+  } else if (activeWorkspace === 'assert') {
+    if (!cachedAssertResult) {
+      alert('No assertion result to save! Please calculate under assertions first.');
+      return;
+    }
+    title = 'Save Asserted Expression (Tab 3)';
+    preview = { latexT: cachedAssertResult.latex_t, latexG: cachedAssertResult.latex_g, defaultTab: assertUseGain ? 'g' : 't' };
   } else {
     if (!currentPfLatex) {
       alert('Answer area has no evaluated PF result! Please enter an expression and compute it first.');
@@ -661,17 +682,18 @@ function openSaveAnswerModal(ws) {
   document.getElementById('ne-name').value = '';
   document.getElementById('ne-notes').value = '';
 
-  if (activeWorkspace !== 'tab3') {
+  const wmResult = activeWorkspace === 'assert' ? cachedAssertResult : cachedWmResult;
+  if (activeWorkspace !== 'tab3' && activeWorkspace !== 'assert') {
     if (orderInfo) orderInfo.style.display = 'none';
   } else if (orderInfo && orderInput) {
     orderInfo.style.display = 'block';
-    const { leading_order: leadingOrd, process: curProc, single_mode: isSingleMode, degenerate: isDeg } = cachedWmResult;
+    const { leading_order: leadingOrd, process: curProc, single_mode: isSingleMode, degenerate: isDeg } = wmResult;
     const procLabel = PROCESS_LABELS[curProc] || curProc;
     const modeLabel = isSingleMode ? (isDeg ? 'Degenerate Single Mode' : 'Single Mode') : 'Multimode';
     // accuracy order of the result (from the product rule; may fall below the preset when
     // referenced variables of insufficient order were used)
     const presetOrd = parseInt(orderInput.value);
-    const resOrd = cachedWmResult.order;
+    const resOrd = wmResult.order;
     const lowered = !isNaN(presetOrd) && orderValue(resOrd) < presetOrd ? ` (below preset ${presetOrd})` : '';
     document.getElementById('wm-save-order-val').textContent = `${resOrd}${lowered} (Leading Order: ${leadingOrd}) | ${procLabel} | ${modeLabel}`;
   }
@@ -740,11 +762,15 @@ async function saveAnswerExpression() {
     return;
   }
 
-  const arr = getWorkspaceArray(activeWorkspace);
+  // an asserted expression is saved to the Tab 3 table with its configuration
+  const isAsserted = activeWorkspace === 'assert';
+  const ws = isAsserted ? 'tab3' : activeWorkspace;
+  const arr = getWorkspaceArray(ws);
   let entry;
-  if (activeWorkspace === 'tab3') {
-    const r = cachedWmResult;
+  if (ws === 'tab3') {
+    const r = isAsserted ? cachedAssertResult : cachedWmResult;
     entry = upsertNamedItem(arr, name, {
+      ...(isAsserted ? { assertion: r.assertion } : {}),
       sourceInput: r.sourceInput,
       refs: namedRefs(r.sourceInput, arr),
       latex_t: r.latex_t,
@@ -773,11 +799,11 @@ async function saveAnswerExpression() {
     await fetch('/api/variable/save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workspace: activeWorkspace, id: entry.id })
+      body: JSON.stringify({ workspace: isAsserted ? 'tab3_assert' : ws, id: entry.id })
     });
   } catch (_) {}
 
-  saveWorkspaceToStorage(activeWorkspace);
+  saveWorkspaceToStorage(ws);
   closeModal('saveAnswerModal');
 }
 

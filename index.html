@@ -264,7 +264,7 @@ window.addEventListener('error', function(e) {
             <option value="false" selected>Phase Matched (Δk = 0)</option>
             <option value="true">Arbitrary Phase Mismatch</option>
           </select>
-          <span class="form-tip">Whether the phase-mismatch is compensated</span>
+          <span class="form-tip">Whether the phase mismatch is compensated</span>
         </div>
 
         <div class="form-group">
@@ -474,13 +474,16 @@ window.addEventListener('error', function(e) {
               <button id="assert-gain-toggle-btn" class="btn btn-secondary btn-sm" onclick="toggleAssertGainDisplay()">
                 Display in terms of gain
               </button>
+              <button id="assert-exp-toggle-btn" class="btn btn-secondary btn-sm" onclick="toggleAssertExpDisplay()">
+                Display in exponentials
+              </button>
               <button class="btn btn-secondary btn-sm" onclick="copyLatex(currentAssertLatex)">
                 Copy LaTeX
               </button>
+              <button class="btn btn-success btn-sm" onclick="openSaveAnswerModal('assert')" title="Save the result to the Tab 3 table as an asserted expression">
+                Save to Table
+              </button>
             </div>
-            <span style="font-size: 0.8rem; color: var(--text-secondary);">
-             Evaluated state outputs with assertions cannot participate in further operator algebra.
-            </span>
           </div>
         </div>
       </div>
@@ -717,7 +720,7 @@ window.addEventListener('error', function(e) {
       <button class="modal-close-btn" onclick="closeConditionWarningModal(false)">&times;</button>
     </div>
     <div class="modal-body">
-      <p style="margin-bottom: 0.75rem; font-size: 0.95rem; color: var(--text-primary);">
+      <p id="warn-condition-intro" style="margin-bottom: 0.75rem; font-size: 0.95rem; color: var(--text-primary);">
         The current calculation preset (<strong><span id="warn-current-condition"></span></strong>) conflicts with the condition of referenced variable(s):
       </p>
       <div id="warn-condition-list" style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; padding: 0.75rem; margin-bottom: 0.75rem; font-size: 0.9rem;"></div>

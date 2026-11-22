@@ -296,7 +296,9 @@ class WMProcessor:
 
         if with_order:
             return terms
-        acc = min(order, *(flo + r for r in rels))
+        # from the actual leading order of func(x0) (flo may be a lower generic bound)
+        lead = fo if fo not in (S.Infinity, S.NegativeInfinity) else flo
+        acc = min(order, *(lead + r for r in rels))
         return self.d_add(*(t for t, _ in terms)).with_order(acc)
 
     def n_simp(self, expr):

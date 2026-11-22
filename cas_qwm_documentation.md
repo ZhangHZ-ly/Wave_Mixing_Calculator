@@ -288,9 +288,9 @@ Non-integer orders (e.g. `-1/2`) are allowed. Functions are expanded as multivar
 | `lo_order_pf(pf)` | Leading order of a `PF` only (`oo` if it vanishes), without expanding it. |
 | `cohr_avr(expr, cohr_dict, n)` / `cohr_pf(pf, cohr_dict, n)` | Expectation value under coherent states `{mode: alpha}`, expanded up to order `n`. |
 | `update(orders, clear=False)` | Add / change orders of symbols or modes (an order of 0 removes the entry); `clear=True` first drops all previous orders. Registered types are kept. |
-| `assumptions` | Plain `dict` of orders; string keys (mode names) are sympified to `Symbol`s. |
+| `assumptions` | Plain `dict` of orders. Keys passed to `PE(assumptions)` are taken as given and must be SymPy objects (e.g. `Symbol('a_1')` for a mode); `update` also accepts strings (mode names) and boson operators / patterns (their mode gets the order per unit of total exponent). |
 | `register(type, category, ...)` | Teach the expander the order rule of a new expression type (`'c'` constant, `'s'` symbol, `'p'` pattern). |
-| `register_algebra(alg, cancel=False)` | Hand the expressions recognized by a coefficient algebra over to it (see below). |
+| `register_algebra(alg, cancel=False)` | Hand the expressions recognized by a coefficient algebra over to it (see below); `cancel=True` removes it. The algebras are kept in a set. |
 | `handle_order_limits(handle, n_args=1)` | Analyse the order constraints of a function handle. |
 | `copy(cache=False)` | Copy of the expander. |
 
@@ -671,7 +671,7 @@ The module also provides the LSeries operations `ls_add`, `ls_mul` (truncated), 
 >>> n, u, E, s, c, d, j = R.gens
 >>> nops = [BosonNum(x) for x in ('a_0', 'a_1', 'a_2')]
 >>> alg = EllipticAlgebra(nops, (1, 1, 0), (1, 0, 1), (1, 0, 0))   # weak pump
->>> pe = PE({'a_1': -1, 'a_2': -1}); pe.register_algebra(alg)
+>>> pe = PE(); pe.update({'a_1': -1, 'a_2': -1}); pe.register_algebra(alg)
 >>> A = PF({k: alg.tail({0: c}) for k in PF.from_val(a_s).table})  # a_1 cn(u|m)
 >>> (A * A).table                                                  # exact shift (ids vary)
 {((BP(a_1; 2),), ()): F0(N_(a_0), -1 + N_(a_1), N_(a_2))*F0(N_(a_0), N_(a_1), N_(a_2))}

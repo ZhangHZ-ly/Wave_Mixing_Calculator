@@ -104,7 +104,7 @@ class TWMDualSolver:
         self.X = strong[0]
         self.alg = EllipticAlgebra(_NOPS, lx, ly, ln, eps)
         self.pe = PE()
-        self.pe.update({_OPS[k].name: -1 for k in strong})
+        self.pe.update({_OPS[k]: -1 for k in strong})
         self.pe.register_algebra(self.alg)
         self._sols = {}
         self._data = {}

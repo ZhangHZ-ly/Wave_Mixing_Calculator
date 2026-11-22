@@ -1003,7 +1003,8 @@ class WMWrapper:
                 raise ValueError(
                     f"Power {p_sym} requires the leading part of the base to be a scalar or "
                     f"number-operator expression.")
-            order = getattr(p, '_evolved_order', 1)
+            # truncation order set by the caller
+            order = getattr(p, '_func_order', getattr(p, '_evolved_order', 1))
             return p.expand_func_d(lambda x: x ** p_sym, order, self)
         raise ValueError("Exponentiation of single-mode weak-field operators only supports "
                          "non-negative integers.")

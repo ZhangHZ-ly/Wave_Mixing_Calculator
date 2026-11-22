@@ -265,9 +265,22 @@ function exprContainsDefaultOperators(exprText, allNamedExprs, visited = new Set
 
 let conditionWarningResolver = null;
 
-function confirmConditionWarning(conflictList, currentPresetSummary, warningDesc) {
+let conditionWarningDefaults = null;
+
+// optional `intro` / `title` replace the modal's default lead sentence and title
+function confirmConditionWarning(conflictList, currentPresetSummary, warningDesc, intro = null, title = null) {
   return new Promise((resolve) => {
     conditionWarningResolver = resolve;
+    const introEl = document.getElementById('warn-condition-intro');
+    const titleEl = document.getElementById('warn-condition-title');
+    if (!conditionWarningDefaults) {
+      conditionWarningDefaults = { intro: introEl?.innerHTML, title: titleEl?.textContent };
+    }
+    if (introEl) {
+      if (intro) introEl.textContent = intro;
+      else introEl.innerHTML = conditionWarningDefaults.intro;
+    }
+    if (titleEl) titleEl.textContent = title || conditionWarningDefaults.title;
     const curEl = document.getElementById('warn-current-condition');
     const listEl = document.getElementById('warn-condition-list');
     const descEl = document.getElementById('warn-condition-desc');
@@ -349,6 +362,38 @@ function collectConditionConflicts(input, curProcess, isSingleMode, isDegenerate
   return conflicts;
 }
 
+// Identity of an assertion configuration (the assertion fields of a request)
+function assertionKey(cfg) {
+  const seeded = cfg.seed_mode !== null && cfg.seed_mode !== undefined;
+  return JSON.stringify([!!cfg.coherent_drive, !!cfg.vacuum_signal, !!cfg.vacuum_other_weak,
+    seeded ? cfg.seed_mode : null, seeded && !!cfg.seed_vac_c, seeded && !!cfg.seed_observed]);
+}
+
+// Asserted expressions mixed with unasserted operator content or another assertion configuration
+function collectAssertionConflicts(input) {
+  const named = wmTableItems.filter(x => x.type === 'named_expr' && textReferencesName(input, x.name));
+  const groups = new Map();
+  const add = (key, entry) => groups.set(key, [...(groups.get(key) || []), entry]);
+  for (const item of named) {
+    if (item.assertion) {
+      const conds = assertionConds(item.assertion, itemProcess(item, getWmProcess()), item.single_mode === true);
+      add(assertionKey(item.assertion), { item, reason: `asserted expression [${conds.join(', ')}]` });
+    } else if (itemHasDefaultOps(item)) {
+      add('none', { item, reason: 'saved expression without assertions' });
+    }
+  }
+  const namedSet = new Set(named.map(x => x.name));
+  const opNames = new Set(['a_0', 'a_1', 'a_2', 'N_', 'MMN', 'MMN2', ...wmTableItems
+    .filter(x => ['operator', 'evolved_op', 'mm_op'].includes(x.type)).map(x => x.name)]);
+  for (const name of opNames) {
+    if (!namedSet.has(name) && textReferencesName(input, name)) {
+      add('none', { item: { name }, reason: 'operator without assertions' });
+    }
+  }
+  const hasAsserted = [...groups.keys()].some(k => k !== 'none');
+  return hasAsserted && groups.size > 1 ? [...groups.values()].flat() : [];
+}
+
 // ----------------------------------------------------
 // Perturbation Order & Expression Term Analyzer
 // ----------------------------------------------------
@@ -404,6 +449,18 @@ function tokenizeExprJs(src) {
     return null;
   }
   return tokens;
+}
+
+// Tab 3 input functions; an unknown name before '(' (e.g. Abs) is a call too, as in the backend
+const INPUT_FUNCS_JS = new Set(['exp', 'sin', 'cos', 'sinh', 'cosh', 'tanh', 'sqrt', 'dag', 'Dagger',
+  'dagger', 'N_', 'BosonNum', 'Pat', 'pattern', 'BP', 'BosonPat', 'FP', 'FermionPat', 'MMN', 'MMN2',
+  'diff', 'Derivative']);
+const BUILTIN_NAMES_JS = new Set(['a_0', 'a_1', 'a_2', 'a_p', 'a_s', 'a_i', 'A', 'N_t', 't', 'g', 'n_m',
+  'nlc', 'pm', 'i', 'I', 'pi', 'e']);
+
+function isInputFunctionJs(name) {
+  if (INPUT_FUNCS_JS.has(name)) return true;
+  return !BUILTIN_NAMES_JS.has(name) && !wmTableItems.some(x => x.name === name);
 }
 
 function parseExprJs(src) {
@@ -482,7 +539,8 @@ function parseExprJs(src) {
     }
     if (tok.type === 'ID') {
       consume();
-      if (!peekIs('LP')) return { kind: 'id', name: tok.val };
+      // a name before '(' that is not a function multiplies (implicit multiplication)
+      if (!peekIs('LP') || !isInputFunctionJs(tok.val)) return { kind: 'id', name: tok.val };
       consume(); // '('
       const args = [];
       if (!peekIs('RP')) {
@@ -775,6 +833,21 @@ async function confirmWmWarnings(input, ctx, output) {
     }
   }
 
+  const mixed = collectAssertionConflicts(input);
+  if (mixed.length > 0) {
+    const proceed = await confirmConditionWarning(
+      mixed,
+      '',
+      'An asserted expression is an expectation value under its own input states. Combining it with operators or expressions under other (or no) assertions may yield inconsistent results.',
+      'The input combines asserted expression(s) with content under different (or no) assertions:',
+      'Assertion Inconsistency Warning'
+    );
+    if (!proceed) {
+      output.innerHTML = '<span style="color: var(--text-secondary);">Calculation cancelled due to assertion inconsistency.</span>';
+      return false;
+    }
+  }
+
   const insufficientItems = checkInsufficientOrderItems(input, ctx.orderVal, ctx.curProcess);
   if (insufficientItems.length > 0) {
     const proceed = await confirmOrderWarning(insufficientItems, ctx.orderVal);
@@ -806,10 +879,14 @@ function buildWmRequest(input, ctx, useGain, extra = {}) {
 
 // The result order follows the product rule (sum of the leading orders + the smallest relative
 // accuracy of the factors), so referenced variables of insufficient order lower it below the preset
-function notifyLoweredOrder(ctx, resOrder) {
+// Lowered-order notice and backend warnings (shown longer)
+function notifyLoweredOrder(ctx, resOrder, warnings = []) {
+  const msgs = [];
   if (isOrder(resOrder) && orderValue(resOrder) < ctx.orderVal) {
-    showToast(`Result accurate up to order ${resOrder} (below the preset order ${ctx.orderVal}).`);
+    msgs.push(`Result accurate up to order ${resOrder} (below the preset order ${ctx.orderVal}).`);
   }
+  msgs.push(...(warnings || []));
+  if (msgs.length) showToast(msgs.join('\n'), warnings && warnings.length ? 8000 : 2200);
 }
 
 // Lazily record a longer TWM solver solution length (drives the evolved-operator accuracy in the table)
@@ -853,7 +930,7 @@ async function runWm() {
     currentWmLatex = (wmUseGain ? data.latex_g : data.latex_t) || data.latex || '';
 
     updateCachedSolLen(ctx, data.sol_len);
-    notifyLoweredOrder(ctx, data.order);
+    notifyLoweredOrder(ctx, data.order, data.warnings);
 
     output.innerHTML = '';
     renderMath(currentWmLatex, output);
@@ -866,6 +943,7 @@ async function runWm() {
 // TAB 3: Input State Assertions
 // ----------------------------------------------------
 let assertUseGain = false;
+let assertUseExp = false;
 let currentAssertLatex = '';
 let cachedAssertResult = null;
 
@@ -955,9 +1033,8 @@ function readWmSeed() {
 }
 
 // Short text of the seeded states for the mode tag, e.g. 'seed |β₁⟩ + |0⟩₂'
-function wmSeedText(seedReq) {
+function wmSeedText(seedReq, proc = getWmProcess()) {
   if (!seedReq) return '';
-  const proc = getWmProcess();
   const obs = seedReq.seed_observed ? ' (observed)' : '';
   if (proc === 'twm_dc' && seedReq.seed_mode === 0) return `seed |β₁⟩ (degenerate)${obs}`;
   const j = proc === 'twm_fc' ? seedReq.seed_mode : 1;
@@ -1048,18 +1125,10 @@ function updateAssertModeTag() {
   const tag = document.getElementById('assert-mode-tag');
   if (!tag) return;
   const curProcess = getWmProcess();
-  const isDc = getWmDc();
   const isMismatch = getWmMismatch();
   const orderVal = getWmOrderValue();
-  const [chkDrive, chkSignal, chkOther] = ASSERT_CHECKBOX_IDS.map(isChecked);
-  const seedReq = readWmSeed();
-  const weakVac = !(seedReq && getWmSingleMode());
-
-  const conds = [];
-  if (chkDrive) conds.push(isDc ? '|α₀⟩' : '|α₂⟩');
-  if (chkSignal && weakVac) conds.push('|0⟩₁');
-  if (chkOther && weakVac) conds.push(isDc ? '|0⟩₂' : '|0⟩₀');
-  if (seedReq) conds.push(wmSeedText(seedReq));
+  const chkDrive = isChecked('assert-coherent-drive');
+  const conds = assertionConds(readWmAssertions(), curProcess, getWmSingleMode());
 
   if (conds.length === 0) {
     tag.className = 'badge badge-gray';
@@ -1075,7 +1144,7 @@ function updateAssertModeTag() {
     const mismatchText = (curProcess === 'fwm')
       ? `Δk ${rel} 2χ${chkDrive ? '|α₀|²' : 'N₀'}`
       : `Δk ${rel} 0`;
-    const gainText = assertUseGain ? 'gain (g)' : 'time (t)';
+    const gainText = (assertUseGain ? 'gain (g)' : 'time (t)') + (assertUseExp ? ', exponentials' : '');
     const modeText = cachedAssertResult.single_mode === undefined ? wmModeText()
       : wmModeText(cachedAssertResult.single_mode, cachedAssertResult.degenerate === true);
     tag.className = 'badge badge-success';
@@ -1086,14 +1155,66 @@ function updateAssertModeTag() {
   }
 }
 
+// Assertion fields of a request from the assertion controls
+function readWmAssertions() {
+  return {
+    coherent_drive: isChecked('assert-coherent-drive'),
+    vacuum_signal: isChecked('assert-vac-signal'),
+    vacuum_other_weak: isChecked('assert-vac-other'),
+    ...(readWmSeed() || {})
+  };
+}
+
+// Input states of an assertion configuration, e.g. ['|α₀⟩', '|0⟩₁'] (seeding in single-mode
+// processing voids the weak-field vacua)
+function assertionConds(cfg, proc, singleMode) {
+  const isDc = proc !== 'twm_fc';
+  const seeded = cfg.seed_mode !== null && cfg.seed_mode !== undefined;
+  const weakVac = !(seeded && singleMode);
+  const conds = [];
+  if (cfg.coherent_drive) conds.push(isDc ? '|α₀⟩' : '|α₂⟩');
+  if (cfg.vacuum_signal && weakVac) conds.push('|0⟩₁');
+  if (cfg.vacuum_other_weak && weakVac) conds.push(isDc ? '|0⟩₂' : '|0⟩₀');
+  if (seeded) conds.push(wmSeedText(cfg, proc));
+  return conds;
+}
+
+// LaTeX of the assertion result: time or gain, optionally exponential (fetched once)
+async function assertResultLatex(r) {
+  if (!assertUseExp) return pickResultLatex(r, assertUseGain);
+  const key = assertUseGain ? 'latex_g_exp' : 'latex_t_exp';
+  if (!r[key]) {
+    r[key] = (await postJson('/api/wave_mixing/assert/exp', { use_gain: assertUseGain }, 'Exponential form failed')).latex;
+  }
+  return r[key];
+}
+
+async function showAssertResult() {
+  const output = document.getElementById('assert-output');
+  const r = cachedAssertResult;
+  try {
+    const latex = await assertResultLatex(r);
+    if (r !== cachedAssertResult) return;  // superseded by a newer result
+    currentAssertLatex = latex;
+    showOutputLatex(output, latex);
+  } catch (err) {
+    showOutputError(output, err.message);
+  }
+}
+
 function toggleAssertGainDisplay() {
   assertUseGain = !assertUseGain;
   setGainToggleLabel('assert-gain-toggle-btn', assertUseGain);
   updateAssertModeTag();
-  if (cachedAssertResult) {
-    currentAssertLatex = pickResultLatex(cachedAssertResult, assertUseGain);
-    showOutputLatex(document.getElementById('assert-output'), currentAssertLatex);
-  }
+  if (cachedAssertResult) showAssertResult();
+}
+
+function toggleAssertExpDisplay() {
+  assertUseExp = !assertUseExp;
+  const btn = document.getElementById('assert-exp-toggle-btn');
+  if (btn) btn.textContent = assertUseExp ? 'Display without exponentials' : 'Display in exponentials';
+  updateAssertModeTag();
+  if (cachedAssertResult) showAssertResult();
 }
 
 function clearWmAssertions() {
@@ -1119,9 +1240,9 @@ async function runWmAssertions() {
   const input = readWmSourceInput(output);
   if (!input) return;
 
-  const [coherentDrive, vacSignal, vacOther] = ASSERT_CHECKBOX_IDS.map(isChecked);
-  const seedReq = readWmSeed();
-  if (!coherentDrive && !vacSignal && !vacOther && !seedReq) {
+  const assertions = readWmAssertions();
+  if (!assertions.coherent_drive && !assertions.vacuum_signal && !assertions.vacuum_other_weak
+      && assertions.seed_mode === undefined) {
     showOutputError(output, 'Please select at least one assertion condition (e.g. coherent drive, vacuum signal, vacuum idler/pump, or a seeded mode pair)!');
     return;
   }
@@ -1139,24 +1260,23 @@ async function runWmAssertions() {
   output.innerHTML = '<span style="color: var(--text-secondary);">Calculating expression under assertions...</span>';
 
   try {
-    const assertions = {
-      coherent_drive: coherentDrive,
-      vacuum_signal: vacSignal,
-      vacuum_other_weak: vacOther,
-      ...(seedReq || {})
-    };
     const data = cascade
       ? await postJson('/api/wave_mixing/cascade', buildWmRequest(input, ctx, assertUseGain, { ...assertions, cascade_symbol: cascade.name, cascade_phases: cascade.phases.map(ph => ph.text) }), 'Cascaded assertion calculation failed')
       : await postJson('/api/wave_mixing/assert', buildWmRequest(input, ctx, assertUseGain, assertions), 'Assertion calculation failed');
 
     cachedAssertResult = data;
-    currentAssertLatex = (assertUseGain ? data.latex_g : data.latex_t) || data.latex || '';
+    data.sourceInput = input;
+    // saved with an asserted expression, replayed when it is rebuilt
+    data.assertion = {
+      ...assertions,
+      order: ctx.orderVal,
+      cascade: cascade ? { symbol: cascade.name, phases: cascade.phases.map(ph => ph.text) } : null
+    };
 
     updateCachedSolLen(ctx, data.sol_len);
-    notifyLoweredOrder(ctx, data.order);
+    notifyLoweredOrder(ctx, data.order, data.warnings);
 
-    output.innerHTML = '';
-    renderMath(currentAssertLatex, output);
+    await showAssertResult();
     updateAssertModeTag();
   } catch (err) {
     showOutputError(output, err.message);

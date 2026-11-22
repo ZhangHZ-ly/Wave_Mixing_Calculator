@@ -1,4 +1,3 @@
-from sympy.core.basic import Basic
 from sympy.core.containers import Tuple
 from sympy.core.singleton import S
 from sympy.core.add import Add
@@ -351,11 +350,6 @@ def perturb_rec( _comm=None, _is_comm=None, _is_num=None,
         return wrapper
     return decorator
 
-def _akey(k):
-    """Normalized key of PE.assumptions: strings (mode names) are sympified to Symbols."""
-    return k if isinstance(k, Basic) else sympify(k)
-
-
 class PE:
     """
     Includes methods that can expand an expression
@@ -382,17 +376,15 @@ class PE:
     __slots__ = ('assumptions', 'rc', 'rs', 'rp', 'algebras', '_lo_cache', '_subs_cache')
 
     def __init__(self, assumptions=None):
-        # Plain dict with sympified keys/values (see _akey); faster lookups than a sympy Dict
+        # plain dict (faster than a sympy Dict); keys must be SymPy objects (see update)
         self.assumptions = {} if assumptions is None else {
-            _akey(k): sympify(v) for k, v in dict(assumptions).items()
+            k: sympify(v) for k, v in dict(assumptions).items()
         }
-        self.rc = set()
+        # fermion patterns (and FermionOp) are of order 0 (exponents 0 or 1 only)
+        self.rc = {FermionPat}
         self.rs = {Symbol}
-        self.rp = {
-            BosonPat: ('name', lambda p: Add(*p.exps)),
-            FermionPat: ('name', lambda p: Add(*p.exps)),
-        }
-        self.algebras = []
+        self.rp = {BosonPat: ('name', lambda p: Add(*p.exps))}
+        self.algebras = set()
         self._lo_cache = dict()
         self._subs_cache = dict()
 
@@ -430,14 +422,14 @@ class PE:
 
     def register_algebra(self, alg, cancel=False):
         """
-        Registers a coefficient algebra (see the class docstring for its interface).
-        If cancel == True, the algebra is removed.
+        Registers a coefficient algebra (see the class docstring for its interface), or with
+        cancel == True removes it (the cached leading orders are then cleared).
         """
-        if alg in self.algebras:
-            self.algebras.remove(alg)
-        if not cancel:
-            self.algebras.append(alg)
-        self._lo_cache.clear()
+        if cancel:
+            self.algebras.discard(alg)
+            self._lo_cache.clear()
+        else:
+            self.algebras.add(alg)
     
     def update(self, orders: dict | None = None, clear: bool = False):
         """
@@ -452,7 +444,11 @@ class PE:
         if orders:
             for k, v in orders.items():
                 if v is not None:
-                    k, v = _akey(k), sympify(v)
+                    k, v = sympify(k), sympify(v)
+                    if isinstance(k, tuple(self.rp)):
+                        # pattern key: its mode gets the order per unit total exponent
+                        id, fh = self.rp[next(t for t in self.rp if isinstance(k, t))]
+                        k, v = getattr(k, id), v / fh(k)
                     if assumptions.get(k, 0) != v:
                         clr = True
                     if v == 0:
@@ -502,21 +498,13 @@ class PE:
         if isinstance(expr, tuple(self.rs)):
             if expr in self.assumptions:
                 return expr, self.assumptions[expr]
-            name = getattr(expr, 'name', None)
-            if name:
-                for k, v in self.assumptions.items():
-                    if getattr(k, 'name', str(k)) == name:
-                        return expr, sympify(v)
             if expr in self._subs_cache:
                 return self.leading_order(self._subs_cache[expr])
             return expr, S.Zero
         if isinstance(expr, tuple(self.rp)):
             id, fh = self.rp[next(t for t in self.rp if isinstance(expr, t))]
             eid = getattr(expr, id)
-            if (o := self.assumptions.get(_akey(eid), S.Zero)) != 0:
-                return expr, fh(expr) * o
-            name = getattr(eid, 'name', str(eid))
-            if (o := self.assumptions.get(_akey(name), S.Zero)) != 0:
+            if (o := self.assumptions.get(sympify(eid), S.Zero)) != 0:
                 return expr, fh(expr) * o
             return expr, S.Zero
         if expr in self._lo_cache:
@@ -667,14 +655,13 @@ class PE:
             if n0 > n:
                 return
             ts = []
-            d = {}
             for arg, o in zip(expr.args, lo):
+                d = {}
                 ni = n - n0 + o
                 for ta, oa in self.expand_expr(arg, ni, **kwargs):
                     od = oa - o
                     d[od] = d.get(od, S.Zero) + ta
-                ts.append(d.copy())
-                d.clear()
+                ts.append(d)
             dim = len(ts)
             def rec(i, remaining, prefix):
                 if i == dim:
@@ -896,8 +883,19 @@ class PE:
                 if term != 0:
                     yield PF(npf=term), o
 
-    def cohr_avr(self, expr, cohr_dict, n,
-                 update_self=False, update_cohr_dict=True, **kwargs):
+    def _cohr_register(self, cohr_dict: dict) -> dict:
+        cohr_dict = {sympify(getattr(k, 'name', k)): sympify(v) for k, v in cohr_dict.items()}
+        orders = {}
+        for mode, alpha in cohr_dict.items():
+            order = self.assumptions.get(mode, S.Zero)
+            order = order if (order < 0) == True else S.NegativeOne
+            orders[mode] = order
+            if isinstance(alpha, Symbol):
+                orders[alpha] = order
+        self.update(orders)
+        return cohr_dict
+
+    def cohr_avr(self, expr, cohr_dict, n, **kwargs):
         """
         Yields perturbative expansion terms of the expectation value of expr
         under coherent state(s) for specified mode(s), up to the given order.
@@ -907,39 +905,23 @@ class PE:
         :param n: Perturbative order cutoff.
         """
         n = sympify(n)
-        if not update_self:
-            pe_cohr = self.copy(cache=False)
-        else:
-            pe_cohr = self
-        assump = pe_cohr.assumptions  # updated in place (pe_cohr is a copy unless update_self)
-        if update_cohr_dict:
-            ncd = {}
-            for k, v in cohr_dict.items():
-                if hasattr(k, 'name'):
-                    k = k.name
-                k = sympify(k)
-                ncd[k] = sympify(v)
-            cohr_dict = ncd
+        cohr_dict = self._cohr_register(cohr_dict)
 
         Ns = []
         subs_dict = {}
         weights = []
         def _reg(bn):
-            if isinstance(bn, BosonNum) and bn.name in cohr_dict:
-                bname = bn.name
-                if bn not in Ns:
-                    default_order = assump.get(bname, S.Zero)
-                    assump[bname] = default_order if default_order < 0 else S.NegativeOne
-                    Ns.append(bn)
-                    subs_dict[bn] = Pow(Abs(cohr_dict[bname]), 2)
-                    weights.append(-2 * assump[bname])
+            if isinstance(bn, BosonNum) and bn.name in cohr_dict and bn not in Ns:
+                Ns.append(bn)
+                subs_dict[bn] = Pow(Abs(cohr_dict[bn.name]), 2)
+                weights.append(-2 * self.assumptions[bn.name])
             return bn
         bottom_up(expr, _reg)
 
         if not Ns:
-            yield from pe_cohr.expand_expr(expr, n, **kwargs)
+            yield from self.expand_expr(expr, n, **kwargs)
             return
-        lo_base = pe_cohr.leading_order(expr)[1]
+        lo_base = self.leading_order(expr)[1]
         if lo_base is S.Infinity:
             return
         rem_budget = n - lo_base
@@ -955,7 +937,7 @@ class PE:
                 cat = Mul(*coeff_list) * dfc.get(tuple(deriv_orders), last_nz, **kwargs)
                 if cat is S.Zero or cat == 0:
                     return
-                for t, ot in pe_cohr.expand_expr(cat, n, **kwargs):
+                for t, ot in self.expand_expr(cat, n, **kwargs):
                     yield t.subs(subs_dict), ot
                 return
 
@@ -988,25 +970,7 @@ class PE:
         :return: Evaluated and expanded PatternForm.
         """
         n = sympify(n)
-        pe_cohr = self.copy(cache=False)
-        assump = pe_cohr.assumptions  # updated in place on the copy
-        ncd = {}
-        for k, v in cohr_dict.items():
-            if hasattr(k, 'name'):
-                k = k.name
-            k = sympify(k)
-            ncd[k] = sympify(v)
-        cohr_dict = ncd
-        reg_b = set()
-
-        def _reg(bn):
-            if bn in cohr_dict:
-                if not bn in reg_b:
-                    default_order = assump.get(bn, S.Zero)
-                    assump[bn] = default_order if default_order < 0 else S.NegativeOne
-                    reg_b.add(bn)
-                return True
-            return False
+        cohr_dict = self._cohr_register(cohr_dict)
 
         ntl = defaultdict(list)
         for (bs, fs), tail in p.table.items():
@@ -1014,9 +978,9 @@ class PE:
             rest_order = n
             for b in bs:
                 bn = b.name
-                if _reg(bn):
+                if bn in cohr_dict:
                     exponent = b.exps[0]
-                    rest_order -= exponent * assump[bn]
+                    rest_order -= exponent * self.assumptions[bn]
                     if b.args[1]:
                         tail = NumShift(tail, -1, b).doit() * cohr_dict[bn] ** exponent
                     else:
@@ -1026,9 +990,9 @@ class PE:
             ntl[(tuple(bs_rest), fs)].append(tail)
 
         new_table = {}
-        new_npf = Add(*(t[0] for t in pe_cohr.cohr_avr(p.npf, cohr_dict, n, True, False, **kwargs)))
+        new_npf = Add(*(t[0] for t in self.cohr_avr(p.npf, cohr_dict, n, **kwargs)))
         for k, v in ntl.items():
-            new_table[k] = Add(*(t[0] for t in pe_cohr.cohr_avr(Add(*v), cohr_dict, n, True, False, **kwargs)))
+            new_table[k] = Add(*(t[0] for t in self.cohr_avr(Add(*v), cohr_dict, n, **kwargs)))
         clean_table = {k: v for k, v in new_table.items() if v != 0}
         return PF(clean_table, new_npf) if (clean_table or new_npf != 0) else PF()
 

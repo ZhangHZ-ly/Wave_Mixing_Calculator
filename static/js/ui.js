@@ -14,11 +14,14 @@ function switchTab(tabId) {
 }
 
 // Toast helper
-function showToast(msg) {
+let toastTimer = null;
+
+function showToast(msg, duration = 2200) {
   const toast = document.getElementById('toast');
   toast.textContent = msg;
   toast.classList.add('show');
-  setTimeout(() => toast.classList.remove('show'), 2200);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), duration);
 }
 
 // Copy LaTeX

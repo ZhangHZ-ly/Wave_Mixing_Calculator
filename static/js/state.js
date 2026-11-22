@@ -218,7 +218,8 @@ function extractWorkspaceDefinitions(ws) {
     source_input: ne.sourceInput,
     refs: ne.refs || {},
     order: orderText(ne.order, null),
-    leading_order: orderText(ne.leadingOrder)
+    leading_order: orderText(ne.leadingOrder),
+    assertion: ne.assertion || null
   }));
 
   return { symbols, operators, mmOperators, namedExprs };

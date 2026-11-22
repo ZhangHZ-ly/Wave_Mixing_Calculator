@@ -509,7 +509,7 @@ def eval_wave_mixing_cascade(
     seed_mode: Optional[int] = None,
     seed_vac_c: bool = True,
     seed_observed: bool = False,
-) -> Tuple[str, str, str, Any, int, Any]:
+) -> Tuple[str, str, str, Any, int, Any, List[str]]:
     """
     Evaluates an operator combination evolved for a further time `cascade_symbol`
     (cascaded system), with the input-operator phases `cascade_phases` (phi_0, phi_1, phi_2;
@@ -529,4 +529,5 @@ def eval_wave_mixing_cascade(
         times=(t_sym,), alpha=coherent_alpha(ctx), seed_mode=seed_mode, seed_vac_c=seed_vac_c,
         seed_observed=seed_observed,
     )
-    return finalize_wm_result(ctx, val_t, val_g, order, use_gain)
+    assertion = coherent_drive or vacuum_signal or vacuum_other_weak or seed_mode is not None
+    return finalize_wm_result(ctx, val_t, val_g, order, use_gain, assertion)

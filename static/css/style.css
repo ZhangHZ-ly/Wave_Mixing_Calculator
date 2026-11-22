@@ -390,6 +390,7 @@
   .badge-info { background: #e0f2fe; color: #0369a1; }
   .badge-gray { background: #f1f5f9; color: #475569; }
   .badge-danger { background: #fee2e2; color: #991b1b; }
+  .badge-asserted { background: #ede9fe; color: #5b21b6; }
   .badge-editable {
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
@@ -809,8 +810,8 @@
   .wm-input-options select.wm-option-select {
     width: auto;
     padding: 0.2rem 0.4rem;
-    font-size: 0.875rem;
-    font-weight: 600;
+    font: inherit;
+    color: inherit;
     background: #fff;
     cursor: pointer;
   }
@@ -899,6 +900,8 @@
 
   /* Toast Notification */
   .toast {
+    white-space: pre-line;
+    max-width: min(32rem, calc(100vw - 4rem));
     position: fixed;
     bottom: 2rem;
     right: 2rem;

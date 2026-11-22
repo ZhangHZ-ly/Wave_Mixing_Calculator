@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -14,6 +14,8 @@ from calculator import (
     eval_wave_mixing_cascade,
     save_latest_pf_variable,
     save_latest_wm_variable,
+    save_latest_assert_variable,
+    assertion_exp_latex,
     TWM_SOLVERS,
     FWM_SOLVER,
     normalize_process,
@@ -76,6 +78,8 @@ class NamedExprDef(BaseModel):
     # orders as exact text (e.g. '1/2')
     order: Optional[str] = None
     leading_order: Optional[str] = None
+    # assertion configuration of an asserted expression, applied again when rebuilt
+    assertion: Optional[Dict[str, Any]] = None
 
 
 class SaveVarRequest(BaseModel):
@@ -118,6 +122,10 @@ class AssertionRequest(WaveMixingRequest):
     seed_vac_c: bool = True
     # whether the single-mode weak-field operators are the seeded modes (multimode processing)
     seed_observed: bool = False
+
+
+class AssertExpRequest(BaseModel):
+    use_gain: bool = False
 
 
 class CascadeRequest(AssertionRequest):
@@ -186,7 +194,7 @@ def api_wave_mixing(req: WaveMixingRequest):
     try:
         proc = normalize_process(req.process)
         is_dc = process_is_dc(proc)
-        latex_curr, latex_t, latex_g, leading_order, sol_len, res_order = eval_wave_mixing(
+        latex_curr, latex_t, latex_g, leading_order, sol_len, res_order, warnings = eval_wave_mixing(
             req.text,
             dc=is_dc,
             mismatch=req.mismatch,
@@ -209,6 +217,7 @@ def api_wave_mixing(req: WaveMixingRequest):
             # accuracy order of the result (the product rule may lower it below the preset)
             "order": order_text(res_order),
             "sol_len": int(sol_len),
+            "warnings": warnings,
             "process": proc,
             "single_mode": bool(req.single_mode),
             "degenerate": is_degenerate(proc, req.single_mode, req.degenerate),
@@ -224,7 +233,7 @@ def api_wave_mixing_assert(req: AssertionRequest):
     try:
         proc = normalize_process(req.process)
         is_dc = process_is_dc(proc)
-        latex_curr, latex_t, latex_g, leading_order, sol_len, res_order = eval_wave_mixing_assertions(
+        latex_curr, latex_t, latex_g, leading_order, sol_len, res_order, warnings = eval_wave_mixing_assertions(
             req.text,
             dc=is_dc,
             mismatch=req.mismatch,
@@ -253,6 +262,7 @@ def api_wave_mixing_assert(req: AssertionRequest):
             # accuracy order of the result (the product rule may lower it below the preset)
             "order": order_text(res_order),
             "sol_len": int(sol_len),
+            "warnings": warnings,
             "process": proc,
             "single_mode": bool(req.single_mode),
             "degenerate": is_degenerate(proc, req.single_mode, req.degenerate),
@@ -268,7 +278,7 @@ def api_wave_mixing_cascade(req: CascadeRequest):
     try:
         proc = normalize_process(req.process)
         is_dc = process_is_dc(proc)
-        latex_curr, latex_t, latex_g, leading_order, sol_len, res_order = eval_wave_mixing_cascade(
+        latex_curr, latex_t, latex_g, leading_order, sol_len, res_order, warnings = eval_wave_mixing_cascade(
             req.text,
             dc=is_dc,
             mismatch=req.mismatch,
@@ -299,6 +309,7 @@ def api_wave_mixing_cascade(req: CascadeRequest):
             # accuracy order of the result (the product rule may lower it below the preset)
             "order": order_text(res_order),
             "sol_len": int(sol_len),
+            "warnings": warnings,
             "process": proc,
             "single_mode": bool(req.single_mode),
             "degenerate": is_degenerate(proc, req.single_mode, req.degenerate),
@@ -311,11 +322,21 @@ def api_wave_mixing_cascade(req: CascadeRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/api/wave_mixing/assert/exp")
+def api_wave_mixing_assert_exp(req: AssertExpRequest):
+    try:
+        return {"latex": assertion_exp_latex(req.use_gain)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/api/variable/save")
 def api_save_variable(req: SaveVarRequest):
     try:
         if req.workspace == 'tab3':
             save_latest_wm_variable(req.id)
+        elif req.workspace == 'tab3_assert':
+            save_latest_assert_variable(req.id)
         else:
             save_latest_pf_variable(req.id)
         return {"status": "ok"}
