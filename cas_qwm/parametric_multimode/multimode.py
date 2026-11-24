@@ -1,6 +1,5 @@
 from sympy.core.singleton import S
 from sympy.core.sympify import sympify
-from sympy.core.expr import Expr
 from sympy.core.numbers import Integer
 from sympy.core.symbol import Dummy
 from sympy.core.mul import Mul

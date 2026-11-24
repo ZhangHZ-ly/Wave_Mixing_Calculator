@@ -753,10 +753,14 @@ class WMWrapper:
             return Add(*(b * p._d_expr(d) for b, d in self.dict_repr.items()))
         return Add(*(p._d_expr(d) * b for b, d in self.dict_repr.items()))
 
-    def to_single_mode(self, degenerate=False) -> 'WMWrapper':
+    def to_single_mode(self, degenerate=False, vacant=False) -> 'WMWrapper':
         """
         Converts multimode operator representations into single-mode boson
         operators (mode_expr) with n_m = 1, returning a single-mode WMWrapper.
+
+        vacant=True instead takes the multimode sums over no modes (n_m = 0), as for the rest
+        of the modes besides those seeded by seeded_separate, whose degeneracy is kept
+        (`degenerate` is ignored).
 
         degenerate=True (effective only for dc=True) converts into the degenerate
         down-conversion with signal = idler = a_1, governed by
@@ -771,10 +775,10 @@ class WMWrapper:
         must be taken after this conversion, not before.
         """
         p = self.processor
-        deg = bool(degenerate) and p.dc
+        deg = bool(degenerate) and p.dc and not vacant
         def _dict_sm(d: dict) -> PF:
             return pf_add(*(
-                p._smk(k, deg) * p._sm_pf(v, deg)
+                p._smk(k, deg, vacant) * p._sm_pf(v, deg, vacant)
                 for k, v in d.items()
             ))
 

@@ -6,7 +6,6 @@ from cas_qwm.pattern_perturb import PF
 from cas_qwm.pattern_perturb.pattern_form import _ps, bn_simp
 from cas_qwm.parametric_multimode.wm_processor import unify_radicand
 from cas_qwm.wm_variables import a_p, a_i, t_, nlc, pm, alpha_0, alpha_2, gain, g_hat
-from sympy.core.function import _mexpand
 from sympy.core.singleton import S
 from sympy.core.symbol import Dummy
 from sympy.core.traversal import bottom_up

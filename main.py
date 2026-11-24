@@ -21,6 +21,8 @@ from calculator import (
     normalize_process,
     process_is_dc,
     is_degenerate,
+    condition_conflicts,
+    assertion_conflicts,
     order_text,
 )
 
@@ -80,6 +82,11 @@ class NamedExprDef(BaseModel):
     leading_order: Optional[str] = None
     # assertion configuration of an asserted expression, applied again when rebuilt
     assertion: Optional[Dict[str, Any]] = None
+    # presets the expression was created under (for the condition checks)
+    process: Optional[str] = None
+    single_mode: bool = False
+    degenerate: bool = False
+    has_default_ops: bool = False
 
 
 class SaveVarRequest(BaseModel):
@@ -319,6 +326,20 @@ def api_wave_mixing_cascade(req: CascadeRequest):
     except Exception as e:
         import traceback
         traceback.print_exc()
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/wave_mixing/check")
+def api_wave_mixing_check(req: WaveMixingRequest):
+    try:
+        named = [ne.model_dump() for ne in req.named_expressions]
+        ops = [op.name for op in req.operators] + [mm.name for mm in req.mm_operators]
+        return {
+            "condition_conflicts": condition_conflicts(
+                req.text, named, req.process, req.single_mode, req.degenerate),
+            "assertion_conflicts": assertion_conflicts(req.text, named, ops, req.process),
+        }
+    except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 

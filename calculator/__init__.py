@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from .single_mode import eval_single_mode
 from .pf_expr import eval_pattern_form, save_latest_pf_variable
-from .conditions import normalize_process, process_is_dc, is_degenerate
+from .conditions import (normalize_process, process_is_dc, is_degenerate, condition_conflicts,
+                         assertion_conflicts)
 from .wave_mixing import (
     TWM_SOLVERS,
     FWM_SOLVER,
@@ -22,6 +23,8 @@ __all__ = [
     'normalize_process',
     'process_is_dc',
     'is_degenerate',
+    'condition_conflicts',
+    'assertion_conflicts',
     'TWM_SOLVERS',
     'FWM_SOLVER',
     'save_latest_wm_variable',

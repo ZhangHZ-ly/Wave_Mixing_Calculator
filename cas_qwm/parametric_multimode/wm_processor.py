@@ -722,19 +722,20 @@ class WMProcessor:
             return BosonNum(n1)
         return BosonPat(n1, b.left_base.is_annihilation, *b.exps)
 
-    def _sm_expr(self, expr, degenerate=False):
+    def _sm_expr(self, expr, degenerate=False, vacant=False):
         """
         Simplifies number operators and mode count in scalar/coefficient expressions.
 
         degenerate=True (dc only) applies the degenerate mapping (signal = idler = a_1):
         Σ(1 + N_1 + N_2) -> N_1 + 1/2, Σ(N_j + d) -> (N_1 + d)/2, Σ(a_1 a_2) -> a_1**2/2,
         mode-2 operators -> mode-1 operators and n_m -> 1/2.
+        vacant=True (without degenerate) takes the multimode sums over no modes: they and n_m -> 0.
         """
         if not degenerate:
             return expr.replace(
                 lambda x: isinstance(x, (MultimodeNum, MultimodeNum2, MultimodeCOP)),
-                lambda x: x.mode_expr
-            ).subs({nm: S.One})
+                lambda x: S.Zero if vacant else x.mode_expr
+            ).subs({nm: S.Zero if vacant else S.One})
         n1, n2 = self.a[0].names
         bn = BosonNum(n1)
 
@@ -753,9 +754,9 @@ class WMProcessor:
             _deg
         ).subs({nm: S.Half})
 
-    def _sm_pf(self, p: PF, degenerate=False) -> PF:
+    def _sm_pf(self, p: PF, degenerate=False, vacant=False) -> PF:
         """Single-mode conversion of a PF (tails, npf and, if degenerate, its table keys)."""
-        p = p.apply(lambda e: self._sm_expr(e, degenerate), on_npf=True)
+        p = p.apply(lambda e: self._sm_expr(e, degenerate, vacant), on_npf=True)
         n2 = self.a[0].names[1]
         if not (degenerate and p and any(b.name == n2 for bs, _ in p.table for b in bs)):
             return p
@@ -767,10 +768,11 @@ class WMProcessor:
             terms.append(PF({(bs, fs): t}))
         return pf_add(*terms)
 
-    def _smk(self, k, degenerate=False) -> PF:
+    def _smk(self, k, degenerate=False, vacant=False) -> PF:
         """
         Single-mode PF representation of a dict key (BosonOp or multimode tuple);
-        degenerate=True maps Σ(a_1 a_2) to a_1**2/2 and mode-2 operators to mode 1.
+        degenerate=True maps Σ(a_1 a_2) to a_1**2/2 and mode-2 operators to mode 1;
+        vacant=True maps the multimode tuples to 0.
         """
         if isinstance(k, BosonOp):
             return PF({((self._deg_op(k) if degenerate else k,), ()): S.One})
@@ -778,6 +780,8 @@ class WMProcessor:
         i, *exps = k
         if not exps:
             return PF1
+        if vacant:
+            return PF0
         for e in exps:
             b1, b2 = Mul.make_args(self.a[i].mode_expr)
             if degenerate:

@@ -114,61 +114,6 @@ if (!wmTableItems || !wmTableItems.length) {
   saveWmTableItemsToStorage();
 }
 
-// Propositional logic condition rules between calculation presets (P) and expression states (E):
-// - 'xnor': E == P (同或: absolute independence / mutually exclusive states, e.g. process)
-// - 'implies': E -> P (蕴含 / 包含关系: expression state implies preset state, e.g. single_mode)
-const CONDITION_RULES = {
-  process: {
-    key: 'process',
-    name: 'Mixing Process',
-    relation: 'xnor',
-    conflictBadge: 'process conflict',
-    conflictTitle: 'Mixing Process Inconsistency Warning',
-    conflictMsg: 'Variables containing default operators have different algebraic definitions, Hamiltonians, and subspaces across down-conversion, state transfer, and four-wave mixing.',
-    checkApplies: (item) => itemHasDefaultOps(item),
-    getExprVal: (item) => itemProcess(item)
-  },
-  single_mode: {
-    key: 'single_mode',
-    name: 'Single-mode Processing',
-    relation: 'implies',
-    labelTrue: 'Single Mode',
-    labelFalse: 'Multimode',
-    conflictBadge: 'single-mode conflict',
-    conflictTitle: 'Single-Mode Inconsistency Warning',
-    conflictMsg: 'Expressions created under Single Mode cannot be used in Multimode calculations because multimode summation and mode degeneracy details were collapsed.',
-    checkApplies: (item) => item.single_mode === true,
-    getExprVal: (item) => item.single_mode
-  },
-  degenerate: {
-    key: 'degenerate',
-    name: 'Single-mode Degeneracy',
-    relation: 'xnor',
-    labelTrue: 'Degenerate',
-    labelFalse: 'Non-degenerate',
-    conflictBadge: 'degeneracy conflict',
-    conflictTitle: 'Single-Mode Degeneracy Inconsistency Warning',
-    conflictMsg: 'Single-mode expressions of degenerate (signal = idler) and non-degenerate down-conversion are built on different mode structures and cannot be mixed.',
-    // only single-mode expressions carry a degeneracy
-    checkApplies: (item) => item.single_mode === true,
-    getExprVal: (item) => item.degenerate === true
-  }
-};
-
-function evaluateConditionCompatibility(rule, presetVal, exprVal) {
-  if (exprVal === null || exprVal === undefined) return true;
-  if (rule.relation === 'xnor') {
-    if (typeof presetVal === 'string' || typeof exprVal === 'string') {
-      return String(presetVal) === String(exprVal);
-    }
-    return Boolean(presetVal) === Boolean(exprVal);
-  } else if (rule.relation === 'implies') {
-    // Propositional logic: E -> P (equivalent to !E || P)
-    return (!Boolean(exprVal)) || Boolean(presetVal);
-  }
-  return true;
-}
-
 // Unified definition extractor for backend evaluation endpoints
 function extractWorkspaceDefinitions(ws) {
   const isWm = (ws === 'tab3');
@@ -219,7 +164,11 @@ function extractWorkspaceDefinitions(ws) {
     refs: ne.refs || {},
     order: orderText(ne.order, null),
     leading_order: orderText(ne.leadingOrder),
-    assertion: ne.assertion || null
+    assertion: ne.assertion || null,
+    process: ne.process || null,
+    single_mode: ne.single_mode === true,
+    degenerate: ne.degenerate === true,
+    has_default_ops: itemHasDefaultOps(ne)
   }));
 
   return { symbols, operators, mmOperators, namedExprs };

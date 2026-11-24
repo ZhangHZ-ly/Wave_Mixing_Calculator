@@ -20,7 +20,6 @@ from sympy.physics.quantum import Operator
 import sympy.physics.quantum.fermion as fermion
 from sympy.physics.quantum.fermion import FermionOp
 from .pattern_exponents import PatExps, is_nat_n
-from collections.abc import Sequence
 from functools import cached_property
 
 __all__ = ['FermionPat', 'UidCommutator']

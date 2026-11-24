@@ -26,7 +26,7 @@ from sympy.core.mul import Mul
 from sympy.core.power import Pow
 from sympy.core.containers import Tuple, Dict
 from sympy.core.sympify import sympify
-from .pattern_exponents import PatExps, _pe_flatten
+from .pattern_exponents import PatExps
 from collections.abc import Sequence
 from functools import cached_property, lru_cache
 

@@ -290,7 +290,7 @@ function confirmConditionWarning(conflictList, currentPresetSummary, warningDesc
     if (listEl) {
       listEl.innerHTML = conflictList.map(itemInfo =>
         `<div style="margin-bottom: 0.35rem; color: #991b1b;">` +
-        `&bull; <strong>${escapeHtml(itemInfo.item.name)}</strong>: ${escapeHtml(itemInfo.reason)}` +
+        `&bull; <strong>${escapeHtml(itemInfo.name)}</strong>: ${escapeHtml(itemInfo.reason)}` +
         `</div>`
       ).join('');
     }
@@ -307,91 +307,6 @@ function closeConditionWarningModal(proceed) {
     conditionWarningResolver = null;
     res(proceed);
   }
-}
-
-// Definitions referenced by an input: the table entries it names, and (transitively) the
-// definitions these were saved with
-function getReferencedNamedExprs(exprText) {
-  const visible = wmTableItems.filter(x => x.type === 'named_expr');
-  const defs = { ...wmTableDefs, ...Object.fromEntries(visible.map(x => [x.id, x])) };
-  const referenced = {};
-  const stack = Object.values(namedRefs(exprText, visible));
-  while (stack.length) {
-    const id = stack.pop();
-    if (referenced[id] || !defs[id]) continue;
-    referenced[id] = defs[id];
-    stack.push(...Object.values(defs[id].refs || {}));
-  }
-  return Object.values(referenced);
-}
-
-function collectConditionConflicts(input, curProcess, isSingleMode, isDegenerate = false) {
-  const referencedNamedExprs = getReferencedNamedExprs(input);
-
-  const conflicts = [];
-  const currentPresets = {
-    process: curProcess,
-    single_mode: isSingleMode,
-    degenerate: isDegenerate
-  };
-
-  for (const item of referencedNamedExprs) {
-    for (const [key, rule] of Object.entries(CONDITION_RULES)) {
-      if (!rule.checkApplies || !rule.checkApplies(item, wmTableItems)) continue;
-      const presetVal = currentPresets[key];
-      const exprVal = rule.getExprVal ? rule.getExprVal(item) : item[key];
-      if (evaluateConditionCompatibility(rule, presetVal, exprVal)) continue;
-
-      let reason;
-      if (key === 'process') {
-        const exprLabel = PROCESS_LABELS[exprVal] || exprVal;
-        const curLabel = PROCESS_LABELS[curProcess] || curProcess;
-        reason = `created under ${exprLabel}, incompatible with current preset (${curLabel})`;
-      } else if (key === 'single_mode') {
-        reason = `created under Single Mode, incompatible with current Multimode preset`;
-      } else if (key === 'degenerate') {
-        if (!isSingleMode) continue;  // already reported by the single-mode rule
-        const lbl = v => (v ? rule.labelTrue : rule.labelFalse);
-        reason = `created under ${lbl(exprVal)} Single Mode, incompatible with current ${lbl(isDegenerate)} Single Mode preset`;
-      } else {
-        reason = `created under ${key}=${exprVal}, incompatible with current preset (${presetVal})`;
-      }
-      conflicts.push({ item, rule, reason });
-    }
-  }
-  return conflicts;
-}
-
-// Identity of an assertion configuration (the assertion fields of a request)
-function assertionKey(cfg) {
-  const seeded = cfg.seed_mode !== null && cfg.seed_mode !== undefined;
-  return JSON.stringify([!!cfg.coherent_drive, !!cfg.vacuum_signal, !!cfg.vacuum_other_weak,
-    seeded ? cfg.seed_mode : null, seeded && !!cfg.seed_vac_c, seeded && !!cfg.seed_observed]);
-}
-
-// Asserted expressions mixed with unasserted operator content or another assertion configuration
-function collectAssertionConflicts(input) {
-  const named = wmTableItems.filter(x => x.type === 'named_expr' && textReferencesName(input, x.name));
-  const groups = new Map();
-  const add = (key, entry) => groups.set(key, [...(groups.get(key) || []), entry]);
-  for (const item of named) {
-    if (item.assertion) {
-      const conds = assertionConds(item.assertion, itemProcess(item, getWmProcess()), item.single_mode === true);
-      add(assertionKey(item.assertion), { item, reason: `asserted expression [${conds.join(', ')}]` });
-    } else if (itemHasDefaultOps(item)) {
-      add('none', { item, reason: 'saved expression without assertions' });
-    }
-  }
-  const namedSet = new Set(named.map(x => x.name));
-  const opNames = new Set(['a_0', 'a_1', 'a_2', 'N_', 'MMN', 'MMN2', ...wmTableItems
-    .filter(x => ['operator', 'evolved_op', 'mm_op'].includes(x.type)).map(x => x.name)]);
-  for (const name of opNames) {
-    if (!namedSet.has(name) && textReferencesName(input, name)) {
-      add('none', { item: { name }, reason: 'operator without assertions' });
-    }
-  }
-  const hasAsserted = [...groups.keys()].some(k => k !== 'none');
-  return hasAsserted && groups.size > 1 ? [...groups.values()].flat() : [];
 }
 
 // ----------------------------------------------------
@@ -817,7 +732,14 @@ function readWmPresets(output) {
 // Ask the user to confirm (1) preset-condition conflicts and (2) insufficient accuracy orders of
 // referenced variables. Returns false if the user cancelled.
 async function confirmWmWarnings(input, ctx, output) {
-  const conflicts = collectConditionConflicts(input, ctx.curProcess, ctx.isSingleMode, ctx.isDegenerate);
+  let checks;
+  try {
+    checks = await postJson('/api/wave_mixing/check', buildWmRequest(input, ctx, false), 'Condition check failed');
+  } catch (err) {
+    showOutputError(output, err.message);
+    return false;
+  }
+  const { condition_conflicts: conflicts, assertion_conflicts: mixed } = checks;
   if (conflicts.length > 0) {
     const procLabel = PROCESS_LABELS[ctx.curProcess] || ctx.curProcess;
     const degText = ctx.isSingleMode && ctx.curProcess === 'twm_dc' ? `, degenerate=${ctx.isDegenerate ? 'True' : 'False'}` : '';
@@ -833,7 +755,6 @@ async function confirmWmWarnings(input, ctx, output) {
     }
   }
 
-  const mixed = collectAssertionConflicts(input);
   if (mixed.length > 0) {
     const proceed = await confirmConditionWarning(
       mixed,

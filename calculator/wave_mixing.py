@@ -39,7 +39,7 @@ from .common import (
     symbol_assumptions,
     validated_name,
 )
-from .conditions import normalize_process, process_is_dc, is_degenerate
+from .conditions import normalize_process, process_is_dc, is_degenerate, referenced_expressions
 from .wm_transforms import apply_assertions
 
 # Cached TWMSolver instances indexed by [dc][mismatch]
@@ -603,12 +603,32 @@ def _prepare_wm_evaluation(
     s = get_wm_solver(proc, mismatch=mismatch)
     p = s.processor
 
+    # seeded expressions of multimode processing in single-mode processing: no modes are left besides
+    # the seeded ones; the seed keeps its degeneracy, which must be that of the preset (the
+    # expressions of the other one are left out, and must not be referenced)
+    seeded_mm, other_deg = set(), set()
+    if single_mode:
+        for ne in named_expressions:
+            seed = (ne.get('assertion') or {}).get('seed_mode')
+            if seed is not None and not ne.get('single_mode'):
+                (seeded_mm if (proc == 'twm_dc' and int(seed) == 0) == degenerate else other_deg).add(ne['id'])
+        for ne in referenced_expressions(text, named_expressions):
+            if ne['id'] in other_deg:
+                kind = 'degenerate' if degenerate else 'non-degenerate'
+                raise ValueError(
+                    f"Seeded expression '{ne.get('name') or ne.get('source_input')}' has a "
+                    f"{'non-degenerate' if degenerate else 'degenerate'} seed, incompatible with the "
+                    f"current {kind} single-mode preset.")
+        named_expressions = [ne for ne in named_expressions if ne['id'] not in other_deg]
+    # a degenerate seed is evaluated again in degenerate single-mode processing (not convertible)
+    direct = seeded_mm if degenerate else set()
+
     # evolved order needed by the input and, to their recorded order, by the saved expressions
     # to rebuild; an analysis that is not complete falls back to its target order
     targets = [(text, as_order(order))]
     for ne in named_expressions:
         src = (ne.get('source_input') or '').strip()
-        if src and ne['id'] not in WM_VARIABLES:
+        if src and (ne['id'] not in WM_VARIABLES or ne['id'] in direct):
             targets.append((src, as_order(ne['order']) if ne.get('order') is not None else as_order(order)))
     evolved_order, func_order = -1, -1
     for src, target in targets:
@@ -904,8 +924,12 @@ def _prepare_wm_evaluation(
     built: Dict[str, WMWrapper] = {}
     for ne in order_by_refs(named_expressions):
         ne_name = validated_name(ne, 'expression') if ne.get('name') else None
-        w_ne = WM_VARIABLES.get(ne['id'])
+        is_direct = ne['id'] in direct
+        w_ne = None if is_direct else WM_VARIABLES.get(ne['id'])
         is_new = w_ne is None
+        cfg = ne.get('assertion')
+        vacant = ne['id'] in seeded_mm
+        replay_mm = vacant and not is_direct
         if is_new:
             ne_str = (ne.get('source_input') or '').strip()
             if not ne_str:
@@ -914,19 +938,17 @@ def _prepare_wm_evaluation(
             try:
                 validate_input_identifiers(ne_str, scope)
                 w_ne = wrap(parse_expr(ne_str, local_dict=scope, transformations=WM_TRANSFORMS))
-                if ne.get('assertion'):  # asserted expression: its assertions are applied again
+                if cfg:  # asserted expression: its assertions are applied again
                     w_ne = replay_assertions(WMEvalContext(
                         val=w_ne, solver=s, sol=sol, evolved_order=evolved_order, disp_subs=disp_subs,
                         local_dict=scope, proc=proc, is_dc=is_dc, mismatch=mismatch,
-                        single_mode=single_mode, symbols=list(symbols), degenerate=degenerate,
-                    ), ne['assertion'])
+                        single_mode=single_mode and not replay_mm, symbols=list(symbols), degenerate=degenerate,
+                    ), cfg)
             except Exception as e:
                 raise ValueError(f"Failed to evaluate named expression '{ne_name or ne_str}': {e}")
         # a value without an accuracy of its own takes the recorded order of the table entry
         if w_ne.is_exact and ne.get('order') is not None:
             w_ne = w_ne.with_order(as_order(ne['order']))
-        if single_mode and not (is_new and ne.get('assertion')):  # replayed assertions convert it
-            w_ne = w_ne.to_single_mode(degenerate=degenerate)
         if is_new:
             rec = ne.get('order')
             if rec is not None and not w_ne.is_exact and w_ne.order < as_order(rec):
@@ -935,8 +957,10 @@ def _prepare_wm_evaluation(
                     f"Saved expression '{ne_name or ne_str}' was rebuilt from its source input "
                     f"(not held by the backend) only up to order {w_ne.order}, below its "
                     f"recorded order {rec}.")
-            else:
+            elif not is_direct:
                 save_wm_variable(ne['id'], w_ne, s, order=None if w_ne.is_exact else w_ne.order)
+        if single_mode and not (is_new and cfg and not replay_mm):  # replayed assertions convert it
+            w_ne = w_ne.to_single_mode(degenerate=degenerate, vacant=vacant)
         built[ne['id']] = w_ne
         if ne_name:
             local_dict[ne_name] = w_ne
