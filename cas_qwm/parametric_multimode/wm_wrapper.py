@@ -11,7 +11,7 @@ from sympy.core.add import Add
 from sympy.core.mul import Mul
 from sympy.core.power import Pow
 from sympy.core.function import diff, _mexpand
-from sympy.core.numbers import Integer
+from sympy.core.numbers import Integer, I
 from sympy.functions.elementary.complexes import Abs, conjugate
 from sympy.polys.polyerrors import PolynomialError
 from sympy.polys.polytools import Poly
@@ -164,6 +164,7 @@ class WMWrapper:
         # absolute perturbative order up to which the expression is accurate (+oo if exact)
         self.order = sympify(order)
         self._lo = None
+        self._hash = None
         if isinstance(dict_repr, PF):
             dict_repr = {(None,): dict_repr} if dict_repr else dict()
         elif dict_repr is None:
@@ -265,6 +266,7 @@ class WMWrapper:
             return WMWrapper(self.processor, self.dict_repr, self.b_left, order)
         w = copy.copy(self)
         w.order = order
+        w._hash = None
         return w
 
     @property
@@ -338,6 +340,14 @@ class WMWrapper:
                 return False
             return self.flip().dict_repr == other.dict_repr
 
+    def __hash__(self):
+        if self._hash is None:
+            dr = self.dict_repr
+            items = (frozenset(dr.items()) if self.b_left is None
+                     else frozenset((b, frozenset(d.items())) for b, d in dr.items()))
+            self._hash = hash((self.processor, items, self.b_left, self.order))
+        return self._hash
+
     @property
     def as_scalar(self):
         """Returns the scalar/number-operator Expr if this is a pure scalar PF wrapper, else None."""
@@ -368,7 +378,7 @@ class WMWrapper:
             return None
         return self.processor.f_parity(tuple(self.dict_repr))
 
-    def apply(self, f, on_npf=False, self_update=False) -> 'WMWrapper':
+    def apply(self, f, on_npf=False) -> 'WMWrapper':
         """
         Applies f to every scalar/number-operator tail of the leaf PFs (and npf if on_npf);
         falls back to applying f to every leaf PF, then to every {tuple: PF} dict
@@ -386,13 +396,6 @@ class WMWrapper:
         res = (_apply_node(self.dict_repr) if self.b_left is None
                else {b: dv for b, d in self.dict_repr.items()
                      if (dv := _apply_node(d))})
-        
-        if self_update:
-            self.dict_repr = res
-            self._lo = None
-            if not res:
-                self.b_left = None
-            return self
         return WMWrapper(self.processor, res, self.b_left if res else None, self.order, False)
 
     def expand(self, order, with_order=False):
@@ -584,7 +587,7 @@ class WMWrapper:
         :param observed: Whethre the single-mode weak-field operators of the expression
         are the seeded modes themselves.
 
-        After to_single_mode there is no multimode sum left: with `observed`, the weak modes
+        After assert_mode_number(1) there is no multimode sum left: with `observed`, the weak modes
         themselves are then in these states.
         """
         p = self.processor
@@ -753,41 +756,36 @@ class WMWrapper:
             return Add(*(b * p._d_expr(d) for b, d in self.dict_repr.items()))
         return Add(*(p._d_expr(d) * b for b, d in self.dict_repr.items()))
 
-    def to_single_mode(self, degenerate=False, vacant=False) -> 'WMWrapper':
+    def assert_mode_number(self, n: int = 1, degenerate=False) -> 'WMWrapper':
         """
-        Converts multimode operator representations into single-mode boson
-        operators (mode_expr) with n_m = 1, returning a single-mode WMWrapper.
+        Takes the multimode sums over n explicit weak-mode pairs (n_m = n), returning a
+        single-mode WMWrapper. For n = 1 the modes keep their names (a_1, a_2); otherwise
+        they are a_1_k, a_2_k (k = 1, 2, ...), and the single-mode weak-field operators are
+        those of k = 1. n = 0 leaves no mode in the sums (the single-mode operators are kept,
+        e.g. for the modes seeded by seeded_separate).
 
-        vacant=True instead takes the multimode sums over no modes (n_m = 0), as for the rest
-        of the modes besides those seeded by seeded_separate, whose degeneracy is kept
-        (`degenerate` is ignored).
-
-        degenerate=True (effective only for dc=True) converts into the degenerate
-        down-conversion with signal = idler = a_1, governed by
-        H = χ (a_0† a_1² + a_0 a_1†²) / 2. The map
+        degenerate=True (dc only, n >= 1) makes one of the n modes degenerate (signal = idler
+        = a_1, H = χ (a_0† a_1² + a_0 a_1†²) / 2), which is also the single-mode one:
             Σ(a_1 a_2) -> a_1²/2,  Σ(1 + N_1 + N_2) -> N_1 + 1/2,
             Σ(N_j + d) -> (N_1 + d)/2,  n_m -> 1/2,  a_2 -> a_1
-        preserves every commutator between the single weak-field operator and the
-        multimode / driving-field operators, so it carries the multimode Heisenberg
-        solutions (and expressions linear in one weak-field operator, or built by `@`)
-        onto the degenerate ones; a multimode sum Σ N_j maps to N_1/2 (half of the
-        degenerate photon number). Single-mode products (`*`) of weak-field operators
-        must be taken after this conversion, not before.
+        plus the sums over the other n - 1 pairs. These maps preserve every commutator the
+        multimode solutions use, so they are exact for the solver outputs and `@` products;
+        single-mode products (`*`) of weak-field operators must be taken after this conversion.
         """
+        n = int(n)
+        if n < 0:
+            raise ValueError('The mode number must be a nonnegative integer')
         p = self.processor
-        deg = bool(degenerate) and p.dc and not vacant
-        def _dict_sm(d: dict) -> PF:
-            return pf_add(*(
-                p._smk(k, deg, vacant) * p._sm_pf(v, deg, vacant)
-                for k, v in d.items()
-            ))
+        deg = bool(degenerate) and p.dc and n > 0
+        def _dict_mn(d: dict) -> PF:
+            return pf_add(*(p._mn_key(k, n, deg) * p._mn_pf(v, n, deg) for k, v in d.items()))
 
         if self.b_left is None:
-            pf_res = _dict_sm(self.dict_repr)
+            pf_res = _dict_mn(self.dict_repr)
         elif self.b_left:
-            pf_res = pf_add(*(p._smk(b, deg) * _dict_sm(d) for b, d in self.dict_repr.items()))
+            pf_res = pf_add(*(p._mn_key(b, n, deg) * _dict_mn(d) for b, d in self.dict_repr.items()))
         else:
-            pf_res = pf_add(*(_dict_sm(d) * p._smk(b, deg) for b, d in self.dict_repr.items()))
+            pf_res = pf_add(*(_dict_mn(d) * p._mn_key(b, n, deg) for b, d in self.dict_repr.items()))
         return WMWrapper(p, pf_res.apply(bn_simp), None, self.order, False)
 
     def adjoint(self) -> 'WMWrapper':
@@ -1077,3 +1075,26 @@ class WMWrapper:
         return self.apply(lambda v: diff(v, var, *rest_args, **kwargs), on_npf=True)
 
     Derivative = diff
+
+    def bch(self, a, order: int) -> 'WMWrapper':
+        """
+        Term (i t)^n / n! [h, [h, ... [h, a]]] (n = order nested commutators) of the BCH series
+        of e^{i h t} a e^{-i h t}, h being this wrapper (a time-independent Hamiltonian).
+        """
+        order = int(order)
+        if order < 0:
+            raise ValueError('The BCH order must be a nonnegative integer')
+        a = WMWrapper.from_val(a, self.processor)
+        return _bch(self, a, a.order, order)
+
+    def bch_sum(self, a, order: int) -> 'WMWrapper':
+        """BCH series of e^{i h t} a e^{-i h t} up to the term of `order` (see bch)."""
+        return self.processor.d_add(*(self.bch(a, n) for n in range(int(order) + 1)))
+
+
+@lru_cache(maxsize=None)
+def _bch(h: WMWrapper, a: WMWrapper, a_order, n: int) -> WMWrapper:
+    if n == 0:
+        return a
+    prev = _bch(h, a, a_order, n - 1)
+    return ((h @ prev - prev @ h) * (I * t_ / n)).apply(lambda e: bn_simp(_mexpand(e)), on_npf=True)

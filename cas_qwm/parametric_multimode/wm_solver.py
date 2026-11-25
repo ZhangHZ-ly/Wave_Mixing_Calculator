@@ -108,6 +108,9 @@ class TWMSolver(WMSolver):
         d/dt a0 = -i χ a1 a2 exp(-i Δk t),
         d/dt a1 = -i χ a0 a2† exp(i Δk t),
         d/dt a2 = -i χ a1† a0 exp(i Δk t)
+
+    `hamiltonian`: the time-independent Hamiltonian of the frame of the stored solutions
+    (weak fields rotated by exp(∓i Δk t / 2)): χ (d† A + d A†) + Δk/2 · mmn2, d the drive.
     """
 
     def sol_orders(self, order: int) -> tuple:
@@ -123,6 +126,10 @@ class TWMSolver(WMSolver):
         super().__init__(twm_processors[bool(dc)], mismatch=mismatch)
         self.half_p_factor = exp(I * self.pm * t_ * S.Half)
         p = self.processor
+        dd, d = p.nd.factors
+        self.hamiltonian = WMWrapper(p, {(True, 1): PF({((dd,), ()): nlc}),
+                                         (False, 1): PF({((d,), ()): nlc}),
+                                         (None,): PF({_vpk: self.pm * S.Half * p.mmn2})})
         if dc:
             self._sol = [(
                 WMWrapper(p, {(None,): PF({((a_p,), ()): S.One})}),
@@ -236,12 +243,20 @@ class TWMSolver(WMSolver):
 class FWMSolver(WMSolver):
     """
     Four-wave mixing quantum multimode parametric process perturbation solver.
+
+    `hamiltonian`: χ (N_0 (N_0 + 1) / 2 + 2 N_0 Σ(1 + N_1 + N_2) + a_0†² A + a_0² A†)
+    - Δk/2 · Σ(1 + N_1 + N_2), with self- and cross-phase modulation.
     """
 
     def __init__(self):
         super().__init__(fwm_processor, mismatch=True)
-        self.hpm = -I * self.pm * S.Half + I * nlc * self.nd
-        self.gc = S.Half * (self.pm * (-self.pm + 4 * nlc * self.nd))**S.Half
+        self.hpm = I * pm * S.Half - I * nlc * self.nd
+        self.gc = S.Half * (self.pm * (-pm + 4 * nlc * self.nd))**S.Half
+        nd = self.nd
+        self.hamiltonian = WMWrapper(fwm_processor, {
+            (True, 1): PF({((Dagger(a_p)**2,), ()): nlc}),
+            (False, 1): PF({((a_p**2,), ()): nlc}),
+            (None,): PF({_vpk: nlc * nd * (nd + 1) / 2 + (2 * nlc * nd - pm / 2) * fwm_processor.mmn2})})
         self._solve()
 
     def _solve(self):
@@ -316,13 +331,14 @@ class FWMSolver(WMSolver):
 
     def sol_expr(self, mode: int, order):
         """
-        Get the expression of the solution for the given mode and order; from order 0 on, the
-        pump carries the self-phase modulation factor exp(-i χ N_0 t).
+        Get the expression of the solution for the given mode and order; from order 0 on, it
+        carries the self-phase modulation of the pump: a_0 exp(-i χ N_0 t), exp(-i χ N_0 t) a_j.
         """
         expr = self.get_sol(order)[mode].expr
-        if mode == 0 and order >= 0:
-            return expr * exp(-I * nlc * self.nd * t_)
-        return expr
+        if order < 0:
+            return expr
+        spm = exp(-I * nlc * self.nd * t_)
+        return expr * spm if mode == 0 else spm * expr
 
     def _zq(self, obj):
         f = lambda x: x.subs({self.pm: 2 * nlc * self.nd})

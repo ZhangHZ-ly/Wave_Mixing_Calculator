@@ -1,6 +1,6 @@
 from collections import defaultdict
 from collections.abc import Sequence
-from functools import cached_property, reduce
+from functools import cached_property, lru_cache, reduce
 from operator import mul
 from sympy.core.singleton import S
 from sympy.core.sympify import sympify
@@ -713,86 +713,72 @@ class WMProcessor:
             to_left=to_left, _head=new_head, _tail=_tail
         )
 
-    def _deg_op(self, b):
-        """Renames a weak-field operator / pattern of mode 2 to mode 1 (degenerate limit)."""
-        n1, n2 = self.a[0].names
-        if getattr(b, 'name', None) != n2:
-            return b
-        if isinstance(b, BosonNum):
-            return BosonNum(n1)
-        return BosonPat(n1, b.left_base.is_annihilation, *b.exps)
-
-    def _sm_expr(self, expr, degenerate=False, vacant=False):
+    def _mn_modes(self, n, degenerate):
         """
-        Simplifies number operators and mode count in scalar/coefficient expressions.
-
-        degenerate=True (dc only) applies the degenerate mapping (signal = idler = a_1):
-        Σ(1 + N_1 + N_2) -> N_1 + 1/2, Σ(N_j + d) -> (N_1 + d)/2, Σ(a_1 a_2) -> a_1**2/2,
-        mode-2 operators -> mode-1 operators and n_m -> 1/2.
-        vacant=True (without degenerate) takes the multimode sums over no modes: they and n_m -> 0.
+        (explicit weak-mode pairs, renaming of the single-mode weak-field operators) of n
+        asserted modes, one of them degenerate if `degenerate`.
         """
-        if not degenerate:
-            return expr.replace(
-                lambda x: isinstance(x, (MultimodeNum, MultimodeNum2, MultimodeCOP)),
-                lambda x: S.Zero if vacant else x.mode_expr
-            ).subs({nm: S.Zero if vacant else S.One})
         n1, n2 = self.a[0].names
+        if n == 1 and not degenerate:
+            return ((n1, n2),), {}
+        pairs = tuple((Symbol(f'{n1}_{k}'), Symbol(f'{n2}_{k}'))
+                      for k in range(1, n + 1 - degenerate))
+        if degenerate:
+            return pairs, {n2: n1}
+        return pairs, dict(zip((n1, n2), pairs[0])) if pairs else {}
+
+    def _mn_expr(self, expr, n=1, degenerate=False):
+        """
+        Expression with the multimode sums taken over n explicit modes (see
+        WMWrapper.assert_mode_number), the degenerate one entering via
+        Σ(a_1 a_2) -> a_1**2/2, Σ(1 + N_1 + N_2) -> N_1 + 1/2, Σ(N_j + d) -> (N_1 + d)/2.
+        """
+        n1, n2 = self.a[0].names
+        pairs, rep = self._mn_modes(n, degenerate)
+        sub = {nm: len(pairs) + (S.Half if degenerate else 0), **rep}
         bn = BosonNum(n1)
+        for x in expr.atoms(MultimodeNum, MultimodeNum2, MultimodeCOP):
+            if isinstance(x, MultimodeNum) and x.name not in (n1, n2):
+                sub[x] = x.mode_expr
+                continue
+            s = Add(*(x.mode_expr.xreplace({n1: m1, n2: m2}) for m1, m2 in pairs))
+            if degenerate:
+                if isinstance(x, MultimodeCOP):
+                    s += BosonOp(n1, x.annih1) * BosonOp(n1, x.annih2) / 2
+                elif isinstance(x, MultimodeNum2):
+                    s += bn + S.Half
+                else:
+                    s += (bn + x.displacement) / 2
+            sub[x] = s
+        return expr.xreplace(sub)
 
-        def _deg(x):
-            if isinstance(x, MultimodeCOP):
-                return BosonOp(n1, x.annih1) * BosonOp(n1, x.annih2) / 2
-            if isinstance(x, MultimodeNum2):
-                return bn + S.Half
-            if isinstance(x, MultimodeNum):
-                return (bn + x.displacement) / 2 if x.name in (n1, n2) else x.mode_expr
-            return self._deg_op(x)
-
-        return expr.replace(
-            lambda x: (isinstance(x, (MultimodeNum, MultimodeNum2, MultimodeCOP))
-                       or (isinstance(x, (BosonOp, BosonPat)) and x.name == n2)),
-            _deg
-        ).subs({nm: S.Half})
-
-    def _sm_pf(self, p: PF, degenerate=False, vacant=False) -> PF:
-        """Single-mode conversion of a PF (tails, npf and, if degenerate, its table keys)."""
-        p = p.apply(lambda e: self._sm_expr(e, degenerate, vacant), on_npf=True)
-        n2 = self.a[0].names[1]
-        if not (degenerate and p and any(b.name == n2 for bs, _ in p.table for b in bs)):
+    def _mn_pf(self, p: PF, n=1, degenerate=False) -> PF:
+        """`_mn_expr` of a PF (tails, npf and the weak-field patterns of its table keys)."""
+        p = p.apply(lambda e: self._mn_expr(e, n, degenerate), on_npf=True)
+        rep = self._mn_modes(n, degenerate)[1]
+        if not any(b.name in rep for bs, _ in p.table for b in bs):
             return p
         terms = [PF(npf=p.npf)] if p.npf != 0 else []
         for (bs, fs), t in p.table.items():
-            if any(b.name == n2 for b in bs):
-                bs, c = BSC([self._deg_op(b) for b in bs]).result_ind()
+            if any(b.name in rep for b in bs):
+                bs, c = BSC([b.xreplace(rep) for b in bs]).result_ind()
                 t = c * t
             terms.append(PF({(bs, fs): t}))
         return pf_add(*terms)
 
-    def _smk(self, k, degenerate=False, vacant=False) -> PF:
-        """
-        Single-mode PF representation of a dict key (BosonOp or multimode tuple);
-        degenerate=True maps Σ(a_1 a_2) to a_1**2/2 and mode-2 operators to mode 1;
-        vacant=True maps the multimode tuples to 0.
-        """
+    @lru_cache(maxsize=None)
+    def _mn_key(self, k, n=1, degenerate=False) -> PF:
+        """`_mn_expr` of a dict key (BosonOp or multimode tuple) as a PF."""
         if isinstance(k, BosonOp):
-            return PF({((self._deg_op(k) if degenerate else k,), ()): S.One})
-        bs = []
+            return PF({((k.xreplace(self._mn_modes(n, degenerate)[1]),), ()): S.One})
         i, *exps = k
         if not exps:
             return PF1
-        if vacant:
-            return PF0
+        res = PF1
         for e in exps:
-            b1, b2 = Mul.make_args(self.a[i].mode_expr)
-            if degenerate:
-                b2 = self._deg_op(b2)
-            bs.append(b1**e)
-            bs.append(b2**e)
+            res = res * PF.from_val(self._mn_expr(self.a[i], n, degenerate))**e
             i = not i
-        b, t = BSC(bs).result_ind()
-        if degenerate:
-            t = t / 2**sum(exps)
-        return PF({(b, ()): t})
+        return res
 
     def _dr_prep(self, d: dict, order=S.Infinity):
         """

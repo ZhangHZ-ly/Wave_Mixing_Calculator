@@ -51,6 +51,7 @@ if TYPE_CHECKING:
         PF1,
         PE,
         perturb_rec,
+        FockState,
     )
     from .parametric_multimode import (
         a_p,
@@ -119,6 +120,7 @@ _MODULE_EXPORTS: Dict[str, List[str]] = {
         'PF1',
         'PE',
         'perturb_rec',
+        'FockState',
     ],
     'cas_qwm.parametric_multimode': [
         'a_p',

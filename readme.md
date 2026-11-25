@@ -10,7 +10,7 @@ The calculator lets you:
 
 All results are rendered with KaTeX and can be copied as LaTeX.
 
-> **Python API:** the full programming interface of the `cas_qwm` library is documented separately in **[cas_qwm_documentation.md](cas_qwm_documentation.md)**.
+> **Python API:** the full programming interface of the `cas_qwm` library is documented separately in **[cas_qwm_documentation.md](cas_qwm_documentation.md)**. It also covers features not yet available in the web interface: Fock states (`FockState`), the solvers' Hamiltonians and their BCH series (`WMWrapper.bch`), and multimode results over an explicit number of modes (`WMWrapper.assert_mode_number`; the web *Single-mode processing* is its one-mode case).
 
 ---
 

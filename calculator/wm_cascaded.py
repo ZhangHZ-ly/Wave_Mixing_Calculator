@@ -127,7 +127,7 @@ class _Evolver:
         if self._sol is None:
             sol = get_evolved_sol(self.s, self.sol_order)
             if self.degenerate:
-                sol = tuple(w.to_single_mode(degenerate=True) for w in sol)
+                sol = tuple(w.assert_mode_number(degenerate=True) for w in sol)
             self._sol = tuple(w.apply(lambda e: e.subs(t_, tc), on_npf=True) for w in sol)
         return self._sol
 

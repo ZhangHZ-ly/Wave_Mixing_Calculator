@@ -46,8 +46,8 @@ def _to_pf(val: Any, use_rem: bool = False) -> PF:
 
 def save_pf_variable(def_id: str, pf_val: Any, rem: Any = None) -> PF:
     p = _to_pf(pf_val)
-    if rem is not None or not hasattr(p, 'rem'):
-        p.rem = sympify(S.Zero if rem is None else rem)
+    if rem is not None:
+        p = p.with_rem(rem)
     PF_VARIABLES[def_id] = p
     return p
 
@@ -228,7 +228,7 @@ def eval_pattern_form(
     if expand:
         pf_result = pf_result.apply(_mexpand, on_npf=True)
         remainder_expr = _mexpand(remainder_expr)
-        pf_result.rem = remainder_expr
+        pf_result = pf_result.with_rem(remainder_expr)
 
     # Apply display name substitutions to LaTeX output
     latex_str = latex(safe_subs(pf_result.expr(), disp_subs))

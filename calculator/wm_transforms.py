@@ -116,7 +116,7 @@ def apply_assertions(
     p = s.processor
     degenerate = bool(single_mode) and bool(degenerate) and proc == 'twm_dc'
     if degenerate:
-        val = val.to_single_mode(degenerate=True)
+        val = val.assert_mode_number(degenerate=True)
 
     seeding = seed_mode is not None
     if seeding:
@@ -128,7 +128,7 @@ def apply_assertions(
             if proc == 'twm_dc' and int(seed_mode) == 0:
                 raise ValueError('A degenerate seed requires multimode or degenerate '
                                  'single-mode processing')
-            val = val.to_single_mode().seeded_separate(seed_mode, seed_vac_c, observed=True)
+            val = val.assert_mode_number().seeded_separate(seed_mode, seed_vac_c, observed=True)
 
     # with seeding in single-mode processing, the weak modes are in the seeded states
     vac_modes = []
@@ -147,7 +147,7 @@ def apply_assertions(
 
     if coherent_drive:
         if single_mode:
-            val = val.to_single_mode(degenerate=degenerate)
+            val = val.assert_mode_number(degenerate=degenerate)
         if alpha is None:
             alpha = alpha_0 if s.dc else alpha_2
         val_t = val.eval_coherent(order, alpha)
@@ -174,5 +174,5 @@ def apply_assertions(
         val = val.apply(lambda e: unify_radicand(e, rad), on_npf=True)
     val = val.apply(_postprocess_pf)
     if single_mode:
-        val = val.to_single_mode(degenerate=degenerate)
+        val = val.assert_mode_number(degenerate=degenerate)
     return val, t_to_g(val, process=proc, mismatch=mismatch)

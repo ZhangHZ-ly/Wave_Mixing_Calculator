@@ -29,75 +29,20 @@ fermion.FermionOp._eval_power = lambda self, exp: (FermionPat(*self.args, exp) i
                                                    else Operator._eval_power(self, exp))
 
 def check_diff(x: dict, y: dict):
-    # 0 for equal, 1 for y - x, -1 for x - y
-    xk = x.keys, yk = y.keys
-    lx, ly = len(xk), len(yk)
-    lt = len(xk | yk)
-    if lt > lx:
-        if lt > ly:
+    # coefficient dicts of x, y: 0 for equal, 1 for y - x, -1 for x - y with nonnegative coefficients
+    direction = 0
+    for k in x.keys() | y.keys():
+        d = y.get(k, 0) - x.get(k, 0)
+        if d == 0:
+            continue
+        s = 1 if d > 0 else -1
+        if direction == -s:
             return None
-        else:
-            direction = 1
-    elif lt > ly:
-        direction = -1
-    else:
-        direction = 0
-    for key in xk & yk:
-            r = (y[key]/x[key])
-            if r < 0:
-                return None
-            if r == 1:
-                continue
-            if r > 1:
-                if direction == -1:
-                    return None
-                else:
-                    direction = 1
-            elif direction == 1:
-                return None
-            else:
-                direction = -1
+        direction = s
     return direction
-def new_uid_exp(collection: set[dict], new: dict):
-    for old in tuple(collection):
-        match check_diff(old, new):
-            case None:
-                collection.add(new)
-            case 0:
-                collection.remove(old)
-                del old, new
-                return
-            case -1:
-                collection.remove(old)
-                for k in old:
-                    old[k] -= new.get(k, 0)
-                new_uid_exp(collection, old)
-                del new
-                return
-            case 1:
-                collection.remove(old)
-                for k in new:
-                    new[k] -= old.get(k, 0)
-                new_uid_exp(collection, new)
-                del old
-                return
-def uid_exp(*exps, sym_count=False):
-    if sym_count:
-        int_part = S.Zero
-        uid_part = set()
-        temp = dict()
-        for exponent in exps:
-            for a in Add.make_args(exponent):
-                if a.is_Integer:
-                    int_part += a
-                else:
-                    coeff, rest = a.as_coeff_Mul()
-                    temp[rest] = temp.get(rest, 0) + coeff
-            new_uid_exp(uid_part, temp.copy())
-            temp.clear()
-        return Add(int_part, *(Mul(n, k) for ns in uid_part for n, k in ns.items()))
-    else:
-        return Add(*exps)
+
+def uid_exp(*exps):
+    return Add(*exps)
 
 class FermionPat(Operator):
     """
@@ -210,7 +155,7 @@ class FermionPat(Operator):
         return self.args[2].args
     @cached_property
     def comm_symm(self):
-        return Pow(S.NegativeOne, uid_exp(*self.exps, sym_count=True))
+        return Pow(S.NegativeOne, uid_exp(*self.exps))
 
     def doit(self, **hints):
         if len(self.args) < 3:
@@ -325,17 +270,17 @@ def fp_separable(fp_fac: FermionPat, fp: FermionPat, from_left=True, force=False
         if not fp.left_base == fp_fac.left_base:
             return False
         es1, es2 = fp.exps, fp_fac.exps
-        if all(es1[i] == es2[i] for i in range(len(es2))):
-            le1, le2 = es1[len(es2)-1], es2[-1]
-        else:
+        if not all(es1[i] == es2[i] for i in range(len(es2) - 1)):
             return False
+        le1, le2 = es1[len(es2)-1], es2[-1]
     elif not fp.right_base == fp_fac.right_base:
         return False
     else:
         es1, es2 = fp.exps, fp_fac.exps
-        if all(es1[-i] == es2[-i] for i in range(1, len(es2))):
-            le1, le2 = es1[-len(es2)], es2[0]
-    d = le2 - le1
+        if not all(es1[-i] == es2[-i] for i in range(1, len(es2))):
+            return False
+        le1, le2 = es1[-len(es2)], es2[0]
+    d = le1 - le2
     if d.is_integer == False:
         raise ValueError("Fermionic operators can only be raised to a"
             " positive integer power")
@@ -377,10 +322,8 @@ class UidCommutator(Expr):
         ca, nca = A.args_cnc()
         cb, ncb = B.args_cnc()
 
-        syma = Pow(S.NegativeOne, uid_exp(*(m1_base(a.comm_symm) for a in nca),
-                                          sym_count=hints.get('sym_count', False)))
-        symb = Pow(S.NegativeOne, uid_exp(*(m1_base(b.comm_symm) for b in ncb),
-                                          sym_count=hints.get('sym_count', False)))
+        syma = Pow(S.NegativeOne, uid_exp(*(m1_base(a.comm_symm) for a in nca)))
+        symb = Pow(S.NegativeOne, uid_exp(*(m1_base(b.comm_symm) for b in ncb)))
         if syma == 1 or symb == 1:
             from sympy.physics.quantum.commutator import Commutator
             obj = Commutator(Mul._from_args(nca), Mul._from_args(ncb))

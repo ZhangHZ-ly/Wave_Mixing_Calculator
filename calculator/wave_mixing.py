@@ -545,12 +545,12 @@ def validate_input_identifiers(expr_str: str, local_dict: dict):
 def get_evolved_sol(s: WMSolver, evolved_order: int) -> tuple:
     """
     Evolved (a_p, a_s, a_i) solution wrappers used for expression evaluation,
-    including the self-phase-modulation factor of the FWM pump.
+    including the FWM self-phase modulation (see FWMSolver.sol_expr).
     """
     sol = s.get_sol(evolved_order)
     if isinstance(s, FWMSolver) and evolved_order >= 0:
         spm_w = WMWrapper(s.processor, {(None,): PF({((), ()): exp(-I * nlc * s.nd * t_)})})
-        sol = (sol[0] @ spm_w, sol[1], sol[2])
+        sol = (sol[0] @ spm_w, spm_w @ sol[1], spm_w @ sol[2])
     return sol
 
 
@@ -599,7 +599,7 @@ def _prepare_wm_evaluation(
     is_dc = process_is_dc(proc)
     mismatch = bool(mismatch)
     degenerate = is_degenerate(proc, single_mode, degenerate)
-    _sm = (lambda w: w.to_single_mode(degenerate=True)) if degenerate else (lambda w: w)
+    _sm = (lambda w: w.assert_mode_number(degenerate=True)) if degenerate else (lambda w: w)
     s = get_wm_solver(proc, mismatch=mismatch)
     p = s.processor
 
@@ -960,7 +960,7 @@ def _prepare_wm_evaluation(
             elif not is_direct:
                 save_wm_variable(ne['id'], w_ne, s, order=None if w_ne.is_exact else w_ne.order)
         if single_mode and not (is_new and cfg and not replay_mm):  # replayed assertions convert it
-            w_ne = w_ne.to_single_mode(degenerate=degenerate, vacant=vacant)
+            w_ne = w_ne.assert_mode_number(not vacant, degenerate)
         built[ne['id']] = w_ne
         if ne_name:
             local_dict[ne_name] = w_ne
