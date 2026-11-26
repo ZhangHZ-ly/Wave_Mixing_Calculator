@@ -14,7 +14,8 @@ from sympy.core.function import _mexpand
 from sympy.core.traversal import bottom_up, preorder_traversal
 from sympy.core.exprtools import factor_terms
 from sympy.core.sorting import default_sort_key
-from sympy.polys.polytools import cancel
+from sympy.polys.polytools import Poly, parallel_poly_from_expr
+from sympy.polys.polyerrors import ExactQuotientFailed, PolynomialError
 from sympy.polys.rationaltools import together
 from sympy.simplify.radsimp import collect
 from sympy.physics.quantum.boson import BosonOp
@@ -102,19 +103,30 @@ def unify_radicand(expr, rad):
             return rad ** x.exp
         if not (x.exp.is_Integer and x.base.is_Add):
             return x
-        # number operators commute here; commutative dummies let `cancel` divide by rad
+        # number operators commute here; commutative dummies make polynomials of the base and rad
         nums = {a: Dummy() for a in preorder_traversal(x.base)
                 if isinstance(a, (BosonNum, MultimodeNum, MultimodeNum2))}
         b = x.base.xreplace({root: g}).xreplace(nums)
         r = target.xreplace(nums)
         if not (b.is_commutative and r.is_commutative):
             return x
+        b, den = b.as_numer_denom()
+        if den.atoms(Add):
+            return x
+        try:
+            (pb, pr), _ = parallel_poly_from_expr((b, r))
+        except PolynomialError:
+            return x
+        pb, pr = pb.to_field(), pr.to_field()
         back = {d: a for a, d in nums.items()}
         for k in range(1, 5):
-            q = cancel(b / r ** k)
-            if not q.atoms(Add):
+            try:
+                q = pb.exquo(pr ** k)
+            except ExactQuotientFailed:
+                return x
+            if q.is_monomial:
                 # (q rad^k)^e = q^e rad^(k e): the number operators in q commute with rad
-                return q.xreplace(back).xreplace({g: root}) ** x.exp * rad ** (k * x.exp)
+                return (q.as_expr() / den).xreplace(back).xreplace({g: root}) ** x.exp * rad ** (k * x.exp)
         return x
 
     return bottom_up(expr, canon)
@@ -727,30 +739,100 @@ class WMProcessor:
             return pairs, {n2: n1}
         return pairs, dict(zip((n1, n2), pairs[0])) if pairs else {}
 
-    def _mn_expr(self, expr, n=1, degenerate=False):
+    def _mn_sums(self, expr) -> list:
+        """The multimode sums over the weak modes in expr (nm included)."""
+        n1, n2 = self.a[0].names
+        res = [x for x in expr.atoms(MultimodeNum, MultimodeNum2, MultimodeCOP)
+               if not isinstance(x, MultimodeNum) or x.name in (n1, n2)]
+        return res + [nm] if expr.has(nm) else res
+
+    def _mn_parts(self, x, n=1, degenerate=False) -> list:
         """
-        Expression with the multimode sums taken over n explicit modes (see
-        WMWrapper.assert_mode_number), the degenerate one entering via
-        Σ(a_1 a_2) -> a_1**2/2, Σ(1 + N_1 + N_2) -> N_1 + 1/2, Σ(N_j + d) -> (N_1 + d)/2.
+        Per-mode terms of the multimode sum x (or nm) over the n asserted modes, the degenerate
+        one first, entering via Σ(a_1 a_2) -> a_1**2/2, Σ(1 + N_1 + N_2) -> N_1 + 1/2,
+        Σ(N_j + d) -> (N_1 + d)/2, n_m -> 1/2.
         """
         n1, n2 = self.a[0].names
-        pairs, rep = self._mn_modes(n, degenerate)
-        sub = {nm: len(pairs) + (S.Half if degenerate else 0), **rep}
-        bn = BosonNum(n1)
-        for x in expr.atoms(MultimodeNum, MultimodeNum2, MultimodeCOP):
-            if isinstance(x, MultimodeNum) and x.name not in (n1, n2):
-                sub[x] = x.mode_expr
+        parts = [S.One if x == nm else x.mode_expr.xreplace({n1: m1, n2: m2})
+                 for m1, m2 in self._mn_modes(n, degenerate)[0]]
+        if degenerate:
+            bn = BosonNum(n1)
+            if x == nm:
+                d = S.Half
+            elif isinstance(x, MultimodeCOP):
+                d = BosonOp(n1, x.annih1) * BosonOp(n1, x.annih2) / 2
+            elif isinstance(x, MultimodeNum2):
+                d = bn + S.Half
+            else:
+                d = (bn + x.displacement) / 2
+            parts.insert(0, d)
+        return parts
+
+    def _mn_expr(self, expr, n=1, degenerate=False):
+        """Expression with the multimode sums taken over n explicit modes (see WMWrapper.assert_mode_number)."""
+        sub = {x: (x.mode_expr if isinstance(x, MultimodeNum) and x.name not in self.a[0].names
+                   else Add(*self._mn_parts(x, n, degenerate)))
+               for x in expr.atoms(MultimodeNum, MultimodeNum2, MultimodeCOP)}
+        sub[nm] = Add(*self._mn_parts(nm, n, degenerate))
+        return expr.xreplace({**sub, **self._mn_modes(n, degenerate)[1]})
+
+    def _mn_monomials(self, t):
+        """(coefficient, [multimode sums with multiplicity]) of a tail polynomial in the sums."""
+        sums = self._mn_sums(t)
+        if not sums:
+            return [(t, [])]
+        nc = {x: Dummy() for x in preorder_traversal(t) if x.is_commutative is False and x not in sums
+              and all(a.is_commutative is not False for a in x.args)}
+        ds = [Dummy() for _ in sums]
+        back = {d: x for x, d in nc.items()}
+        try:
+            poly = Poly(t.xreplace({**nc, **dict(zip(sums, ds))}), *ds)
+        except PolynomialError:
+            raise ValueError('Per-mode phase mismatch: a multimode sum enters a tail non-polynomially')
+        return [(c.xreplace(back), [x for x, e in zip(sums, mon) for _ in range(e)])
+                for mon, c in poly.terms()]
+
+    def _mn_split(self, k, v: PF, n, degenerate, mismatch, rep=False) -> PF:
+        """
+        _mn_key(k) * _mn_pf(v) with the phase mismatch pm taken per asserted mode (see
+        WMWrapper.assert_mode_number); `rep`: v is under a single-mode key.
+        """
+        weak = self.a[0].names
+        key_sums = 0 if isinstance(k, BosonOp) else sum(k[1:])
+        first = {pm: mismatch[0]} if mismatch else {}
+        err = ValueError('Per-mode phase mismatch: a term depending on the mismatch involves more '
+                         'than one mode (several multimode sums, or a sum and single-mode '
+                         'weak-field operators)')
+        plain, split = [], defaultdict(list)
+        if v.npf != 0:
+            if v.npf.has(pm) and (key_sums or self._mn_sums(v.npf)):
+                raise err
+            plain.append(PF(npf=v.npf.xreplace(first)))
+        for (bs, fs), t in v.table.items():
+            if not t.has(pm):
+                plain.append(PF({(bs, fs): t}))
                 continue
-            s = Add(*(x.mode_expr.xreplace({n1: m1, n2: m2}) for m1, m2 in pairs))
-            if degenerate:
-                if isinstance(x, MultimodeCOP):
-                    s += BosonOp(n1, x.annih1) * BosonOp(n1, x.annih2) / 2
-                elif isinstance(x, MultimodeNum2):
-                    s += bn + S.Half
+            has_rep = rep or any(b.name in weak for b in bs) or any(
+                b.name in weak for b in t.atoms(BosonNum))
+            for c, sums in self._mn_monomials(t):
+                n_sums = key_sums + len(sums)
+                if n_sums == 0 or not c.has(pm):
+                    plain.append(PF({(bs, fs): (c * Mul(*sums)).xreplace(first if n_sums == 0 else {})}))
+                elif n_sums == 1 and not has_rep:
+                    split[(bs, fs)].append((c, sums[0] if sums else None))
                 else:
-                    s += (bn + x.displacement) / 2
-            sub[x] = s
-        return expr.xreplace(sub)
+                    raise err
+        res = [self._mn_key(k, n, degenerate) * self._mn_pf(pf_add(*plain), n, degenerate)] if plain else []
+        if split:
+            parts = {x: self._mn_parts(x, n, degenerate)
+                     for cs in split.values() for _, x in cs if x is not None}
+            keys = (self._mn_parts(self.a[k[0]], n, degenerate) if key_sums else None)
+            for u, dk in enumerate(mismatch):
+                tab = {e: Add(*(c.xreplace({pm: dk}) * (parts[x][u] if x is not None else 1) for c, x in cs))
+                       for e, cs in split.items()}
+                key = PF.from_val(keys[u]) if keys else PF1
+                res.append(key * self._mn_pf(PF({e: t for e, t in tab.items() if t != 0}), n, degenerate))
+        return pf_add(*res) if res else PF0
 
     def _mn_pf(self, p: PF, n=1, degenerate=False) -> PF:
         """`_mn_expr` of a PF (tails, npf and the weak-field patterns of its table keys)."""

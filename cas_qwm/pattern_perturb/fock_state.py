@@ -4,6 +4,7 @@ from sympy.core.sympify import sympify
 from sympy.core.singleton import S
 from sympy.core.symbol import Symbol
 from sympy.core.add import Add
+from sympy.core.numbers import Float
 from sympy.functions.elementary.miscellaneous import sqrt
 from sympy.functions.combinatorial.factorials import ff, rf
 from sympy.physics.quantum.boson import BosonOp
@@ -25,8 +26,29 @@ def _nat_n(n, fermion=False):
 def _mode_name(m):
     if isinstance(m, str):
         return Symbol(m)
+    if isinstance(m, Symbol):
+        return m
     name = getattr(m, 'name', None)
     return sympify(m) if name is None else name
+
+
+def _number(v):
+    if isinstance(v, (int, float, complex)) or type(v).__module__ == 'numpy':
+        return complex(v)
+    v = sympify(v)
+    return complex(v) if v.is_number and v.atoms(Float) else None
+
+
+def _coef_str(v):
+    z = _number(v)
+    if z is None:
+        s = str(v)
+        return f'({s})' if isinstance(sympify(v), Add) else s
+    if z.imag == 0:
+        return format(z.real, '.6g')
+    if z.real == 0:
+        return format(z.imag, '.6g') + 'j'
+    return f'({z.real:.6g}{z.imag:+.6g}j)'
 
 
 def _is_base(x):
@@ -99,9 +121,23 @@ class FockState:
         for state in states:
             self._rec_fock_key(self.state_dict, state, strict=strict)
 
-    def __repr__(self):
-        side = 'ket' if self.ket else 'bra'
-        return f'FockState({self.boson_modes}, {self.fermion_modes}, {self.state_dict}, {side})'
+    def __repr__(self, max_terms=20):
+        modes = ', '.join(map(str, self.boson_modes))
+        if self.fermion_modes:
+            modes += '; ' + ', '.join(map(str, self.fermion_modes))
+        items = [(k, v) for k, v in self.state_dict.items() if v != 0]
+        if items and all(_number(v) is not None for _, v in items):
+            items.sort(key=lambda kv: -abs(_number(kv[1])))
+        nb, lines = len(self.boson_modes), []
+        for basis, v in items[:max_terms]:
+            occ = ', '.join(map(str, basis[:nb])) + ('; ' + ', '.join(map(str, basis[nb:])) if basis[nb:] else '')
+            c = _coef_str(v)
+            sign, c = ('-', c[1:]) if c.startswith('-') else ('+', c)
+            vec = f'|{occ}>' if self.ket else f'<{occ}|'
+            lines.append(f'  {sign if lines or sign == "-" else " "} {c} {vec}')
+        if len(items) > max_terms:
+            lines.append(f'    ... ({len(items) - max_terms} more terms)')
+        return f'FockState({modes})' + (':\n' + '\n'.join(lines) if lines else ': 0')
 
     def __bool__(self):
         return any(v != 0 for v in self.state_dict.values())

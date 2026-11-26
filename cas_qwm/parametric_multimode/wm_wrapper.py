@@ -22,7 +22,7 @@ from ..op_pattern import BosonNum, BosonPat, FermionPat
 from ..op_pattern.boson_pattern import fac
 from ..pattern_perturb.pattern_form import pf_add, _vpk, bn_simp
 from .multimode import MultimodeNum, MultimodeNum2, MultimodeCOP
-from ..wm_variables import alpha_0, alpha_2, betas, t_, nlc, nm
+from ..wm_variables import alpha_0, alpha_2, betas, t_, nlc, nm, pm
 from .wm_processor import WMProcessor, vac_pf, _merge_dicts, _t_mul, _tdz
 
 __all__ = ['WMWrapper']
@@ -756,7 +756,7 @@ class WMWrapper:
             return Add(*(b * p._d_expr(d) for b, d in self.dict_repr.items()))
         return Add(*(p._d_expr(d) * b for b, d in self.dict_repr.items()))
 
-    def assert_mode_number(self, n: int = 1, degenerate=False) -> 'WMWrapper':
+    def assert_mode_number(self, n: int = 1, degenerate=False, mismatch=None) -> 'WMWrapper':
         """
         Takes the multimode sums over n explicit weak-mode pairs (n_m = n), returning a
         single-mode WMWrapper. For n = 1 the modes keep their names (a_1, a_2); otherwise
@@ -771,21 +771,46 @@ class WMWrapper:
         plus the sums over the other n - 1 pairs. These maps preserve every commutator the
         multimode solutions use, so they are exact for the solver outputs and `@` products;
         single-mode products (`*`) of weak-field operators must be taken after this conversion.
+
+        mismatch: phase mismatches (Δk_1, Δk_2, ...) of the non-degenerate pairs k = 1, 2, ...,
+        replacing the common Δk, which a degenerate mode keeps (as its operators keep their
+        names). A term depending on Δk must involve a single mode: it contains one multimode
+        sum (a COP, Σ(...) or n_m, taken as Σ_k c(Δk_k) X_k), or none (single-mode weak-field
+        and drive operators, with the mismatch of the single-mode one); otherwise ValueError
+        is raised. Products of terms
+        of different modes must thus be taken after this conversion. With TWMSolver
+        (mismatch=True) this restricts it to the solutions of orders up to 1 (get_sol(1):
+        the drive up to its first correction, the weak fields at their leading order) and
+        to expressions linear in their multimode sums; from order 2 on, the solutions
+        couple the mismatches of different modes, which a common Δk cannot represent. The
+        modes keep their own frames (rotated by exp(∓i Δk_k t / 2), see TWMSolver).
         """
         n = int(n)
         if n < 0:
             raise ValueError('The mode number must be a nonnegative integer')
         p = self.processor
         deg = bool(degenerate) and p.dc and n > 0
-        def _dict_mn(d: dict) -> PF:
-            return pf_add(*(p._mn_key(k, n, deg) * p._mn_pf(v, n, deg) for k, v in d.items()))
+        if mismatch is not None:
+            mismatch = tuple(sympify(x) for x in mismatch)
+            if len(mismatch) != n - deg:
+                raise ValueError(f'{n - deg} phase mismatches expected, got {len(mismatch)}')
+            if deg:
+                mismatch = (pm, *mismatch)
+
+        def _conv(k, v, rep=False) -> PF:
+            if mismatch is None:
+                return p._mn_key(k, n, deg) * p._mn_pf(v, n, deg)
+            return p._mn_split(k, v, n, deg, mismatch, rep)
+
+        def _dict_mn(d: dict, rep=False) -> PF:
+            return pf_add(*(_conv(k, v, rep) for k, v in d.items()))
 
         if self.b_left is None:
             pf_res = _dict_mn(self.dict_repr)
         elif self.b_left:
-            pf_res = pf_add(*(p._mn_key(b, n, deg) * _dict_mn(d) for b, d in self.dict_repr.items()))
+            pf_res = pf_add(*(p._mn_key(b, n, deg) * _dict_mn(d, True) for b, d in self.dict_repr.items()))
         else:
-            pf_res = pf_add(*(_dict_mn(d) * p._mn_key(b, n, deg) for b, d in self.dict_repr.items()))
+            pf_res = pf_add(*(_dict_mn(d, True) * p._mn_key(b, n, deg) for b, d in self.dict_repr.items()))
         return WMWrapper(p, pf_res.apply(bn_simp), None, self.order, False)
 
     def adjoint(self) -> 'WMWrapper':

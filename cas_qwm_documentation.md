@@ -7,6 +7,7 @@ It provides three main capabilities:
 1. **Operator patterns** — products of boson / fermion operators of the same mode are collected into a single object, and boson patterns are rewritten in terms of number operators as far as possible.
 2. **Pattern form and perturbative expansion** — any expression is reordered into a unique *pattern form*, enabling equality tests and fast algebra in the non-commutative operator algebra; expressions can be Taylor-expanded up to a given perturbative order, where the order of every symbol / operator is user-defined.
 3. **Multimode wave mixing** — Heisenberg-picture solutions of three- and four-wave mixing, solved order by order in the pump depletion, together with an algebra for the resulting multimode operator expressions.
+4. **Exact numerical evolution** — evolution of given Fock or coherent input states at any gain and depletion, with symbolic observables and `FockState` inputs / outputs.
 
 All examples on this page were run with SymPy 1.14 from the repository root.
 
@@ -22,7 +23,7 @@ All examples on this page were run with SymPy 1.14 from the repository root.
 - [Layer 2 — `cas_qwm.pattern_perturb`](#layer-2--cas_qwmpattern_perturb)
   - [`pf`](#pf--pattern_form) · [`PF`](#pf-class) · [`PE`](#pe--perturbative-expander) · [`perturb_rec`](#perturb_rec) · [`FockState`](#fockstate)
 - [Layer 3 — `cas_qwm.parametric_multimode`](#layer-3--cas_qwmparametric_multimode)
-  - [Shared symbols](#shared-symbols) · [Multimode operators](#multimode-operators) · [`TWMSolver` / `FWMSolver`](#twmsolver--fwmsolver) · [`WMWrapper`](#wmwrapper) · [`WMProcessor`](#wmprocessor) · [`dsolve_pm1` / `dsolve_pm2` / `p2s`](#differential-equation-helpers)
+  - [Shared symbols](#shared-symbols) · [Multimode operators](#multimode-operators) · [`TWMSolver` / `FWMSolver`](#twmsolver--fwmsolver) · [`WMWrapper`](#wmwrapper) · [`WMProcessor`](#wmprocessor) · [`dsolve_pm1` / `dsolve_pm2` / `p2s`](#differential-equation-helpers) · [Exact numerical evolution](#exact-numerical-evolution--cas_qwmparametric_multimodenumeric)
 - [Two strong inputs — `cas_qwm.twm_dual_stimulated`](#two-strong-inputs--cas_qwmtwm_dual_stimulated)
   - [Method](#method) · [`TWMDualSolver`](#twmdualsolver) · [`exact_fock_apply`](#exact_fock_apply) · [Accuracy](#accuracy) · [Jacobi elliptic functions](#jacobi-elliptic-functions--cas_qwmjacobi) · [`dsolve_lame`](#elliptic-polynomial-algebra--cas_qwmjacobidsolve_lame) · [`elliptic_algebra`](#elliptic-pf-coefficients--cas_qwmjacobielliptic_algebra)
 - [Exported names](#exported-names)
@@ -52,9 +53,9 @@ The package is organised in three layers; each layer only depends on the ones ab
 
 | Layer | Module | Content |
 |---|---|---|
-| 1 | `cas_qwm.op_pattern` | Single-mode operator patterns (`BosonPat`, `FermionPat`), number operators (`BosonNum`), number shifts and commutators. |
+| $1$ | `cas_qwm.op_pattern` | Single-mode operator patterns (`BosonPat`, `FermionPat`), number operators (`BosonNum`), number shifts and commutators. |
 | 2 | `cas_qwm.pattern_perturb` | Pattern-form reordering (`pf`), the `PF` algebra, perturbative expansion (`PE`). |
-| 3 | `cas_qwm.parametric_multimode` | Multimode operators, wave-mixing processors (`WMProcessor`), solvers (`TWMSolver`, `FWMSolver`), the `WMWrapper` algebra, ODE helpers (`dsolve_pm1`, `dsolve_pm2`, `p2s`). |
+| 3 | `cas_qwm.parametric_multimode` | Multimode operators, wave-mixing processors (`WMProcessor`), solvers (`TWMSolver`, `FWMSolver`), the `WMWrapper` algebra, ODE helpers (`dsolve_pm1`, `dsolve_pm2`, `p2s`); the `numeric` subpackage for the exact numerical evolution of given states. |
 | – | `cas_qwm.jacobi`, `cas_qwm.twm_dual_stimulated` | The `jacobi` package holds all the elliptic algebra: Jacobi elliptic functions (`jacobi.py`), the elliptic-polynomial ring with its closed-form Lamé solver (`dsolve_lame.py`), and the λ-series of that ring as `PF` coefficients with their `PE` coefficient algebra (`elliptic_algebra.py`). `twm_dual_stimulated` applies it to single-mode three-wave mixing with two strong inputs (`TWMDualSolver`). |
 
 ## Printing conventions
@@ -329,15 +330,21 @@ A superposition of Fock basis states of the boson modes `bs` and fermion modes `
 
 | Member | Description |
 |---|---|
-| `operate(operator)` | Apply an operator (`Expr` or `PF`) to the state; a bra is operated from the right, $\langle\psi| O = (O^\dagger |\psi\rangle)^\dagger$. The state must contain every mode of the operator. |
+| `operate(operator)` | Apply an operator (`Expr` or `PF`) to the state; a bra is operated from the right, $\langle\psi\rvert  O = (O^\dagger \lvert \psi\rangle)^\dagger$. The state must contain every mode of the operator. |
 | `inner_prod(other)` | Inner product of a bra and a ket; if both are kets (or bras), `other` is flipped first. |
 | `adjoint()` | The bra of a ket and vice versa. |
 | `update(*states)` | Add `(basis, coefficient)` pairs or dicts, or one basis and its coefficient. |
 | `amplitude`, `normalize(renew=False)` | The norm, and the normalised state (a new one, or this one with `renew=True`). |
 | `boson_modes`, `fermion_modes`, `modes`, `nm`, `state_dict`, `ket` | Raw data. |
 
+A state is displayed with its modes and one basis state per line (fermion occupations after `;`); numerical amplitudes are shown to 6 digits, largest first, and only the first 20 terms.
+
 ```python
 >>> psi = FockState([a], [], {(2,): 1, (0,): 1}).normalize()
+>>> psi
+FockState(a):
+    sqrt(2)/2 |2>
+  + sqrt(2)/2 |0>
 >>> psi.operate(Dagger(a)*a).state_dict
 {(2,): sqrt(2)}
 >>> psi.inner_prod(psi.operate(Dagger(a)*a))     # <N> = 1
@@ -402,15 +409,19 @@ TWMSolver(dc=True, mismatch=False)
 FWMSolver()
 ```
 
-Perturbative solvers of the Heisenberg equations. A solver is a read-only sequence: `solver.get_sol(order)` returns the 3-tuple of `WMWrapper` objects `(a_0(t), a_1(t), a_2(t))` accurate up to `order`, each labeled with its actual accuracy order (`solver.sol_orders(order)`: in TWM the weak fields are corrected at even orders and the driving field at odd orders only, so a solution is accurate up to the order before its next correction), and `solver.sol_expr(mode, order)` returns the corresponding SymPy expression (including the phase factors of a mismatched process).
+Solvers of the Heisenberg equations, order by order in the depletion of the strong driving field.
 
-- **`TWMSolver`** — three-wave mixing driven by one strong field (pump for `dc=True`, idler for `dc=False`). The strong field is of order $-1$, the weak fields of order 0, and $\chi$ of order 1. Orders $\ge -1$ are solved recursively on demand and cached, so the first call of a high order can be slow. `mismatch=True` keeps a symbolic $\Delta k$.
-- **`FWMSolver`** — four-wave mixing with a degenerate monochromatic pump, including self- and cross-phase modulation. The pump is of order $-1$, the weak fields of order 0, and $\chi$ of order 2, so the parametric gain $\chi a_0^2$ and the phase modulation $\chi \hat N_0$ are of order 0 and all orders are integers. Three solutions are computed at construction: the undepleted pump alone, with the weak fields, and with the first pump-depletion correction. In each one, every mode carries the highest order it applies to. The pump's first depletion correction is at order 1, so it applies up to order 0 in the first two solutions and up to order 2 in the third. The weak fields' first correction (order 2) is not computed, so they apply up to order 1 ($-1$ in the first solution, where they vanish). The order of a solution is the lowest of its modes, so the three solutions have orders $-1$, $0$ and $1$ (`FWMSolver.orders`). `get_sol(order)` returns the highest solution whose order does not exceed `order`, so any order above 1 gives the order-1 solution; orders below $-1$ raise `ValueError`. Products of them, and hence Tab 3 results, may thus be accurate to a lower order than the preset (e.g. 1 for $\hat N_0$ at preset order 2).
+- **`TWMSolver`** — three-wave mixing. `dc=True`: down-conversion $a_0 \to a_1 + a_2$ driven by a strong pump $a_0$; `dc=False`: frequency conversion / state transfer $a_0 \leftrightarrow a_1$ driven by a strong idler $a_2$. `mismatch=True` keeps the phase mismatch $\Delta k$ as a symbol (otherwise $\Delta k = 0$).
+- **`FWMSolver`** — four-wave mixing $2a_0 \to a_1 + a_2$ with a strong degenerate pump $a_0$, including self- and cross-phase modulation, with a symbolic $\Delta k$ ($\Delta k = 2\chi\hat N_0$ compensates the self-phase modulation).
 
-Common attributes: `processor` (the underlying `WMProcessor`), `dc`, `nd` (number operator of the driving field), `pe` (the `PE` used), `gc` (gain coefficient, $g = g_c\,t$), and `hamiltonian`, a time-independent Hamiltonian as a `WMWrapper` (see `WMWrapper.bch`):
+The strong field is of order $-1$, the weak fields of order $0$, and $\chi$ of order $1$ (TWM) or $2$ (FWM), so the parametric gain is of order $0$: order $0$ is the undepleted-pump solution, order $1$ adds the first depletion correction.
 
-- `TWMSolver`: $H = \chi(d^\dagger A + d A^\dagger) + \tfrac{\Delta k}{2}\,\Sigma$, with $d$ the driving field, $A = \sum a_1 a_2$ (down-conversion) or $\sum a_0 a_1^\dagger$ (state transfer), and $\Sigma$ = `processor.mmn2`. This is the Hamiltonian of the frame of the stored solutions (`get_sol`), where the weak fields are rotated by $e^{\mp i\Delta k t/2}$; this removes the time dependence of the mismatched interaction.
-- `FWMSolver`: $H = \chi\left[\tfrac12 \hat N_0(\hat N_0 + 1) + 2\hat N_0 \Sigma + a_0^{\dagger 2} A + a_0^2 A^\dagger\right] - \tfrac{\Delta k}{2}\,\Sigma$ with $\Sigma = \sum(1 + \hat N_1 + \hat N_2)$, including self- and cross-phase modulation. Its operators are in the laboratory frame (up to the $\Delta k$ rotation), while the stored solutions are in the frame rotating with the self-phase modulation of the pump: the evolved operators, as returned by `sol_expr`, are $a_0(t) = a_0^{\rm (stored)} e^{-i\chi \hat N_0 t}$ and $a_j(t) = e^{-i\chi \hat N_0 t} a_j^{\rm (stored)}$ for the weak fields.
+| Member | Description |
+|---|---|
+| `get_sol(order)` | `(a_0(t), a_1(t), a_2(t))` as `WMWrapper`s accurate up to `order` (solved on demand and cached, so a high order takes a while the first time). FWM provides orders $-1$ to $1$; a higher order gives the order-$1$ solution. |
+| `sol_expr(mode, order)` | The SymPy expression of mode `0`, `1` or `2`, with its phase factors (mismatch; for FWM the self-phase modulation of the pump, which `get_sol` leaves out). |
+| `hamiltonian` | The Hamiltonian as a `WMWrapper` (see `WMWrapper.bch`): $\chi(d^\dagger A + d A^\dagger) + \tfrac{\Delta k}{2}\sum(1 + \hat N_1 + \hat N_2)$ for TWM ($d$ the driving field, $A = \sum a_1 a_2$ or $\sum a_0 a_1^\dagger$); for FWM $\chi\left[\tfrac12 \hat N_0(\hat N_0 + 1) + 2\hat N_0\sum(1 + \hat N_1 + \hat N_2) + a_0^{\dagger 2} A + a_0^2 A^\dagger\right] - \tfrac{\Delta k}{2}\sum(1 + \hat N_1 + \hat N_2)$. |
+| `processor` | The underlying `WMProcessor`; `processor.init_ops` holds the input operators at $t = 0$. |
 
 ```python
 >>> from cas_qwm import TWMSolver, FWMSolver
@@ -434,13 +445,9 @@ WMWrapper(processor, dict_repr=None, b_left=None, order=S.Infinity, truncate=Tru
 WMWrapper.from_val(val, processor)
 ```
 
-Algebraic container for multimode wave-mixing expressions; the solver outputs are `WMWrapper` objects. Internally, an expression is stored as a dict of multimode exponent tuples to `PF` objects, optionally with one unpaired weak-field operator on the left (`b_left=True`) or right (`b_left=False`).
+Container of multimode wave-mixing expressions: the solver outputs are `WMWrapper`s, and further expressions are built from them and from the input operators `processor.init_ops` with the operations below.
 
-Every wrapper carries an accuracy `order`: the absolute perturbative order up to which it is accurate, `+oo` (`S.Infinity`, the default) for an exact expression, which is accurate to all orders. A product (`*` or `@`) of factors with leading orders $l_1, l_2$ and orders $o_1, o_2$ is accurate to $l_1 + l_2 + \min(o_1 - l_1,\, o_2 - l_2)$ (an exact factor counting as $+\infty$ relative accuracy); the factor more accurate than needed is truncated beforehand, and every partial product is truncated at that order inside `WMProcessor.d_mul`. Sums take the lowest order of their terms (the more accurate terms are truncated there), `expand(n)` and `eval_coherent(n)` lower it to `n`, `expand_func_d` keeps the relative accuracy of its arguments, and the other transformations keep it.
-
-Like `PF`, a wrapper is treated as immutable and is hashable (by its content, `b_left`, `order` and processor).
-
-A finite `order` given to the constructor truncates the content at that order (`truncate=False` skips this for content known to have no terms beyond it), and `with_order(order)` truncates when it lowers the order. The solver outputs are therefore cut at their accuracy labels, and a saved variable bound with a lower recorded order loses the terms it cannot support.
+Each wrapper records the order up to which it is accurate (`order`; $+\infty$ for an exact expression). A product of factors with leading orders $l_1, l_2$ and accuracy orders $o_1, o_2$ is accurate to $l_1 + l_2 + \min(o_1 - l_1,\, o_2 - l_2)$, a sum to the lowest order of its terms; terms beyond that order are dropped automatically.
 
 | Member | Description |
 |---|---|
@@ -449,18 +456,17 @@ A finite `order` given to the constructor truncates the content at that order (`
 | `+`, `-`, `/` by scalars, `**` | Usual algebra. |
 | `adjoint()` | Hermitian adjoint. |
 | `expr` | Conversion to a SymPy expression. |
-| `order`, `lo`, `rel_order`, `is_exact` | Accuracy order (`+oo` if exact), leading order (`+oo` if zero), their difference, and whether the order is `+oo`. |
+| `order`, `lo` | Accuracy order ($+\infty$ if exact) and leading order ($+\infty$ if zero). |
 | `with_order(order, truncate=True)` | Copy with another accuracy order, truncated there when the order is lowered. |
 | `expand(order, with_order=False)` | Truncate / expand to a perturbative order; with `with_order=True`, yields `(term, order)` pairs. |
 | `eval_vacuum(vac_modes)` | (Partial) expectation value with the given weak modes (`'a_1'`, `'a_2'`, …) in vacuum. |
-| `eval_coherent(order=0)` | Expectation value with the driving field in a coherent state $|\alpha\rangle$ (`alpha_0` or `alpha_2`). |
-| `seeded_separate(mode=1, vac_c=True, observed=False)` | (Partial) expectation value with one separate weak mode $b$ seeded in the coherent state $|\beta_j\rangle$ (the global `beta_j`, $j$ the mode index), coupled with its partner in vacuum (`vac_c`) or in its own coherent state. `mode`: down-conversion `1` seeds the signal (coupled with the idler) and `0` a degenerate mode (signal = idler, coupled with itself; `vac_c` has no effect); state transfer: the index of the seeded mode (`1` signal, `0` pump); four-wave mixing: no effect (signal). The seeded modes are of order 0, so the average is exact. Every multimode operator is split into its $b$ part and the rest $\Sigma'$, which keeps the symbols and $n_m$ of the full sum. COP powers are expanded binomially, $(B + \Sigma')^e = \sum_j \binom{e}{j} B^j \Sigma'^{\,e-j}$, and the tails become polynomials in $\hat N_b$. A degenerate $b$ part follows the degenerate map of `assert_mode_number`. The $b$ operators of each term are then normal-ordered ($b^n b^{\dagger e} = \sum_k \binom{n}{k}\binom{e}{k} k!\, b^{\dagger e-k} b^{n-k}$) and averaged, giving polynomials in $\beta$ and $\bar\beta$. With `observed=True`, the single-mode weak-field operators (key and single-mode patterns) are the seeded modes and are averaged too; a degenerate seed can only be observed through the key. After `assert_mode_number()` there is no sum left, so the weak modes themselves are seeded. |
-| `assert_mode_number(n=1, degenerate=False)` | Take the multimode sums over $n \ge 0$ explicit mode pairs ($n_m = n$), e.g. $\sum a_1 a_2 \to \sum_{k=1}^n a_{1,k} a_{2,k}$. For $n = 1$ the modes keep their names (`a_1`, `a_2`); otherwise they are named `a_1_k`, `a_2_k` ($k = 1, 2, \dots$), and the single-mode weak-field operators of the expression become those of $k = 1$. $n = 0$ leaves no mode in the sums (single-mode operators are kept). With `degenerate=True` (dc only, $n \ge 1$), one of the $n$ modes is degenerate (signal = idler = $a_1$, keeping its name, $H = \chi(a_0^\dagger a_1^2 + a_0 a_1^{\dagger 2})/2$) and is the single-mode one; it enters the sums via $\sum a_1 a_2 \to a_1^2/2$, $\sum(1 + \hat N_1 + \hat N_2) \to \hat N_1 + 1/2$, $\sum(\hat N_j + d) \to (\hat N_1 + d)/2$, $n_m \to 1/2$, $a_2 \to a_1$, besides the other $n - 1$ pairs `a_1_k`, `a_2_k`. These maps preserve all commutators the multimode solutions use, so they are exact for the solver outputs and for `@` products (a degenerate $\sum \hat N_j$ part becomes $\hat N_1/2$). Take single-mode products (`*`) of weak-field operators after the conversion. |
+| `eval_coherent(order=0)` | Expectation value with the driving field in a coherent state $\lvert \alpha\rangle$ (`alpha_0` or `alpha_2`). |
+| `seeded_separate(mode=1, vac_c=True, observed=False)` | (Partial) expectation value with one separate weak mode in the coherent state $\lvert \beta_j\rangle$ (the global symbol `beta_j`, $j$ the mode index). `mode`: the seeded mode (down-conversion: `1` the signal, `0` a degenerate mode; state transfer: `1` the signal, `0` the pump; FWM: the signal). `vac_c`: its partner in vacuum, otherwise in its own coherent state. `observed=True`: the single-mode operators of the expression are the seeded mode. The rest of each multimode sum keeps $n_m$ modes. |
+| `assert_mode_number(n=1, degenerate=False, mismatch=None)` | Replaces the multimode sums by $n$ explicit mode pairs ($n_m = n$), e.g. $\sum a_1 a_2 \to \sum_{k=1}^n a_{1,k} a_{2,k}$. Names: for $n = 1$ the modes keep the names `a_1`, `a_2`; otherwise they are `a_1_k`, `a_2_k` ($k = 1, \dots, n$), and the single-mode operators of the expression become those of $k = 1$; $n = 0$ leaves no mode in the sums. `degenerate=True` (down-conversion): one of the $n$ modes is a degenerate mode `a_1` (signal = idler), which is then the single-mode one, and the others are `a_1_k`, `a_2_k` ($k = 1, \dots, n - 1$). `mismatch` $= (\Delta k_1, \Delta k_2, \dots)$: a phase mismatch per non-degenerate pair (a degenerate mode keeps $\Delta k$). **With `TWMSolver(mismatch=True)`, `mismatch` only applies to the solutions up to order $1$ and to expressions linear in their sums** (it raises an error otherwise). Take single-mode products (`*`) after the conversion. |
 | `diff(*symbols, gc=None)` | Derivative (w.r.t. time or gain). |
 | `apply(f, on_npf=False)` | Apply `f` to every number-operator coefficient. |
-| `h.bch(a, n)` | Term $\frac{(it)^n}{n!}[h,[h,\dots[h,a]]]$ ($n$ nested commutators, multimode products) of the series $e^{iht} a e^{-iht}$, `h` being a time-independent Hamiltonian such as `solver.hamiltonian`. The terms are cached, so a higher term reuses the lower ones. The series is in powers of $t$, not in perturbative orders; truncate a term with `expand(order)`. |
+| `h.bch(a, n)` | Term $\frac{(it)^n}{n!}[h,[h,\dots[h,a]]]$ of the series $e^{iht} a e^{-iht}$, `h` being a Hamiltonian such as `solver.hamiltonian`; the series is in powers of $t$ (truncate a term in orders with `expand(order)`). |
 | `h.bch_sum(a, n)` | Sum of the BCH terms up to $n$. |
-| `flip()`, `as_scalar`, `parity`, `dc` | Internal representation helpers. |
 
 ```python
 >>> s = TWMSolver(dc=True)
@@ -493,7 +499,7 @@ The same evolution as a series in $t$, from the solver's Hamiltonian:
 WMProcessor(dc=True, nlc_order=1)
 ```
 
-Base processor shared by the solvers and wrappers of one process: it stores the mode structure, the perturbative expander (`pe`), and the low-level dict algebra. The strong driving field is of order $-1$ and the weak fields of order 0; `nlc_order` is the order of $\chi$ (1 for three-wave mixing, 2 for four-wave mixing, so that the parametric gain is of order 0).
+Base processor shared by the solvers and wrappers of one process: it stores the mode structure, the perturbative expander (`pe`), and the low-level dict algebra. The strong driving field is of order $-1$ and the weak fields of order $0$; `nlc_order` is the order of $\chi$ ($1$ for three-wave mixing, $2$ for four-wave mixing).
 
 | Member | Description |
 |---|---|
@@ -549,6 +555,66 @@ x*sinh(2*x)/2 - cosh(2*x)/4 + 1/4
 -2*sinh(x)/3 + sinh(2*x)/3
 ```
 
+### Exact numerical evolution — `cas_qwm.parametric_multimode.numeric`
+
+Numerical evolution of given input states under the down-conversion Hamiltonian of `TWMSolver` or the Hamiltonian of `FWMSolver`, exact at any gain and depletion. The drive is in a Fock state $|N\rangle$ or a coherent state $|\alpha\rangle$; the weak modes are in Fock states, superpositions or coherent states. The results are expectation values of symbolic operators, photon-number distributions and evolved `FockState`s. It needs NumPy and SciPy; the names below are also exported by `cas_qwm`.
+
+**Weak modes.** They are given as a list of *chains*:
+
+| Chain | Weak modes |
+|---|---|
+| `pair(n1=0, n2=0, mismatch=0)` | One signal / idler pair with its own input $\lvert n_1, n_2\rangle$ and phase mismatch $\Delta k$. |
+| `degenerate(n=0, mismatch=0)` | One degenerate mode (signal = idler) with its input $\lvert n\rangle$. |
+| `collective(n_modes, mismatch=0)` | `n_modes` pairs in vacuum with a common $\Delta k$, evaluated together (any number of modes at the cost of one). |
+
+**Names.** `Layout(processor, chains)` names the modes of the explicit chains (`pair`, `degenerate`) for the symbolic framework: the first one is `a_1`, `a_2` (`a_1` if degenerate), the others `a_1_k`, `a_2_k` ($k = 1, 2, \dots$). The multimode sums $\sum$ run over all chains, with $n_m$ the number of collective modes (the explicit modes are added to it, as in `seeded_separate`).
+
+**Input.** `initial_state(layout, fock=None, seeds=None)` gives the input arguments of `Evolution`: `fock` is a `FockState` of the drive `a_0` and the explicit modes (default: their vacuum), `seeds` puts explicit modes in coherent states, e.g. `{'a_1': 2.0}`. Drive photons given in `fock` add to the drive of the evaluation.
+
+**Evolution.**
+
+```python
+Evolution(chains, nlc, t, process='twm', **initial_state(layout, fock, seeds))
+```
+
+`nlc` is $\chi$, `t` the time or an array of times (the results then have a leading time axis), `process` `'twm'` or `'fwm'`. The operators are those of `TWMSolver.get_sol` and `FWMSolver.sol_expr`.
+
+| Output | Description |
+|---|---|
+| `.expect(op, N=0, alpha=None)` | $\langle \text{op}\rangle(t)$ with the drive in $\lvert N\rangle$ or $\lvert \alpha\rangle$. `op = observable(w, layout)` converts a `WMWrapper` `w` built from `processor.init_ops` (multimode products `@`, single-mode products `*`). |
+| `.distribution(chain=None, N=0, alpha=None, single=False)` | Probabilities of $0, 1, 2, \dots$ signal photons of a chain (of pairs in all chains if `None`); `single=True`: of one mode of a collective chain. |
+| `to_fock(evolution, layout, N=0, time=0)` | The evolved state as a `FockState` of the drive and the explicit modes (without collective chains or strong coherent seeds). |
+| `.edge_weight(N=0)` | An estimate of the numerical error (normally below $10^{-12}$). |
+
+Operators can also be built directly from `K_plus(c)`, `K_minus(c)`, `K_0(c)`, `N_1(c)`, `N_2(c)`, `a_1(c)`, `a_2(c)` of chain `c` and `a_0`, `a_0_dag`, `N_0`. The remaining arguments of `Evolution` (`method`, `cutoff`, `tol`, `seed_nodes`, `max_dim`, `rtol`) and `nodes` of `expect` are numerical settings chosen automatically; they are described in the docstrings.
+
+```python
+>>> from cas_qwm import TWMSolver, FockState
+>>> from cas_qwm.parametric_multimode.numeric import *
+>>> p = TWMSolver().processor
+>>> ops = p.init_ops
+>>> chains = [pair(mismatch=0.2), collective(20, mismatch=0.2)]
+>>> lay = Layout(p, chains)                    # a_1, a_2: the pair; Σ: the pair + 20 modes
+>>> E = Evolution(chains, nlc=1e-3, t=15, **initial_state(lay, seeds={'a_1': 1.0}))
+>>> E.expect(observable(ops['a_1'], lay), alpha=100)           # <a_1(t)>, g = 1.5
+(0.998083...-1.498262...j)
+>>> E.expect(observable(ops['a_1'].adjoint() @ ops['a_1'], lay), alpha=100)   # <Σ N_1(t)>
+(50.304252...+0j)
+>>> E.distribution(1, alpha=100, single=True)[:3]              # one unseeded mode
+array([0.308502..., 0.213338..., 0.147527...])
+
+>>> lay = Layout(p, [pair()])
+>>> psi = FockState(['a_0', 'a_1', 'a_2'], [], {(100, 1, 0): 1})
+>>> E = Evolution([pair()], nlc=0.02, t=1, **initial_state(lay, psi))
+>>> to_fock(E, lay)
+FockState(a_0, a_1, a_2):
+    0.961036 |100, 1, 0>
+  - 0.268359j |99, 2, 1>
+  - 0.064584 |98, 3, 2>
+  + 0.0145827j |97, 4, 3>
+  ...
+```
+
 ---
 
 ## Two strong inputs — `cas_qwm.twm_dual_stimulated`
@@ -557,26 +623,7 @@ Single-mode three-wave mixing $H = \hbar\chi(a_1 a_2 a_0^\dagger + a_1^\dagger a
 
 ### Method
 
-1. **Conservation laws.** $M_s = \hat N_1 + \hat N_0$, $M_i = \hat N_2 + \hat N_0$ and $H' = H/\hbar\chi$ are conserved. Using $\hat N_0(t) = M_s - a_1^\dagger(t) a_1(t)$ etc., every field obeys a **closed** second-order Heisenberg equation:
-
-$$\ddot a_1 = \chi^2\big[(2\hat N_1 + \hat N_0 - \hat N_2)\,a_1 - 2\,a_1^\dagger a_1 a_1\big](t),\qquad
-\ddot a_2 = \chi^2\big[(2\hat N_2 + \hat N_0 - \hat N_1)\,a_2 - 2\,a_2^\dagger a_2 a_2\big](t),$$
-$$\ddot a_0 = \chi^2\big[-(\hat N_1 + \hat N_2 + 2\hat N_0 + 1)\,a_0 + 2\,a_0^\dagger a_0 a_0\big](t),$$
-
-   where the linear coefficients are conserved and stand on the left of the field.
-2. **Forward recursion.** The strong fields are of order $-1$, the weak one of order 0, and $\chi$ of order 1. The leading order (order $-1$) is the classical solution; order $k$ solves the variational equation with a source given by the order-$k$ residual of the lower orders. Operator products are evaluated with `PF`: the coefficients are `EllipticTail` functions of the number operators, which `NumShift` shifts exactly, so the commutator (ordering) corrections enter automatically. `PE` truncates the products by orders, with `EllipticAlgebra` registered as a coefficient algebra (both in `cas_qwm.jacobi.elliptic_algebra`). The coupling term $g^\dagger a_0 a_0$ of the variational equation is the antilinear involution $J[X] = T^2X^\dagger/N_T$ ($T$ the leading key, $N_T = T^\dagger T$ at leading order), which a `PF` product evaluates: it maps the key $K$ to $T^2K^\dagger$, conjugates the coefficient and applies the exact weak-number shift. $P = g + J[g]$ and $Q = g - J[g]$ then obey uncoupled equations, solved once per pair $\{K, J(K)\}$ at a representative key: $g_K = (P + Q)_K/2$, $g_{J(K)} = J[(P - Q)_K/2]$. These are **Lamé equations of degree 1 and 2**, $y'' = (n(n+1)m\,\mathrm{sn}^2 - h)y$. Only six of them occur, and their fundamental solutions are tabulated in closed form (one is a Jacobi function or a derivative of one; the other contains $u$ and $E$):
-
-| $(n, h)$ | $y_1$ | $y_2$ |
-|---|---|---|
-| $(1, 1)$ | $\mathrm{cn}$ | $[\mathrm{cn}((1-m)u - E) + \mathrm{sn}\,\mathrm{dn}]/(1-m)$ |
-| $(1, m)$ | $\mathrm{dn}$ | $(E\,\mathrm{dn} - m\,\mathrm{sn}\,\mathrm{cn})/(1-m)$ |
-| $(1, 1+m)$ | $\mathrm{cn}\,\mathrm{dn} - \mathrm{sn}(u - E)$ | $\mathrm{sn}$ |
-| $(2, 1+m)$ | $\mathrm{cn}\,\mathrm{dn}$ | $[(1-m)u\,\mathrm{cn}\,\mathrm{dn} - (1+m)E\,\mathrm{cn}\,\mathrm{dn} + (1+m^2)\mathrm{sn} - m(1+m)\mathrm{sn}^3]/(1-m)^2$ |
-| $(2, 1+4m)$ | $\mathrm{cn} - u\,\mathrm{sn}\,\mathrm{dn} + [(2m-1)E\,\mathrm{sn}\,\mathrm{dn} + m(1-2m)\mathrm{cn}\,\mathrm{sn}^2]/(m-1)$ | $\mathrm{sn}\,\mathrm{dn}$ |
-| $(2, 4+m)$ | $\mathrm{dn} - 2u\,\mathrm{sn}\,\mathrm{cn} + [(m-2)E\,\mathrm{sn}\,\mathrm{cn} + (2-m)\mathrm{dn}\,\mathrm{sn}^2]/(m-1)$ | $\mathrm{sn}\,\mathrm{cn}$ |
-
-   They are normalized to unit Wronskian, $y_1(0) = y_2'(0) = 1$, $y_1'(0) = y_2(0) = 0$. The particular solution $y_2\int_0^u y_1 S - y_1\int_0^u y_2 S$ is integrated in closed form by recursion, as in `dsolve_pm` (module `cas_qwm.jacobi.dsolve_lame`). The integrands are polynomials in $(u, E)$ times $\mathrm{sn}^{2k}$ or $\mathrm{sn}^{2k+1}\mathrm{cn}\,\mathrm{dn}$. These are reduced by the recurrence of $\int\mathrm{sn}^{2k}$ and by integration by parts. Every coefficient lies in the ring $\mathbb Q(m)[n, u, E(u), \mathrm{sn}, \mathrm{cn}, \mathrm{dn}]$, where $E$ is Jacobi's epsilon function. No numerical step is involved.
-3. **Variables.** The weak number $n = \hat N_w$ and two conserved strong quantities $L_X, L_Y$ are used:
+The strong fields are of order $-1$, the weak one of order $0$, and $\chi$ of order $1$. The leading order (order $-1$) is the classical solution in Jacobi elliptic functions; the quantum corrections are added order by order. Each correction is found in closed form: its coefficients are polynomials in $u$, Jacobi's epsilon function $E(u)$ and $\mathrm{sn}, \mathrm{cn}, \mathrm{dn}(u|m)$ with coefficients rational in $m$ (the elliptic-polynomial ring of `cas_qwm.jacobi.dsolve_lame`), so no numerical step is involved. The variables are the weak photon number $n = \hat N_w$ and two conserved strong quantities $L_X, L_Y$:
 
 | `weak` | $L_X$ | $L_Y$ | parameter $m$ | strong fields at leading order |
 |---|---|---|---|---|
@@ -584,10 +631,7 @@ $$\ddot a_0 = \chi^2\big[-(\hat N_1 + \hat N_2 + 2\hat N_0 + 1)\,a_0 + 2\,a_0^\d
 | `'s'` | $\hat N_0 + \hat N_1$ | $\hat N_2 - \hat N_1$ | $-L_X/L_Y$ | $a_0 \to \mathrm{cn}\,a_0$, $a_2 \to \mathrm{dn}\,a_2$, $a_1 \to -i\lambda\,\mathrm{sn}\,a_0a_2^\dagger$ |
 | `'i'` | $\hat N_0 + \hat N_2$ | $\hat N_1 - \hat N_2$ | $-L_X/L_Y$ | $a_0 \to \mathrm{cn}\,a_0$, $a_1 \to \mathrm{dn}\,a_1$, $a_2 \to -i\lambda\,\mathrm{sn}\,a_0a_1^\dagger$ |
 
-   with $u = \chi t\sqrt{L_Y}$, $\lambda = L_Y^{-1/2}$ and the Jacobi functions of $(u|m)$. A negative parameter is the imaginary-modulus form of the $\mathrm{sd}, \mathrm{cd}, \mathrm{nd}$ functions of the notes. A shifted coefficient is expanded by the registered algebra: exactly in $n$, and as a Taylor series in $\lambda^2$ on $(u, m, \lambda)$, using the closed-form $m$-derivatives of the Jacobi functions.
-4. **No phase mismatch.** A mismatch $\Delta k \sim \chi\sqrt L$ changes the leading orbit (Armstrong et al., Phys. Rev. 127, 1918, Secs. V–VI): the modulus is set by the roots of the mismatched cubic, and the phase is an elliptic integral of the third kind, which lies outside the ring above. It is therefore not included.
-
-The solution is returned in **pattern form**: a sum of canonical-operator keys with number-operator coefficients on the right. This is the representation used by `PF`. For $a_1$ with a weak pump, the keys are $(a_0^\dagger a_1 a_2)^r a_1$ and $(a_0 a_1^\dagger a_2^\dagger)^{r-1} a_2^\dagger a_0$, i.e. the harmonic decomposition of the notes' standard form $U a_1 + V a_2^\dagger a_0$.
+with $u = \chi t\sqrt{L_Y}$, $\lambda = L_Y^{-1/2}$ and the Jacobi functions of $(u|m)$. The solution is returned in **pattern form** (canonical-operator keys with number-operator coefficients on the right), as used by `PF`.
 
 ### `TWMDualSolver`
 
@@ -600,7 +644,7 @@ TWMDualSolver(weak='p')
 | `get_sol(target, order)` | List of the `PF` terms of orders $-1, \dots,$ `order` of mode `target` (`0`/`'p'`, `1`/`'s'`, `2`/`'i'`); their coefficients are `EllipticTail`s of `alg`. Computed recursively and cached. |
 | `sol_pf(target, order)` | The solution accurate up to `order` as one `PF`. It can be multiplied with other `PF`s and truncated with `pe.expand_pf`. |
 | `sol_expr(target, order, explicit=True)` | SymPy expression accurate up to `order`. `explicit=True`: in number operators and $t$ (Jacobi functions of operator arguments); `explicit=False`: with the symbols `u`, `m`, `λ`, `n`, `sn`, `cn`, `dn`, `E`. |
-| `apply(target, order, fock, chi_t)` | Numerical action on $|n_0, n_1, n_2\rangle$ at $\chi t$ = `chi_t`; returns `{(n_0, n_1, n_2): amplitude}`. |
+| `apply(target, order, fock, chi_t)` | Numerical action on $\lvert n_0, n_1, n_2\rangle$ at $\chi t$ = `chi_t`; returns `{(n_0, n_1, n_2): amplitude}`. |
 | `symbols()` | Expressions of $L_X, L_Y, m, n, u$ in number operators. |
 | `residual(target, A, cap)` | Residual of the closed equation (in $u$ units) of a `PF` `A`, expanded up to order `cap`. |
 | `alg`, `pe` | The `EllipticAlgebra` of the coefficients, and the `PE` instance (strong modes of order $-1$, `alg` registered) that counts and truncates the orders. |
@@ -617,7 +661,7 @@ TWMDualSolver(weak='p')
 cn*a_1 + λ**3*(-I*E*cn/(2*m**2 - 2*m) - I*cn*u/(2*m) + I*dn*sn/(2*m - 2))*Dagger(a_0)*BP(a_1; 2)*a_2 + λ*(-I*E*cn/(2*m - 2) - I*cn*u/2 + I*dn*sn*(2 - m)/(2*m - 2))*a_0*Dagger(a_2)
 ```
 
-Solving order 2 takes about 2 s per field, and order 3 about 10 s.
+Solving order $2$ takes about 2 s per field, and order $3$ about 10 s.
 
 ### `exact_fock_apply`
 
@@ -625,7 +669,7 @@ Solving order 2 takes about 2 s per field, and order 3 about 10 s.
 exact_fock_apply(target, fock, chi_t)
 ```
 
-Exact single-mode reference, $a_\text{target}(t)|n_0, n_1, n_2\rangle$ as `{(n_0, n_1, n_2): amplitude}`. In a conserved block $(M_s, M_i)$, $H'$ is a tridiagonal matrix in $n_0$. The state is propagated there by a Chebyshev expansion of $e^{\mp i\chi H' t}$ (Jacobi–Anger series, Bessel coefficients from Miller's recurrence). It is pure Python in double precision and needs no NumPy; $N = 3200$ takes a few seconds.
+Exact numerical reference, $a_\text{target}(t)|n_0, n_1, n_2\rangle$ as `{(n_0, n_1, n_2): amplitude}` (pure Python; $N = 3200$ takes a few seconds).
 
 ```python
 >>> from cas_qwm import exact_fock_apply
@@ -640,22 +684,15 @@ Each order gains a factor $L^{-1/2}$. Typical errors $\|(a^\text{exact} - a^\tex
 | order | $N = 200$ | $N = 800$ | $N = 3200$ |
 |---|---|---|---|
 | $-1$ (classical) | 2.1 | 2.2 | 2.2 |
-| 0 | 1.0e-1 | 3.8e-2 | 1.7e-2 |
-| 1 | 8.1e-2 | 2.1e-2 | 5.3e-3 |
-| 2 | 5.6e-3 | 5.8e-4 | 6.8e-5 |
+| $0$ | 1.0e-1 | 3.8e-2 | 1.7e-2 |
+| $1$ | 8.1e-2 | 2.1e-2 | 5.3e-3 |
+| $2$ | 5.6e-3 | 5.8e-4 | 6.8e-5 |
 
-All nine (weak mode, target) combinations were checked up to order 2 (weak pump up to order 3), at times beyond the first zero of $\mathrm{cn}$.
+All nine (weak mode, target) combinations were checked up to order $2$ (weak pump up to order $3$), at times beyond the first zero of $\mathrm{cn}$.
 
 ### Jacobi elliptic functions — `cas_qwm.jacobi`
 
-`jacobi_sn(u, m)`, `jacobi_cn(u, m)`, `jacobi_dn(u, m)` and Jacobi's epsilon function `jacobi_epsilon(u, m)` $= E(u|m) = \int_0^u \mathrm{dn}^2(v|m)\,dv$. All use the parameter convention $m = k^2$, as in mpmath and DLMF §22. They evaluate numerically through `evalf` / `N` for any real or complex arguments, including $m < 0$ and $m > 1$. The derivatives with respect to both arguments are in closed form, so the ring generated by $u, E, \mathrm{sn}, \mathrm{cn}, \mathrm{dn}$ over $\mathbb Q(m)$ is closed under $\partial_u$ and $\partial_m$:
-
-$$\partial_m \mathrm{sn} = \mathrm{cn}\,\mathrm{dn}\,X + \frac{\mathrm{sn}\,\mathrm{cn}^2}{2(1-m)},\quad
-\partial_m \mathrm{cn} = -\mathrm{sn}\,\Phi,\quad
-\partial_m \mathrm{dn} = -\frac{\mathrm{sn}^2\mathrm{dn}}{2(1-m)} - m\,\mathrm{sn}\,\mathrm{cn}\,X,\quad
-\partial_m E = \frac{E - u}{2m} + \mathrm{dn}\,\Phi,$$
-
-with $X = \dfrac{(1-m)u - E}{2m(1-m)}$ and $\Phi = \partial_m \mathrm{am} = \dfrac{u\,\mathrm{dn}}{2m} - \dfrac{E\,\mathrm{dn}}{2m(1-m)} + \dfrac{\mathrm{sn}\,\mathrm{cn}}{2(1-m)}$.
+`jacobi_sn(u, m)`, `jacobi_cn(u, m)`, `jacobi_dn(u, m)` and Jacobi's epsilon function `jacobi_epsilon(u, m)` $= E(u|m) = \int_0^u \mathrm{dn}^2(v|m)\,dv$, with the parameter convention $m = k^2$ (as in mpmath and DLMF §22). They evaluate numerically through `evalf` / `N` for any real or complex arguments, and their derivatives in $u$ and $m$ are in closed form.
 
 ```python
 >>> from sympy import Rational, N
@@ -674,10 +711,10 @@ The ring algebra behind `TWMDualSolver`, independent of the operator layer. Its 
 |---|---|
 | `m`, `R`, `M` | The parameter symbol, the ring (generators `R.gens` = $n, u, E, s, c, d, j$; `R.one`, `R.zero`) and $m$ as a coefficient. |
 | `red(f)`, `mul(f, g)` | Reduction of $c^2, d^2, j^2$; reduced product. |
-| `diff_u(f)`, `diff_m(f)`, `diff_um(f, a, b)` | $\partial_u$, $\partial_m$ (closed form, see above), and the cached $\partial_u^a\partial_m^b$. |
+| `diff_u(f)`, `diff_m(f)`, `diff_um(f, a, b)` | $\partial_u$, $\partial_m$, and the cached $\partial_u^a\partial_m^b$. |
 | `conj(f)`, `at0(f)`, `key(f)` | Complex conjugate ($j \to -j$), value at $u = 0$, hashable key. |
 | `antideriv(f)`, `integrate0(f)` | Antiderivative in $u$ and $\int_0^u$, by the recurrence of $\int\mathrm{sn}^{2k}$ and integration by parts; `ObstructionError` if it leaves the ring (e.g. $\int E\,du$). |
-| `LAME`, `lame(V)` | Closed-form fundamental solutions of the six Lamé equations above, keyed by $(\nu, h)$; lookup by the potential $V = \nu(\nu+1)m s^2 - h$. |
+| `LAME`, `lame(V)` | Closed-form fundamental solutions of the Lamé equations $y'' = V y$ that occur, keyed by $(\nu, h)$; lookup by the potential $V = \nu(\nu+1)m s^2 - h$. |
 | `solve_lame(V, S, y0, dy0)` | Solution of $y'' - V y = S$, $y(0) = y_0$, $y'(0) = y'_0$, by variation of constants. |
 | `evaluate(f, m, values)` | Numerical value at the parameter `m` and the generator values $(n, u, E, s, c, d, j)$ (e.g. mpmath numbers). |
 
@@ -738,6 +775,7 @@ Every name below can be imported directly from `cas_qwm`.
 | `op_pattern` | `BosonNum`, `BosonPat`, `NumShift`, `apply_num_shift`, `FermionPat`, `UidCommutator`, `extract_modes`, `check_num`, `in_boson_num`, `mul_pattern`, `redo_mul` |
 | `pattern_perturb` | `BSC`, `FSC`, `PF`, `pf`, `pf_add`, `PF0`, `PF1`, `PE`, `perturb_rec`, `FockState` |
 | `parametric_multimode` | `a_p`, `a_s`, `a_i`, `t_`, `nlc`, `pm`, `nm`, `gain`, `g_hat`, `p2s`, `dsolve_pm1`, `dsolve_pm2`, `MultimodeCOP`, `MultimodeNum`, `MultimodeNum2`, `WMProcessor`, `twm_processors`, `fwm_processor`, `vac_pf`, `WMWrapper`, `WMSolver`, `TWMSolver`, `FWMSolver` |
+| `parametric_multimode.numeric` | `Evolution`, `Chain`, `pair`, `collective`, `degenerate`, `Layout`, `observable`, `initial_state`, `to_fock` (loaded on first use) |
 | `jacobi` | `jacobi_sn`, `jacobi_cn`, `jacobi_dn`, `jacobi_epsilon` |
 | `twm_dual_stimulated` | `TWMDualSolver`, `exact_fock_apply` |
 

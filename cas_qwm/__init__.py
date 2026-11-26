@@ -7,7 +7,8 @@ Layered architecture (in ascending order of abstraction, descending order of pri
 2. pattern_perturb:
    PatternForm (PF) normal ordered polynomial representations and perturbation expansion (PE).
 3. parametric_multimode:
-   Multimode processors, solvers (TWM, FWM), differential equations (dsolve_pm), and algebraic wrappers.
+   Multimode processors, solvers (TWM, FWM), differential equations (dsolve_pm), and algebraic wrappers;
+   its numeric subpackage (loaded on first use) evolves Fock and coherent inputs exactly.
 4. jacobi, twm_dual_stimulated:
    The jacobi package holds the elliptic algebra: Jacobi elliptic functions, the elliptic-polynomial
    ring with its Lamé solver (jacobi.dsolve_lame) and its PF/PE coefficient algebra
@@ -75,6 +76,15 @@ if TYPE_CHECKING:
         WMSolver,
         TWMSolver,
         FWMSolver,
+        Chain,
+        collective,
+        pair,
+        degenerate,
+        Evolution,
+        Layout,
+        observable,
+        initial_state,
+        to_fock,
     )
     from .jacobi import jacobi_sn, jacobi_cn, jacobi_dn, jacobi_epsilon
     from .twm_dual_stimulated import TWMDualSolver, exact_fock_apply
@@ -144,6 +154,15 @@ _MODULE_EXPORTS: Dict[str, List[str]] = {
         'WMSolver',
         'TWMSolver',
         'FWMSolver',
+        'Chain',
+        'collective',
+        'pair',
+        'degenerate',
+        'Evolution',
+        'Layout',
+        'observable',
+        'initial_state',
+        'to_fock',
     ],
     'cas_qwm.jacobi': [
         'jacobi_sn',

@@ -10,7 +10,7 @@ The calculator lets you:
 
 All results are rendered with KaTeX and can be copied as LaTeX.
 
-> **Python API:** the full programming interface of the `cas_qwm` library is documented separately in **[cas_qwm_documentation.md](cas_qwm_documentation.md)**. It also covers features not yet available in the web interface: Fock states (`FockState`), the solvers' Hamiltonians and their BCH series (`WMWrapper.bch`), and multimode results over an explicit number of modes (`WMWrapper.assert_mode_number`; the web *Single-mode processing* is its one-mode case).
+> **Python API:** the `cas_qwm` library is documented in **[cas_qwm_documentation.md](cas_qwm_documentation.md)**. Beyond the web interface it offers Fock states (`FockState`), the solvers' Hamiltonians with their BCH series, results over an explicit number of modes (`WMWrapper.assert_mode_number`, optionally with a phase mismatch per mode), and the exact numerical evolution of given Fock or coherent input states (`cas_qwm.parametric_multimode.numeric`).
 
 ---
 
@@ -38,6 +38,9 @@ Calc/
 │   ├── op_pattern/          #   Layer 1: operator patterns (BosonPat, FermionPat, BosonNum, ...)
 │   ├── pattern_perturb/     #   Layer 2: pattern form (PF, pf) and perturbative expansion (PE)
 │   ├── parametric_multimode/#   Layer 3: multimode wave-mixing processors and solvers
+│   │   └── numeric/         #     Exact numerical evolution of given input states
+│   ├── jacobi/              #   Jacobi elliptic functions and their polynomial algebra
+│   ├── twm_dual_stimulated.py#  Three-wave mixing with two strong inputs
 │   ├── dsolve_pm.py         #   ODE solvers for polynomial × (hyperbolic) trigonometric sources
 │   └── wm_variables.py      #   Shared symbols: a_0, a_1, a_2, t, χ, Δk, n_m, g
 ├── calculator/              # Backend glue between the web UI and cas_qwm (parsing, presets, assertions)
@@ -218,7 +221,7 @@ Configure these **before** evaluating an expression:
 
 - **Mixing Process Type** — *Down-conversion*, *Frequency Conversion / State Transfer*, or *Four-Wave Mixing*.
 - **Phase-Matching Condition** — *Phase Matched* ($\Delta k = 0$; for FWM: *SPM Compensated*, $\Delta k = 2\chi \hat N_0$) or *Arbitrary Phase Mismatch* (keeps $\Delta k$ as a symbol).
-- **Retained Order** — the perturbative order kept in the result. The strong field counts as order $-1$, the weak fields as order 0, and $\chi$ as order 1 (TWM) or 2 (FWM), so the parametric gain is of order 0 in both. Order 0 is the undepleted-pump (parametric) approximation; order 1 includes the first pump-depletion correction. Every product is truncated at the order it is accurate to: the sum of the leading orders of its factors plus the smallest of their relative accuracies (accuracy order minus leading order), so that no unnecessary higher-order terms are carried along. The result may therefore be accurate to a lower order than the preset; its actual order is reported and saved. The evolved operators are only solved to the order the input needs of them: each factor needs the preset order minus the leading orders of the other factors, and a function, fractional power or divisor of operator expressions keeps the relative accuracy of its argument. If an input cannot be analysed this way (e.g. `diff`), the preset order is used. Saved expressions that the server no longer holds (e.g. after a restart) are rebuilt to their recorded order; if a rebuild still falls short of it, a warning is shown with the result. Four-wave mixing solutions reach order 2 for the pump and 1 for the weak fields, so e.g. $\hat N_0(t)$ at preset order 2 is accurate to order 1.
+- **Retained Order** — the perturbative order kept in the result. The strong field is of order $-1$, the weak fields of order $0$, and $\chi$ of order $1$ (TWM) or $2$ (FWM): order $0$ is the undepleted-pump approximation, order $1$ adds the first pump-depletion correction. A result can be accurate to a lower order than the preset (e.g. when it uses a saved variable of a lower order); its actual order is reported and saved with it. The four-wave-mixing solutions reach order $2$ for the pump and $1$ for the weak fields, so e.g. $\hat N_0(t)$ at preset order $2$ is accurate to order $1$.
 
 #### Step 2 — Enter the expression
 
@@ -236,7 +239,7 @@ In addition to the general syntax, the following objects are predefined in this 
 | `t`, `g` | Time and parametric gain. |
 | `n_m` | Number of mode pairs. |
 
-**Multiplication rule.** Implicit multiplication (a space, e.g. `dag(a_s) a_s`) is the **multimode product**: paired weak-field operators are summed over all modes, giving e.g. $\sum_\text{modes}\hat N_1(t)$. An explicit `*` (e.g. `dag(a_s)*a_s`) is the **single-mode product**, i.e. the observable of one signal mode. Ticking **Single-mode processing** replaces all multimode operators with single-mode ones ($n_m = 1$). For down-conversion, the select between *Single-mode* and *processing* chooses **non-degenerate** (default) or **degenerate** processing; the choice can be changed at any time but takes effect only while the box is ticked. Degenerate processing merges signal and idler into one mode $a_1$ ($H = \chi(a_0^\dagger a_1^2 + a_0 a_1^{\dagger 2})/2$): every input object is mapped by $\sum a_1 a_2 \to a_1^2/2$, $\sum(1+\hat N_1+\hat N_2) \to \hat N_1 + 1/2$, $n_m \to 1/2$, $a_2 \to a_1$ before evaluation, so `@` and `*` both become exact single-mode products, either vacuum assertion puts $a_1$ in vacuum, and a cascaded stage uses the phase $\varphi_1$ only.
+**Multiplication rule.** Implicit multiplication (a space, e.g. `dag(a_s) a_s`) is the **multimode product**: paired weak-field operators are summed over all modes, giving e.g. $\sum_\text{modes}\hat N_1(t)$. An explicit `*` (e.g. `dag(a_s)*a_s`) is the **single-mode product**, i.e. the observable of one signal mode. Ticking **Single-mode processing** replaces all multimode operators with single-mode ones ($n_m = 1$). For down-conversion, the select between *Single-mode* and *processing* chooses **non-degenerate** (default) or **degenerate** processing; it takes effect only while the box is ticked. Degenerate processing merges signal and idler into one mode $a_1$ ($H = \chi(a_0^\dagger a_1^2 + a_0 a_1^{\dagger 2})/2$): both products then act on this mode, either vacuum assertion puts it in vacuum, and a cascaded stage uses the phase $\varphi_1$ only.
 
 Examples:
 
@@ -268,11 +271,11 @@ Switch to the **Input State Assertions** sub-tab to evaluate the expression for 
 
 and click **Calculate under Assertions**. With all three ticked, the result is the expectation value; with only some ticked, it is a partial expectation value that remains an operator in the other modes. The gain display uses the scalar gain $g$ (e.g. $g = \chi t|\alpha_0|$).
 
-*Example:* down-conversion, phase matched, order 0, input `dag(a_s) a_s`, all three assertions → $n_m \sinh^2(\chi t|\alpha_0|) = n_m\sinh^2 g$.
+*Example:* down-conversion, phase matched, order $0$, input `dag(a_s) a_s`, all three assertions → $n_m \sinh^2(\chi t|\alpha_0|) = n_m\sinh^2 g$.
 
 **Coherent seeding.** Tick *Coherent seeding in separate* [mode], *coupled with* [mode] to put one separate weak mode in a coherent state $|\beta_j\rangle$, whose amplitude carries the index of its mode. In down-conversion and four-wave mixing, the seeded mode is always the signal, $|\beta_1\rangle$. It can be coupled with another coherent state $|\beta_2\rangle$ of the idler, with the vacuum $|0\rangle_2$, or (down-conversion only) with *itself (degenerate)*: a degenerate mode where signal and idler coincide. In state transfer, the seeded mode is either the signal $|\beta_1\rangle$ or the pump $|\beta_0\rangle$, coupled with the other one in a coherent state or in vacuum. The seeded modes are of order 0 like the other weak modes, so they are averaged exactly rather than perturbatively:
 
-- *Multimode processing*: the seeded modes are split from every multimode sum, $\sum_\text{modes} X = X_b + \sum'_\text{modes} X$, where the rest keeps the mode count $n_m$ (rather than $n_m - 1$). A degenerate mode enters the sums through the degenerate map: $\sum a_1 a_2 \to b^2/2$, $\sum(1 + \hat N_1 + \hat N_2) \to \hat N_b + 1/2$, $\sum(\hat N_j + d) \to (\hat N_b + d)/2$. The $b$ operators of each term are normal-ordered and averaged. The vacuum assertions then apply to the other modes. Once seeding is ticked, a further checkbox chooses whether the single-mode weak-field operators of the expression (e.g. `a_s`) are the seeded mode itself or another, unseeded mode. A degenerate seed can only be observed through single operators such as `a_s`, not through single-mode products of signal and idler.
+- *Multimode processing*: the seeded modes are taken out of every multimode sum, and the rest of the sum keeps the mode count $n_m$ (rather than $n_m - 1$); the vacuum assertions apply to the other modes. Once seeding is ticked, a further checkbox chooses whether the single-mode weak-field operators of the expression (e.g. `a_s`) are the seeded mode itself or another, unseeded mode. A degenerate seed can only be observed through single operators such as `a_s`, not through single-mode products of signal and idler.
 - *Single-mode processing*: the weak modes themselves are in the seeded states, and their vacuum assertions are not used. With degenerate single-mode processing, the degenerate mode is in $|\beta_1\rangle$; a degenerate seed requires multimode or degenerate single-mode processing.
 
 *Example:* as above, with the signal seeded in $|\beta_1\rangle$ → $n_m\sinh^2 g + \sinh^2 g + |\beta_1|^2\cosh^2 g$; the middle term is the vacuum noise of the seeded pair (the rest of the sum keeps $n_m$).
@@ -332,7 +335,7 @@ For anything beyond the web workflow, use the `cas_qwm` library directly — see
 | Symptom | Remedy |
 |---|---|
 | Formulas are shown as raw LaTeX | KaTeX could not be loaded. Check the internet connection, or run `python setup_offline.py` once. |
-| A calculation seems to hang | Higher retained orders (≥ 2) and phase-mismatched presets take considerably longer the first time; wait for the solver, or lower the order. |
+| A calculation seems to hang | Higher retained orders ($\ge 2$) and phase-mismatched presets take considerably longer the first time; wait for the solver, or lower the order. |
 | *"… is not defined"* / parsing error | Every symbol and operator must be defined in the tab's table. Check for typos and for reserved names. |
 | Order or condition warning dialog | A referenced saved variable was computed with a lower order or under a different preset. Recompute it under the current preset, or choose *Force Continue* (the result then reaches a lower order, which is reported and saved). |
 | Result order below the preset | A factor limits the accuracy of a product: a saved variable of a lower order, or (four-wave mixing) the highest order the solutions apply to. |

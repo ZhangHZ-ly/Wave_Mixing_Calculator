@@ -172,14 +172,14 @@ def d_p2s(x, d, subs=None):
     terms = []
     if subs is None:
         for (func, nk, deg), coeff in d.items():
-            t = Add(*coeff)#.simplify()
+            t = Add(*coeff)
             if func is None:
                 terms.append(x**deg*t)
             else:
                 terms.append(x**deg*func(nk*x) * t)
     else:
         for (func, nk, deg), coeff in d.items():
-            t = Add(*coeff)#.simplify()
+            t = Add(*coeff)
             if func is None:
                 terms.append(x**deg*subs)
             else:
@@ -203,13 +203,13 @@ def dsd1(x, d, f0=0, subs=None):
     f0s = []
     if subs is None:
         for (func, nk, deg), coeff in d.items():
-            t = Add(*coeff)#.simplify()
+            t = Add(*coeff)
             terms.append(pm_expr(x, func, nk, deg, True) * t)
             if func is not None and (func in (sinh, sin)) ^ (deg & 1):
                 f0s.append(-pm_coeffs1(func, nk, deg)[0] * t)
     else:
         for (func, nk, deg), coeff in d.items():
-            t = Add(*coeff)#.simplify()
+            t = Add(*coeff)
             terms.append(t * pm_expr(x, func, nk, deg, True).subs({x: subs}))
             if func is not None and (func in (sinh, sin)) ^ (deg & 1):
                 f0s.append(-pm_coeffs1(func, nk, deg)[0] * t)
@@ -237,7 +237,7 @@ def dsd2(x, d, h=True, f0=0, df0=0, subs=None):
     df0s = []
     if subs is None:
         for (func, nk, deg), coeff in d.items():
-            t = Add(*coeff)#.simplify()
+            t = Add(*coeff)
             ff0, fdf0 = v02(func, nk, deg)
             terms.append(pm_expr(x, func, nk, deg) * t)
             if ff0 is not S.Zero:
@@ -246,7 +246,7 @@ def dsd2(x, d, h=True, f0=0, df0=0, subs=None):
                 df0s.append(-fdf0 * t)
     else:
         for (func, nk, deg), coeff in d.items():
-            t = Add(*coeff)#.simplify()
+            t = Add(*coeff)
             ff0, fdf0 = v02(func, nk, deg)
             terms.append(t * pm_expr(x, func, nk, deg).subs({x: subs}))
             if ff0 is not S.Zero:
@@ -256,10 +256,10 @@ def dsd2(x, d, h=True, f0=0, df0=0, subs=None):
     if subs is None:
         subs = x
     if h:
-        return Add(Add(f0, *f0s).simplify()*cosh(subs),
-                   Add(df0, *df0s).simplify()*sinh(subs), *terms)
-    return Add(Add(f0, *f0s).simplify()*cos(subs),
-               Add(df0, *df0s).simplify()*sin(subs), *terms)
+        return Add(factor_terms(Add(f0, *f0s))*cosh(subs),
+                   factor_terms(Add(df0, *df0s))*sinh(subs), *terms)
+    return Add(factor_terms(Add(f0, *f0s))*cos(subs),
+               factor_terms(Add(df0, *df0s))*sin(subs), *terms)
 
 def dsolve_pm2(rhs, x, h=True, f0=0, df0=0, subs=None):
     """
